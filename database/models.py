@@ -4,7 +4,7 @@
 شامل جداول نمادها، قیمت‌های روزانه، اسنپ‌شات‌های لحظه‌ای بازار و لاگ‌های دریافت داده
 """
 
-# جدول نمادها: نگهداری اطلاعات شناسایی نمادهای بورسی و فرابورسی
+# جدول نمادها: نگهداری اطلاعات شناسایی، چرخه حیات و متادیتای نمادها
 CREATE_SYMBOLS_TABLE = """
 CREATE TABLE IF NOT EXISTS symbols (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,49 +14,72 @@ CREATE TABLE IF NOT EXISTS symbols (
     market TEXT,                       -- بازار معاملاتی: بورس (bourse) یا فرابورس (farabourse)
     instrument_type TEXT DEFAULT 'stock', -- نوع ابزار مالی (پیش‌فرض: سهام عادی)
     is_active BOOLEAN DEFAULT 1,       -- وضعیت فعال بودن نماد
+    status TEXT DEFAULT 'active',      -- وضعیت چرخه حیات: 'active', 'halted', 'delisted', 'transferred'
+    listed_date TEXT,                  -- تاریخ پذیرش در بورس
+    delisted_date TEXT,                -- تاریخ لغو پذیرش / خروج از بازار
+    base_volume INTEGER DEFAULT 1,     -- حجم مبنا
     created_at TIMESTAMP,              -- زمان ثبت نماد در سیستم
     updated_at TIMESTAMP               -- زمان آخرین به‌روزرسانی اطلاعات نماد
 );
 """
 
-# جدول قیمت‌های روزانه: نگهداری تاریخچه معاملات کندل روزانه نمادها با جلوگیری از داده‌های تکراری
+# جدول قیمت‌های روزانه: نگهداری تاریخچه معاملات کندل روزانه (Point-in-Time تفکیک داده خام و تعدیل‌شده)
 CREATE_DAILY_PRICES_TABLE = """
 CREATE TABLE IF NOT EXISTS daily_prices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol_id INTEGER NOT NULL,        -- شناسه نماد (کلید خارجی به جدول symbols)
     date TEXT NOT NULL,                -- تاریخ معامله با فرمت YYYY-MM-DD
-    open REAL,                         -- قیمت بازگشایی
+    open REAL,                         -- قیمت بازگشایی (برای سازگاری)
     high REAL,                         -- بالاترین قیمت روز
     low REAL,                          -- پایین‌ترین قیمت روز
     close REAL,                        -- آخرین قیمت معامله شده
-    adj_close REAL,                    -- قیمت پایانی / تعدیل‌شده
+    adj_close REAL,                    -- قیمت پایانی تعدیل‌شده
     volume INTEGER,                    -- حجم معاملات
     value REAL,                        -- ارزش کل معاملات (ریال)
     trade_count INTEGER,               -- تعداد معاملات
     price_unit TEXT DEFAULT 'Rial',    -- واحد پولی قیمت‌ها (پیش‌فرض ریال)
     source TEXT DEFAULT 'pytse',       -- منبع داده (پیش‌فرض pytse)
     captured_at TIMESTAMP,             -- زمان ثبت اطلاعات در پایگاه داده
+    open_raw REAL,                     -- قیمت بازگشایی خام و تعدیل‌نشده (Point-in-Time)
+    high_raw REAL,                     -- بالاترین قیمت خام و تعدیل‌نشده
+    low_raw REAL,                      -- پایین‌ترین قیمت خام و تعدیل‌نشده
+    close_raw REAL,                    -- آخرین قیمت خام و تعدیل‌نشده
+    adjustment_factor REAL DEFAULT 1.0,-- ضریب تعدیل در تاریخ معامله
     FOREIGN KEY (symbol_id) REFERENCES symbols(id),
     UNIQUE(symbol_id, date, source)    -- جلوگیری از ثبت سوابق تکراری برای یک تاریخ و منبع
 );
 """
 
-# جدول اسنپ‌شات‌های لحظه‌ای: وضعیت صفوف خرید و فروش و رفتار حقیقی/حقوقی در طول ساعات معاملاتی
+# جدول اسنپ‌شات‌های لحظه‌ای: وضعیت صفوف، دفترچه سفارشات و رفتار معامله‌گران
 CREATE_SNAPSHOTS_TABLE = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol_id INTEGER NOT NULL,        -- شناسه نماد (کلید خارجی به جدول symbols)
-    captured_at TIMESTAMP NOT NULL,    -- زمان ثبت اسنپ‌شات در سامانه
+    captured_at TIMESTAMP NOT NULL,    -- زمان ثبت اسنپ‌شات در سامانه محلی
+    provider_timestamp TIMESTAMP,      -- زمان ثبت اعلام شده توسط سرور بورس
     last_price REAL,                   -- آخرین قیمت معامله شده
     close_price REAL,                  -- قیمت پایانی بر اساس حجم مبنا
     open_price REAL,                   -- قیمت اولین معامله روز
     high_price REAL,                   -- بیشترین قیمت روز
     low_price REAL,                    -- کمترین قیمت روز
+    base_volume INTEGER DEFAULT 1,     -- حجم مبنا در لحظه اسنپ‌شات
     volume INTEGER,                    -- حجم تجمیعی معاملات تا این لحظه
     value REAL,                        -- ارزش تجمیعی معاملات (ریال)
     trade_count INTEGER,               -- تعداد کل معاملات روز تا این لحظه
-    buy_queue_volume INTEGER,          -- حجم سفارشات در بهترین صف خرید
-    sell_queue_volume INTEGER,         -- حجم سفارشات در بهترین صف فروش
+    buy_queue_volume INTEGER,          -- حجم سفارشات در صف خرید
+    sell_queue_volume INTEGER,         -- حجم سفارشات در صف فروش
+    bid_price_1 REAL,                  -- بهترین مظنه خرید ۱
+    bid_vol_1 INTEGER,                 -- حجم در مظنه خرید ۱
+    ask_price_1 REAL,                  -- بهترین مظنه فروش ۱
+    ask_vol_1 INTEGER,                 -- حجم در مظنه فروش ۱
+    bid_price_2 REAL,                  -- مظنه خرید ۲
+    bid_vol_2 INTEGER,                 -- حجم در مظنه خرید ۲
+    ask_price_2 REAL,                  -- مظنه فروش ۲
+    ask_vol_2 INTEGER,                 -- حجم در مظنه فروش ۲
+    bid_price_3 REAL,                  -- مظنه خرید ۳
+    bid_vol_3 INTEGER,                 -- حجم در مظنه خرید ۳
+    ask_price_3 REAL,                  -- مظنه فروش ۳
+    ask_vol_3 INTEGER,                 -- حجم در مظنه فروش ۳
     real_buy_count INTEGER,            -- تعداد خریداران حقیقی
     real_sell_count INTEGER,           -- تعداد فروشندگان حقیقی
     legal_buy_count INTEGER,           -- تعداد خریداران حقوقی
@@ -67,7 +90,6 @@ CREATE TABLE IF NOT EXISTS snapshots (
     legal_sell_volume INTEGER,         -- حجم فروش حقوقی‌ها
     price_unit TEXT DEFAULT 'Rial',    -- واحد ارزی قیمت‌ها (ریال)
     source TEXT DEFAULT 'pytse',       -- منبع دریافت داده
-    provider_timestamp TIMESTAMP,      -- زمان اعلام شده توسط سرور ارائه‌دهنده داده
     FOREIGN KEY (symbol_id) REFERENCES symbols(id),
     UNIQUE(symbol_id, captured_at, source) -- جلوگیری از ثبت اسنپ‌شات تکراری در یک زمان
 );

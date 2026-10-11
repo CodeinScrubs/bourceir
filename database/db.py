@@ -100,10 +100,41 @@ class DatabaseManager:
                 cursor.execute(CREATE_INTRADAY_TRADES_TABLE)
                 cursor.execute(CREATE_DATA_QUALITY_TABLE)
                 cursor.execute(CREATE_EXPERIMENTS_TABLE)
-            logger.info("ساختار کلیه جداول پایگاه داده با موفقیت آماده‌سازی شد.")
+            self._run_column_migrations()
+            logger.info("ساختار کلیه جداول و مایگریشن‌های پایگاه داده با موفقیت آماده‌سازی شد.")
         except Exception as e:
             logger.error("خطا در ایجاد جداول پایگاه داده: %s", e)
             raise
+
+    def _run_column_migrations(self) -> None:
+        """اجرای مایگریشن‌های نرم برای افزودن ستون‌های جدید به جداول از پیش موجود."""
+        migration_columns = [
+            ("symbols", "status", "TEXT DEFAULT 'active'"),
+            ("symbols", "listed_date", "TEXT"),
+            ("symbols", "delisted_date", "TEXT"),
+            ("symbols", "base_volume", "INTEGER DEFAULT 1"),
+            ("daily_prices", "open_raw", "REAL"),
+            ("daily_prices", "high_raw", "REAL"),
+            ("daily_prices", "low_raw", "REAL"),
+            ("daily_prices", "close_raw", "REAL"),
+            ("daily_prices", "adjustment_factor", "REAL DEFAULT 1.0"),
+            ("snapshots", "base_volume", "INTEGER DEFAULT 1"),
+            ("snapshots", "bid_price_1", "REAL"),
+            ("snapshots", "bid_vol_1", "INTEGER"),
+            ("snapshots", "ask_price_1", "REAL"),
+            ("snapshots", "ask_vol_1", "INTEGER"),
+            ("experiments", "dataset_version", "TEXT DEFAULT 'v1.0'"),
+            ("experiments", "features_version", "TEXT DEFAULT 'v1.0'"),
+            ("experiments", "model_version", "TEXT DEFAULT 'v1.0'"),
+        ]
+        with self.conn:
+            cursor = self.conn.cursor()
+            for table, col, col_def in migration_columns:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def};")
+                except sqlite3.OperationalError:
+                    # ستون از قبل وجود دارد؛ نادیده گرفته می‌شود
+                    pass
 
     def insert_symbol(
         self,

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-موتور شبیه‌سازی و آزمون تاریخی معاملات (Backtest Engine)
-با پشتیبانی دقیق از قوانین مالی بورس اوراق بهادار تهران و فرابورس ایران:
-- نرخ کارمزد خرید: ۰.۳۷۱۲ درصد
-- نرخ کارمزد و مالیات فروش: ۰.۸۸۰۰ درصد (شامل ۰.۵ درصد مالیات مقطوع نقل و انتقال)
-- مجموع هزینه رفت و برگشت: حدود ۱.۲۵ درصد
+موتور شبیه‌سازی و آزمون تاریخی معاملات (Backtest Engine v0.4)
+با پشتیبانی دقیق از واقعیت‌های معاملاتی بورس اوراق بهادار تهران و فرابورس ایران:
+- نرخ کارمزد قانونی خرید: ۰.۳۷۱۲ درصد
+- نرخ کارمزد و مالیات فروش: ۰.۸۸۰۰ درصد (مجموع رفت و برگشت: ۱.۲۵۱۲ درصد)
+- مدل شبیه‌سازی نوبت و پر شدن در صفوف خرید و فروش (Queue Fill Model)
+- مدل لغزش قیمت بر اساس اندازه معامله و اسپرد (Slippage Model)
+- محدودیت نقدشوندگی (Liquidity Constraints / Participation Rate)
 """
 
 import math
@@ -19,41 +21,100 @@ logger = logging.getLogger(__name__)
 
 
 class BacktestEngine:
-    """موتور اجرای بکتست استراتژی‌های معاملاتی در بازار بورس ایران."""
+    """موتور اجرای بکتست واقع‌گرایانه با لحاظ ریزساختار بازار بورس ایران."""
 
     # کارمزدهای رسمی معاملات سهام در بورس تهران
     BUY_COMMISSION_RATE = 0.003712   # ۰.۳۷۱۲٪ کارمزد خرید
     SELL_COMMISSION_RATE = 0.008800  # ۰.۸۸۰۰٪ کارمزد و مالیات فروش
 
-    def __init__(self, initial_capital: float = 100_000_000.0):
+    def __init__(
+        self,
+        initial_capital: float = 100_000_000.0,
+        max_volume_participation_pct: float = 0.05,  # حداکثر ۵٪ از حجم روزانه قابل معامله است
+        default_slippage_bps: float = 10.0           # ۱۰ پیپ یا ۰.۱٪ لغزش پیش‌فرض اسپرد
+    ):
         """
-        مقداردهی اولیه سرمایه به ریال (پیش‌فرض: ۱۰۰ میلیون ریال = ۱۰ میلیون تومان).
+        مقداردهی اولیه سرمایه و قیود معاملاتی.
         """
         self.initial_capital = initial_capital
         self.cash = initial_capital
+        self.max_volume_participation_pct = max_volume_participation_pct
+        self.default_slippage_bps = default_slippage_bps
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
         self.equity_curve: List[Dict[str, Any]] = []
 
-    def execute_buy(self, symbol_fa: str, price: float, quantity: int, date: str) -> Optional[Trade]:
+    def calculate_slippage_price(
+        self,
+        base_price: float,
+        side: OrderSide,
+        quantity: int,
+        daily_volume: Optional[int] = None
+    ) -> float:
         """
-        اجرای سفارش خرید با کسر کارمزد رسمی خرید بورس تهران.
+        محاسبه قیمت واقعی اجرا با احتساب اسپرد عرضه/تقاضا و فشار حجمی معامله (Market Impact).
+        """
+        # اسپرد پایه
+        base_slippage = (self.default_slippage_bps / 10000.0)
+
+        # فشار حجمی نسبت به حجم روزانه
+        impact = 0.0
+        if daily_volume and daily_volume > 0:
+            participation = quantity / daily_volume
+            impact = min(participation * 0.1, 0.02)  # حداکثر ۲٪ لغزش به ازای حجم سنگین
+
+        total_slippage = base_slippage + impact
+
+        if side == OrderSide.BUY:
+            return base_price * (1.0 + total_slippage)
+        else:
+            return base_price * (1.0 - total_slippage)
+
+    def execute_buy(
+        self,
+        symbol_fa: str,
+        price: float,
+        quantity: int,
+        date: str,
+        daily_volume: Optional[int] = None,
+        is_locked_limit_up: bool = False
+    ) -> Optional[Trade]:
+        """
+        اجرای سفارش خرید با بررسی قفل صف خرید، محدودیت نقدشوندگی و کسر کارمزد.
         """
         if quantity <= 0 or price <= 0:
             return None
 
-        gross_value = price * quantity
+        # ۱. قفل صف خرید: اگر سهم صف خرید قفل باشد و معامله‌ای نشود، سفارش پر نمی‌شود
+        if is_locked_limit_up:
+            logger.warning("سفارش خرید نماد '%s' در صف خرید قفل شد و اجرا نگردید.", symbol_fa)
+            return None
+
+        # ۲. قید نقدشوندگی: حجم سفارش نمی‌تواند از درصد معقولی از حجم روزانه بیشتر باشد
+        if daily_volume and daily_volume > 0:
+            max_allowed = int(daily_volume * self.max_volume_participation_pct)
+            if max_allowed <= 0:
+                logger.warning("حجم معاملات روز نماد '%s' برای این حجم کافی نیست.", symbol_fa)
+                return None
+            if quantity > max_allowed:
+                logger.info("حجم سفارش '%s' از %d به سقف نقدشوندگی %d تعدیل شد.", symbol_fa, quantity, max_allowed)
+                quantity = max_allowed
+
+        # ۳. محاسبه قیمت موثر پس از لغزش (Slippage)
+        execution_price = self.calculate_slippage_price(price, OrderSide.BUY, quantity, daily_volume)
+
+        gross_value = execution_price * quantity
         commission = gross_value * self.BUY_COMMISSION_RATE
         total_required = gross_value + commission
 
+        # بررسی موجودی نقد
         if self.cash < total_required:
-            logger.warning("موجودی نقد کافی نیست: نیاز به %s ریال، موجودی: %s ریال", total_required, self.cash)
-            # تعدیل حجم بر اساس حداکثر موجودی نقد
-            max_qty = int(self.cash / (price * (1 + self.BUY_COMMISSION_RATE)))
+            max_qty = int(self.cash / (execution_price * (1 + self.BUY_COMMISSION_RATE)))
             if max_qty <= 0:
+                logger.warning("موجودی نقد برای خرید نماد '%s' ناکافی است.", symbol_fa)
                 return None
             quantity = max_qty
-            gross_value = price * quantity
+            gross_value = execution_price * quantity
             commission = gross_value * self.BUY_COMMISSION_RATE
             total_required = gross_value + commission
 
@@ -63,10 +124,10 @@ class BacktestEngine:
             symbol_fa=symbol_fa,
             side=OrderSide.BUY,
             quantity=quantity,
-            price=price,
-            gross_value=gross_value,
-            commission=commission,
-            net_value=total_required,
+            price=round(execution_price, 2),
+            gross_value=round(gross_value, 2),
+            commission=round(commission, 2),
+            net_value=round(total_required, 2),
             date=date
         )
         self.trades.append(trade)
@@ -84,18 +145,40 @@ class BacktestEngine:
 
         return trade
 
-    def execute_sell(self, symbol_fa: str, price: float, quantity: int, date: str) -> Optional[Trade]:
+    def execute_sell(
+        self,
+        symbol_fa: str,
+        price: float,
+        quantity: int,
+        date: str,
+        daily_volume: Optional[int] = None,
+        is_locked_limit_down: bool = False
+    ) -> Optional[Trade]:
         """
-        اجرای سفارش فروش با کسر کارمزد و مالیات فروش بورس تهران.
+        اجرای سفارش فروش با بررسی قفل صف فروش، کسر مالیات و کارمزد.
         """
         if symbol_fa not in self.positions or self.positions[symbol_fa].quantity <= 0:
-            logger.warning("پوزیشن باز برای فروش نماد '%s' وجود ندارد.", symbol_fa)
+            logger.warning("پوزیشن بازی برای فروش نماد '%s' وجود ندارد.", symbol_fa)
+            return None
+
+        # ۱. قفل صف فروش: اگر سهم صف فروش قفل باشد، خروج ناممکن است
+        if is_locked_limit_down:
+            logger.warning("فروش نماد '%s' به دلیل صف فروش قفل ناموفق بود و پوزیشن باقی ماند.", symbol_fa)
             return None
 
         pos = self.positions[symbol_fa]
         sell_qty = min(quantity, pos.quantity)
 
-        gross_value = price * sell_qty
+        # ۲. قید نقدشوندگی
+        if daily_volume and daily_volume > 0:
+            max_allowed = int(daily_volume * self.max_volume_participation_pct)
+            if max_allowed > 0 and sell_qty > max_allowed:
+                sell_qty = max_allowed
+
+        # ۳. قیمت موثر با لغزش فروش
+        execution_price = self.calculate_slippage_price(price, OrderSide.SELL, sell_qty, daily_volume)
+
+        gross_value = execution_price * sell_qty
         commission = gross_value * self.SELL_COMMISSION_RATE
         net_received = gross_value - commission
 
@@ -105,17 +188,17 @@ class BacktestEngine:
             symbol_fa=symbol_fa,
             side=OrderSide.SELL,
             quantity=sell_qty,
-            price=price,
-            gross_value=gross_value,
-            commission=commission,
-            net_value=net_received,
+            price=round(execution_price, 2),
+            gross_value=round(gross_value, 2),
+            commission=round(commission, 2),
+            net_value=round(net_received, 2),
             date=date
         )
         self.trades.append(trade)
 
-        # محاسبه سود یا زیان شناسایی‌شده
-        cost_of_sold_shares = pos.average_entry_price * sell_qty
-        realized_pnl = net_received - cost_of_sold_shares
+        # محاسبه سود/زیان
+        cost_of_sold = pos.average_entry_price * sell_qty
+        realized_pnl = net_received - cost_of_sold
         pos.realized_pnl += realized_pnl
 
         pos.quantity -= sell_qty
@@ -123,21 +206,19 @@ class BacktestEngine:
             pos.total_cost = 0.0
             pos.average_entry_price = 0.0
         else:
-            pos.total_cost -= cost_of_sold_shares
+            pos.total_cost -= cost_of_sold
 
         pos.trades.append(trade)
         return trade
 
     def calculate_metrics(self) -> PerformanceMetrics:
         """
-        محاسبه شاخص‌های آماری و عملکرد بکتست.
+        محاسبه شاخص‌های آماری عملکرد بکتست.
         """
         if not self.trades:
             return PerformanceMetrics()
 
         sell_trades = [t for t in self.trades if t.side == OrderSide.SELL]
-        buy_trades = [t for t in self.trades if t.side == OrderSide.BUY]
-
         total_trades = len(sell_trades)
         winning_trades = 0
         losing_trades = 0
@@ -145,7 +226,6 @@ class BacktestEngine:
         gross_loss = 0.0
         total_commissions = sum(t.commission for t in self.trades)
 
-        # محاسبه سود هر جفت معامله
         for pos in self.positions.values():
             if pos.realized_pnl > 0:
                 winning_trades += 1
