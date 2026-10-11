@@ -1,0 +1,40 @@
+# BRS Configuration File: Production Environment
+# ===============================================
+
+project:
+  name: "BRS Quant Engine"
+  version: "0.4.1"
+  environment: "production"
+
+market:
+  timezone: "Asia/Tehran"
+  price_unit: "Rial"
+  trading_hours:
+    start: "09:00"
+    end: "12:30"
+    pre_market_start: "08:45"
+  trading_days: [5, 6, 0, 1, 2]
+
+data_collection:
+  polling_interval_seconds: 30
+  max_retries: 5
+  retry_delay_seconds: 3
+  rate_limit_delay: 0.8
+  stale_data_threshold_seconds: 60
+  symbols:
+    - "خودرو"
+    - "فولاد"
+    - "شپنا"
+    - "وبملت"
+    - "کگل"
+
+backtest:
+  commission_buy: 0.003712
+  commission_sell: 0.008800
+  default_slippage_bps: 15.0
+  max_volume_participation_pct: 0.03
+  initial_capital: 500000000.0 # 500,000,000 Rial
+
+governance:
+  enforce_point_in_time: true
+  prevent_lookahead_bias: true

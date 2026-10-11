@@ -202,6 +202,117 @@ st.divider()
 
 
 # ═══════════════════════════════════════════════
+# 📡 بخش: پایش زنده سلامت و تاخیر داده‌ها (Live Data Health & Freshness)
+# ═══════════════════════════════════════════════
+st.header("📡 پایش زنده و سلامت فید بازار (Live Data Health)")
+
+try:
+    live_snapshots_query = """
+    SELECT
+        s.symbol_fa AS 'نماد',
+        sn.last_price AS 'آخرین معامله',
+        sn.close_price AS 'قیمت پایانی',
+        sn.buy_queue_volume AS 'صف خرید',
+        sn.sell_queue_volume AS 'صف فروش',
+        sn.real_buy_volume,
+        sn.real_buy_count,
+        sn.real_sell_volume,
+        sn.real_sell_count,
+        sn.provider_timestamp,
+        sn.captured_at
+    FROM snapshots sn
+    JOIN symbols s ON sn.symbol_id = s.id
+    WHERE sn.captured_at = (
+        SELECT MAX(sn2.captured_at) FROM snapshots sn2 WHERE sn2.symbol_id = sn.symbol_id
+    )
+    ORDER BY s.symbol_fa;
+    """
+    live_df = _safe_query(None, live_snapshots_query)
+
+    if live_snapshots_query and not live_df.empty:
+        now_dt = datetime.now()
+
+        # محاسبه تاخیر، برچسب سلامت و قدرت خریدار
+        statuses = []
+        delays = []
+        buyer_powers = []
+
+        for _, row in live_df.iterrows():
+            # محاسبه تاخیر
+            ref_time_str = row['provider_timestamp'] or row['captured_at']
+            delay_sec = 0
+            if ref_time_str:
+                try:
+                    p_dt = pd.to_datetime(ref_time_str)
+                    delay_sec = max(0, int((now_dt - p_dt.replace(tzinfo=None)).total_seconds()))
+                except Exception:
+                    delay_sec = 0
+            delays.append(delay_sec)
+
+            # برچسب سلامت فید
+            if delay_sec <= 45:
+                statuses.append("🟢 Fresh")
+            elif delay_sec <= 90:
+                statuses.append("🟡 Delayed")
+            else:
+                statuses.append("🔴 Stale / Frozen")
+
+            # نسبت سرانه خرید به سرانه فروش (قدرت خریدار)
+            rb_vol = row['real_buy_volume'] or 0
+            rb_cnt = row['real_buy_count'] or 0
+            rs_vol = row['real_sell_volume'] or 0
+            rs_cnt = row['real_sell_count'] or 0
+
+            bp = 1.0
+            if rb_cnt > 0 and rs_cnt > 0 and rs_vol > 0:
+                avg_b = rb_vol / rb_cnt
+                avg_s = rs_vol / rs_cnt
+                if avg_s > 0:
+                    bp = round(avg_b / avg_s, 2)
+            buyer_powers.append(f"{bp:.2f}x")
+
+        live_df['وضعیت فید'] = statuses
+        live_df['تاخیر (ثانیه)'] = delays
+        live_df['قدرت خریدار'] = buyer_powers
+
+        # کارت‌های آماری سلامت فید
+        fresh_count = sum(1 for s in statuses if "🟢" in s)
+        delayed_count = sum(1 for s in statuses if "🟡" in s)
+        stale_count = sum(1 for s in statuses if "🔴" in s)
+        avg_delay = int(sum(delays) / len(delays)) if delays else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("🟢 برخط (Fresh)", fresh_count)
+        with c2:
+            st.metric("🟡 با تاخیر (Delayed)", delayed_count)
+        with c3:
+            st.metric("🔴 متوقف / کهنه (Stale)", stale_count)
+        with c4:
+            st.metric("⏱️ میانگین تاخیر", f"{avg_delay} ثانیه")
+
+        # جدول نمایش وضعیت زنده
+        display_cols = ['نماد', 'آخرین معامله', 'وضعیت فید', 'تاخیر (ثانیه)', 'قدرت خریدار', 'صف خرید', 'صف فروش']
+        st.dataframe(
+            live_df[display_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "آخرین معامله": st.column_config.NumberColumn(format="%,.0f ریال"),
+                "صف خرید": st.column_config.NumberColumn(format="%,.0f"),
+                "صف فروش": st.column_config.NumberColumn(format="%,.0f"),
+            }
+        )
+    else:
+        st.info("ℹ️ هنوز هیچ اسنپ‌شات لحظه‌ای ثبت نشده است. برای پایش زنده بازار، اسکریپت `run_live_session.bat` را اجرا کنید.")
+
+except Exception as live_exc:
+    st.error(f"❌ خطا در بارگذاری داده‌های سلامت فید زنده: {live_exc}")
+
+st.divider()
+
+
+# ═══════════════════════════════════════════════
 # 2️⃣ بخش: 📈 قیمت سهام (Stock Prices)
 # ═══════════════════════════════════════════════
 st.header("📈 قیمت سهام")
