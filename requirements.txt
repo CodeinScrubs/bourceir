@@ -1,0 +1,20 @@
+# BRS Data Engine v0.1 - Dependencies
+# =====================================
+
+# Data provider for Tehran Stock Exchange
+pytse-client>=0.9.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Dashboard
+streamlit>=1.30.0
+
+# Utilities
+requests>=2.31.0
+pytz>=2023.3            # Timezone handling
+# jdatetime handled by pytse-client dependency
+
+# Testing
+pytest>=7.4.0

@@ -1,0 +1,59 @@
+# ============================================
+# BRS Data Engine - فایل‌های نادیده‌گرفته توسط گیت
+# ============================================
+
+# پایتون - فایل‌های کامپایل‌شده
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# محیط مجازی پایتون
+venv/
+env/
+.venv/
+.env
+
+# پایگاه داده
+*.db
+*.sqlite
+*.sqlite3
+
+# پوشه‌های داده و لاگ (محتوا نادیده گرفته می‌شود اما پوشه‌ها نگه‌داشته می‌شوند)
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# IDE و ویرایشگرها
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# سیستم‌عامل
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# توزیع و پکیج
+dist/
+build/
+*.egg-info/
+*.egg
+
+# تست و پوشش کد
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# متفرقه
+*.log
+*.bak
+*.tmp
