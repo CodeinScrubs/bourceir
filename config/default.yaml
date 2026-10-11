@@ -1,9 +1,10 @@
 # BRS Configuration File: Default Environment
 # ============================================
+# همه تنظیمات قابل تغییر سامانه در این فایل است. مقادیر محرمانه (کلید API) در فایل .env نگهداری می‌شوند.
 
 project:
   name: "BRS Quant Engine"
-  version: "0.4.1"
+  version: "0.5.0"
   environment: "development"
 
 market:
@@ -13,14 +14,28 @@ market:
     start: "09:00"
     end: "12:30"
     pre_market_start: "08:45"
-  trading_days: [5, 6, 0, 1, 2] # Saturday to Wednesday
+  trading_days: [5, 6, 0, 1, 2] # شنبه تا چهارشنبه (weekday پایتون)
+
+# دامنه پروژه: فقط سهام عادی بورس و فرابورس
+universe:
+  # کد نوع ابزار در TSETMC (yVal): 300 = سهام بورس، 303 = سهام فرابورس
+  instrument_types: [300, 303]
+  # 309 = سهام بازار پایه فرابورس (نقدشوندگی و قوانین متفاوت؛ پیش‌فرض خاموش)
+  include_base_market: false
+  # 313 = بازار شرکت‌های کوچک و متوسط فرابورس (پیش‌فرض خاموش)
+  include_sme_market: false
+  # نمادهای ختم‌شده به عدد (مانند «فولاد2» یا «ونفت3») تابلوهای بلوکی/عمده هستند و حذف می‌شوند
+  exclude_block_boards: true
 
 data_collection:
+  primary_source: "tsetmc"
   polling_interval_seconds: 30
   max_retries: 3
   retry_delay_seconds: 5
-  rate_limit_delay: 1.0
+  rate_limit_delay: 0.5
+  request_timeout_seconds: 30
   stale_data_threshold_seconds: 90 # هشدار در صورت تاخیر بیش از ۹۰ ثانیه
+  # نمادهای پیش‌فرض برای تست سریع (قبل از همگام‌سازی کل بازار)
   symbols:
     - "خودرو"
     - "فولاد"
@@ -28,13 +43,25 @@ data_collection:
     - "وبملت"
     - "کگل"
 
+# کارمزدهای رسمی معاملات سهام (کسری از ارزش معامله)
+fees:
+  buy: 0.003712   # ۰.۳۷۱۲٪
+  sell: 0.008800  # ۰.۸۸٪ (شامل مالیات فروش)
+
 backtest:
-  commission_buy: 0.003712
-  commission_sell: 0.008800
   default_slippage_bps: 10.0
   max_volume_participation_pct: 0.05
   initial_capital: 100000000.0 # 100,000,000 Rial = 10,000,000 Toman
+  # اجرای سفارش در روز بعد از سیگنال، به قیمت میانگین موزون روز (ارزش ÷ حجم)
+  execution_price: "next_day_vwap"
+  # حداقل فاصله قیمت از قیمت مرجع برای تشخیص صف قفل (وقتی کل روز در یک قیمت معامله شده)
+  lock_min_move_pct: 0.015
 
 governance:
   enforce_point_in_time: true
   prevent_lookahead_bias: true
+
+# هوش مصنوعی TypeSafe Jev (کلید در فایل .env با نام TYPESAFE_API_KEY)
+ai:
+  jev_model: "jev-1.13.0"   # نسخه ثابت برای تکرارپذیری آزمایش‌ها
+  jev_timeout_seconds: 30

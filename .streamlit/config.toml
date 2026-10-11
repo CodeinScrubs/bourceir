@@ -1,0 +1,10 @@
+[server]
+# داشبورد فقط روی همین کامپیوتر در دسترس است (دکمه‌های آن برنامه اجرا می‌کنند؛ نباید روی شبکه باز باشد)
+address = "localhost"
+headless = true
+port = 8501
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"

@@ -1,44 +1,68 @@
 # -*- coding: utf-8 -*-
 """
-ماژول مدیریت و اتصال به پایگاه داده SQLite
-طراحی‌شده با متدهای ساده و خوانا برای استفاده در BRS Data Engine
+ماژول مدیریت و اتصال به پایگاه داده SQLite (data/brs.db)
+
+- ساختار جداول فقط از طریق مایگریشن‌ها (database/migrations) ساخته و تغییر داده می‌شود.
+- حالت WAL فعال است تا داشبورد بتواند هم‌زمان با گردآورنده داده، دیتابیس را بخواند.
+- هویت هر نماد با شناسه پایدار TSETMC (ins_code) تعیین می‌شود و نام نماد یکسان‌سازی می‌شود.
 """
 
-import sqlite3
+import json
 import logging
+import sqlite3
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, Iterable, List, Optional
+
+import pandas as pd
 
 from config import settings
-from database.models import (
-    CREATE_SYMBOLS_TABLE,
-    CREATE_DAILY_PRICES_TABLE,
-    CREATE_SNAPSHOTS_TABLE,
-    CREATE_COLLECTION_LOG_TABLE,
-    CREATE_DATA_SOURCES_TABLE,
-    CREATE_CORPORATE_ACTIONS_TABLE,
-    CREATE_MARKET_CALENDAR_TABLE,
-    CREATE_INTRADAY_TRADES_TABLE,
-    CREATE_DATA_QUALITY_TABLE,
-    CREATE_EXPERIMENTS_TABLE,
-    CREATE_FEATURES_DAILY_TABLE,
-    CREATE_FEATURES_INTRADAY_TABLE,
-)
+from core import market_rules
+from core.text import normalize_fa, normalize_symbol
+from core.timeutils import now_tehran_iso
+from database.migrator import apply_migrations, backup_database, current_version, pending_migrations
 
 logger = logging.getLogger(__name__)
 
+# منبع پیش‌فرض قیمت‌ها؛ داده‌های روزانه با این منبع خوانده می‌شوند
+PRICE_SOURCE = "tsetmc"
+
+SNAPSHOT_COLUMNS = [
+    "captured_at", "provider_timestamp", "last_trade_time",
+    "last_price", "close_price", "open_price", "high_price", "low_price",
+    "ref_price", "price_limit_up", "price_limit_down", "base_volume",
+    "volume", "value", "trade_count",
+    "buy_queue_volume", "sell_queue_volume",
+    "real_buy_count", "real_sell_count", "legal_buy_count", "legal_sell_count",
+    "real_buy_volume", "real_sell_volume", "legal_buy_volume", "legal_sell_volume",
+    "price_unit", "source",
+] + [
+    f"{side}_{field}_{level}"
+    for level in range(1, 6)
+    for side in ("bid", "ask")
+    for field in ("price", "vol", "count")
+]
+
+CLIENT_TYPE_COLUMNS = [
+    "buy_i_volume", "buy_n_volume", "buy_i_value", "buy_n_value", "buy_i_count", "buy_n_count",
+    "sell_i_volume", "sell_n_volume", "sell_i_value", "sell_n_value", "sell_i_count", "sell_n_count",
+]
+
 
 def get_current_tehran_time() -> str:
-    """دریافت زمان کنونی با احتساب منطقه زمانی تهران (Asia/Tehran) به صورت ایزو."""
+    """زمان کنونی تهران به صورت ISO (نام قدیمی برای سازگاری)."""
+    return now_tehran_iso()
+
+
+def _none_if_nan(value: Any) -> Any:
+    if value is None:
+        return None
     try:
-        tz = ZoneInfo(settings.TIMEZONE)
-    except Exception:
-        # در ویندوز اگر پکیج tzdata نصب نباشد، از افست ثابت رسمی تهران UTC+03:30 استفاده می‌شود
-        from datetime import timezone, timedelta
-        tz = timezone(timedelta(hours=3, minutes=30), name="Asia/Tehran")
-    return datetime.now(tz).isoformat()
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 class DatabaseManager:
@@ -47,571 +71,320 @@ class DatabaseManager:
     پشتیبانی از پروتکل Context Manager با استفاده از دستور with.
     """
 
-    def __init__(self, db_path: Optional[Path | str] = None):
+    def __init__(self, db_path: Optional[Path | str] = None, read_only: bool = False):
         """
-        مقداردهی اولیه مسیر فایل دیتابیس و اتصال اولیه.
+        read_only=True: اتصال فقط‌خواندنی (برای داشبورد)؛ هیچ قفل نوشتنی نمی‌گیرد و مایگریشن اجرا نمی‌کند،
+        پس با پایش زنده یا به‌روزرسانی هم‌زمان تداخل ندارد.
         """
-        if db_path is None:
-            self.db_path = Path(settings.DB_PATH)
-        else:
-            self.db_path = Path(db_path)
-
-        # اطمینان از ایجاد پوشه والد دیتابیس
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
+        self.db_path = Path(db_path) if db_path is not None else Path(settings.DB_PATH)
+        self.read_only = read_only
+        if not read_only:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn: Optional[sqlite3.Connection] = None
         self._connect()
-        self.init_db()
+        if not read_only:
+            self.init_db()
+
+    # ═══════════════════════════════════════════════
+    # اتصال و مایگریشن
+    # ═══════════════════════════════════════════════
 
     def _connect(self) -> None:
-        """برقراری اتصال امن با دیتابیس SQLite."""
         try:
-            self.conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False
-            )
+            if self.read_only:
+                uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+                self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=30)
+            else:
+                self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
+                self.conn.execute("PRAGMA journal_mode=WAL;")
             self.conn.row_factory = sqlite3.Row
-            logger.info("اتصال به پایگاه داده با موفقیت برقرار شد: %s", self.db_path)
+            self.conn.execute("PRAGMA busy_timeout=30000;")
+            logger.debug("اتصال به پایگاه داده برقرار شد: %s", self.db_path)
         except Exception as e:
             logger.error("خطا در برقراری اتصال به پایگاه داده: %s", e)
             raise
 
     def __enter__(self):
-        """ورود به بافت کانتکست منیجر."""
         if self.conn is None:
             self._connect()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """خروج از کانتکست منیجر و بستن ارتباط."""
         self.close()
 
-    def init_db(self) -> None:
+    def init_db(self) -> List[str]:
         """
-        ایجاد تمام جداول مورد نیاز بر اساس اسکیماهای تعریف‌شده در models.py.
+        اعمال مایگریشن‌های اجرانشده. اگر دیتابیس از قبل داده داشته باشد، ابتدا نسخه پشتیبان گرفته می‌شود.
+        خروجی: نام مایگریشن‌های اعمال‌شده در این اجرا.
         """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(CREATE_SYMBOLS_TABLE)
-                cursor.execute(CREATE_DAILY_PRICES_TABLE)
-                cursor.execute(CREATE_SNAPSHOTS_TABLE)
-                cursor.execute(CREATE_COLLECTION_LOG_TABLE)
-                cursor.execute(CREATE_DATA_SOURCES_TABLE)
-                cursor.execute(CREATE_CORPORATE_ACTIONS_TABLE)
-                cursor.execute(CREATE_MARKET_CALENDAR_TABLE)
-                cursor.execute(CREATE_INTRADAY_TRADES_TABLE)
-                cursor.execute(CREATE_DATA_QUALITY_TABLE)
-                cursor.execute(CREATE_EXPERIMENTS_TABLE)
-                cursor.execute(CREATE_FEATURES_DAILY_TABLE)
-                cursor.execute(CREATE_FEATURES_INTRADAY_TABLE)
-            self._run_column_migrations()
-            logger.info("ساختار کلیه جداول و مایگریشن‌های پایگاه داده با موفقیت آماده‌سازی شد.")
-        except Exception as e:
-            logger.error("خطا در ایجاد جداول پایگاه داده: %s", e)
-            raise
+        pending = pending_migrations(self.conn)
+        has_data = self.conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='symbols';"
+        ).fetchone()[0] > 0
+        if pending and has_data:
+            self.backup(keep=5)
+        applied = apply_migrations(self.conn)
+        if applied:
+            logger.info("مایگریشن‌های اعمال‌شده: %s", ", ".join(applied))
+        self.conn.execute("PRAGMA foreign_keys=ON;")
+        return applied
 
-    def _run_column_migrations(self) -> None:
-        """اجرای مایگریشن‌های نرم برای افزودن ستون‌های جدید به جداول از پیش موجود."""
-        migration_columns = [
-            ("symbols", "status", "TEXT DEFAULT 'active'"),
-            ("symbols", "listed_date", "TEXT"),
-            ("symbols", "delisted_date", "TEXT"),
-            ("symbols", "base_volume", "INTEGER DEFAULT 1"),
-            ("daily_prices", "open_raw", "REAL"),
-            ("daily_prices", "high_raw", "REAL"),
-            ("daily_prices", "low_raw", "REAL"),
-            ("daily_prices", "close_raw", "REAL"),
-            ("daily_prices", "adjustment_factor", "REAL DEFAULT 1.0"),
-            ("snapshots", "base_volume", "INTEGER DEFAULT 1"),
-            ("snapshots", "bid_price_1", "REAL"),
-            ("snapshots", "bid_vol_1", "INTEGER"),
-            ("snapshots", "ask_price_1", "REAL"),
-            ("snapshots", "ask_vol_1", "INTEGER"),
-            ("experiments", "dataset_version", "TEXT DEFAULT 'v1.0'"),
-            ("experiments", "features_version", "TEXT DEFAULT 'v1.0'"),
-            ("experiments", "model_version", "TEXT DEFAULT 'v1.0'"),
-        ]
-        with self.conn:
-            cursor = self.conn.cursor()
-            for table, col, col_def in migration_columns:
-                try:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def};")
-                except sqlite3.OperationalError:
-                    # ستون از قبل وجود دارد؛ نادیده گرفته می‌شود
-                    pass
+    def schema_version(self) -> int:
+        return current_version(self.conn)
 
-            # بک‌فیل خودکار رکوردهای قبلی جهت اطمینان از مقدار داشتن ستون‌های Point-in-Time
+    def close(self) -> None:
+        if self.conn:
             try:
-                cursor.execute("""
-                UPDATE daily_prices 
-                SET open_raw = open, high_raw = high, low_raw = low, close_raw = close,
-                    adjustment_factor = CASE WHEN close > 0 THEN adj_close / close ELSE 1.0 END
-                WHERE open_raw IS NULL;
-                """)
-            except Exception as backfill_err:
-                logger.debug("عدم نیاز به بک‌فیل یا خطا: %s", backfill_err)
+                self.conn.close()
+            except Exception as e:
+                logger.error("خطا در بستن اتصال پایگاه داده: %s", e)
+            finally:
+                self.conn = None
 
-    def insert_symbol(
-        self,
-        tse_code: str,
-        symbol_fa: str,
-        name_fa: Optional[str] = None,
-        market: Optional[str] = 'bourse',
-        instrument_type: Optional[str] = 'stock'
-    ) -> Optional[int]:
+    # ═══════════════════════════════════════════════
+    # نمادها
+    # ═══════════════════════════════════════════════
+
+    def upsert_symbol(self, meta: Dict[str, Any]) -> Optional[int]:
         """
-        افزودن نماد جدید یا دریافت شناسه آن (INSERT OR IGNORE برای جلوگیری از تکرار).
+        ثبت یا به‌روزرسانی نماد. کلید اصلی ins_code است؛ اگر نماد با همین نام اما بدون ins_code
+        وجود داشته باشد، همان ردیف تکمیل می‌شود (هرگز ردیف تکراری ساخته نمی‌شود).
         """
-        now = get_current_tehran_time()
-        query = """
-        INSERT OR IGNORE INTO symbols (tse_code, symbol_fa, name_fa, market, instrument_type, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?);
-        """
+        symbol_fa = normalize_symbol(meta.get("symbol_fa", ""))
+        if not symbol_fa:
+            return None
+        ins_code = meta.get("ins_code") or None
+        now = now_tehran_iso()
+        isin = meta.get("tse_code") if str(meta.get("tse_code") or "").startswith("IR") else None
+        # فقط فیلدهای ارائه‌شده به‌روز می‌شوند؛ مقدار پیش‌فرض فقط هنگام درج ردیف جدید استفاده می‌شود
+        fields = {
+            "tse_code": isin,
+            "name_fa": normalize_fa(meta["name_fa"]) if meta.get("name_fa") else None,
+            "market": meta.get("market"),
+            "instrument_type": meta.get("instrument_type"),
+            "ins_code": ins_code,
+            "board_code": meta.get("board_code"),
+            "instrument_type_code": meta.get("instrument_type_code"),
+            "flow": meta.get("flow"),
+            "sector_code": meta.get("sector_code"),
+            "sector_name": meta.get("sector_name"),
+            "shares_outstanding": meta.get("shares_outstanding"),
+            "base_volume": meta.get("base_volume"),
+        }
         try:
             with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(query, (tse_code, symbol_fa, name_fa, market, instrument_type, now, now))
-                if cursor.rowcount > 0:
-                    return cursor.lastrowid
-
-            # در صورتی که نماد از قبل ثبت شده بود، شناسه موجود بازگردانده می‌شود
-            return self.get_symbol_id(symbol_fa)
-        except Exception as e:
-            logger.error("خطا در افزودن نماد %s: %s", symbol_fa, e)
+                row = None
+                if ins_code:
+                    row = self.conn.execute("SELECT id FROM symbols WHERE ins_code = ?;", (ins_code,)).fetchone()
+                if row is None:
+                    row = self.conn.execute("SELECT id FROM symbols WHERE symbol_fa = ?;", (symbol_fa,)).fetchone()
+                if row is None:
+                    insert_fields = dict(fields)
+                    insert_fields["tse_code"] = isin or ins_code or meta.get("tse_code") or symbol_fa
+                    insert_fields["name_fa"] = fields["name_fa"] or symbol_fa
+                    insert_fields["instrument_type"] = fields["instrument_type"] or "stock"
+                    cols = ["symbol_fa", "is_active", "created_at", "updated_at", "last_seen_at"] + list(insert_fields)
+                    vals = [symbol_fa, 1, now, now, now] + list(insert_fields.values())
+                    cur = self.conn.execute(
+                        f"INSERT INTO symbols ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))});", vals
+                    )
+                    return cur.lastrowid
+                if ins_code:
+                    existing = self.conn.execute("SELECT ins_code FROM symbols WHERE id = ?;", (row["id"],)).fetchone()
+                    if existing["ins_code"] and existing["ins_code"] != ins_code:
+                        # معمولاً یعنی انتقال نماد بین بازارها (مثلاً فرابورس به بورس) با شناسه جدید
+                        logger.warning("شناسه TSETMC نماد «%s» از %s به %s تغییر کرد.", symbol_fa,
+                                       existing["ins_code"], ins_code)
+                updates = {k: v for k, v in fields.items() if v is not None}
+                updates.update({"symbol_fa": symbol_fa, "updated_at": now, "last_seen_at": now, "is_active": 1})
+                self.conn.execute(
+                    f"UPDATE symbols SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?;",
+                    list(updates.values()) + [row["id"]],
+                )
+                return row["id"]
+        except sqlite3.IntegrityError as e:
+            # هرگز شناسه نماد دیگری برگردانده نمی‌شود (جلوگیری از قاطی شدن داده دو نماد)
+            logger.error("تعارض در ثبت نماد %s (ins_code=%s): %s", symbol_fa, ins_code, e)
             return None
+
+    def insert_symbol(self, tse_code: str, symbol_fa: str, name_fa: Optional[str] = None,
+                      market: Optional[str] = "bourse", instrument_type: Optional[str] = "stock") -> Optional[int]:
+        """رابط قدیمی ثبت نماد (برای سازگاری)."""
+        return self.upsert_symbol({
+            "tse_code": tse_code, "symbol_fa": symbol_fa, "name_fa": name_fa,
+            "market": market, "instrument_type": instrument_type,
+        })
+
+    def get_symbol(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM symbols WHERE symbol_fa = ? LIMIT 1;", (normalize_symbol(symbol_fa),)
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_symbol_id(self, symbol_fa: str) -> Optional[int]:
-        """یافتن شناسه عددی نماد (id) بر اساس نام فارسی نماد."""
-        query = "SELECT id FROM symbols WHERE symbol_fa = ? LIMIT 1;"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query, (symbol_fa,))
-            row = cursor.fetchone()
-            if row:
-                return row["id"]
-            return None
-        except Exception as e:
-            logger.error("خطا در جستجوی شناسه نماد %s: %s", symbol_fa, e)
-            return None
+        """یافتن شناسه نماد بر اساس نام فارسی (با یکسان‌سازی ی/ک عربی)."""
+        sym = self.get_symbol(symbol_fa)
+        return sym["id"] if sym else None
 
-    def get_all_symbols(self) -> List[Dict[str, Any]]:
-        """دریافت لیست تمام نمادهای فعال در سامانه."""
-        query = "SELECT * FROM symbols WHERE is_active = 1 ORDER BY symbol_fa ASC;"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error("خطا در دریافت لیست نمادها: %s", e)
-            return []
+    def get_all_symbols(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """فهرست نمادهای فعال (یا همه نمادها با include_inactive=True)."""
+        where = "" if include_inactive else "WHERE is_active = 1"
+        rows = self.conn.execute(f"SELECT * FROM symbols {where} ORDER BY symbol_fa ASC;").fetchall()
+        return [dict(r) for r in rows]
+
+    def set_symbols_active(self, symbol_ids: List[int], active: bool) -> int:
+        """فعال/غیرفعال کردن نمادها (داده‌های نماد هرگز حذف نمی‌شود)."""
+        if not symbol_ids:
+            return 0
+        now = now_tehran_iso()
+        with self.conn:
+            cur = self.conn.executemany(
+                "UPDATE symbols SET is_active = ?, status = ?, updated_at = ? WHERE id = ?;",
+                [(int(active), "active" if active else "inactive", now, sid) for sid in symbol_ids],
+            )
+        return cur.rowcount
+
+    def get_universe_symbols(self) -> List[Dict[str, Any]]:
+        """نمادهای فعال داخل دامنه پروژه (سهام بورس و فرابورس طبق تنظیمات)."""
+        allowed = list(settings.UNIVERSE["instrument_types"])
+        if settings.UNIVERSE["include_base_market"]:
+            allowed.append(309)
+        if settings.UNIVERSE["include_sme_market"]:
+            allowed.append(313)
+        placeholders = ",".join("?" * len(allowed))
+        rows = self.conn.execute(
+            f"SELECT * FROM symbols WHERE is_active = 1 AND instrument_type_code IN ({placeholders}) "
+            "ORDER BY symbol_fa ASC;", allowed,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ═══════════════════════════════════════════════
+    # قیمت‌های روزانه
+    # ═══════════════════════════════════════════════
+
+    _DAILY_UPSERT = """
+    INSERT INTO daily_prices (
+        symbol_id, date, open, high, low, close, adj_close, volume, value, trade_count,
+        price_unit, source, captured_at,
+        open_raw, high_raw, low_raw, close_raw, close_final_raw, ref_price_raw, adjustment_factor
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(symbol_id, date, source) DO UPDATE SET
+        open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close,
+        volume = excluded.volume, value = excluded.value, trade_count = excluded.trade_count,
+        captured_at = excluded.captured_at,
+        open_raw = excluded.open_raw, high_raw = excluded.high_raw, low_raw = excluded.low_raw,
+        close_raw = excluded.close_raw,
+        close_final_raw = COALESCE(excluded.close_final_raw, daily_prices.close_final_raw),
+        ref_price_raw = COALESCE(excluded.ref_price_raw, daily_prices.ref_price_raw);
+    """
+
+    def upsert_daily_prices_df(self, symbol_id: int, df: pd.DataFrame, source: str = PRICE_SOURCE,
+                               recompute: bool = True) -> int:
+        """
+        ثبت گروهی کندل‌های روزانه استاندارد (خروجی BaseDataProvider.get_symbol_history).
+        رکورد موجود با داده تازه منبع به‌روز می‌شود. خروجی: تعداد ردیف‌های پردازش‌شده.
+        با recompute=False محاسبه دوباره ضرایب تعدیل انجام نمی‌شود (برای ثبت سریع کندل امروز کل بازار).
+        """
+        if df is None or df.empty:
+            return 0
+        now = now_tehran_iso()
+        params = []
+        for row in df.itertuples(index=False):
+            r = row._asdict()
+            o, h, lo, c = (_none_if_nan(r.get(k)) for k in ("open_raw", "high_raw", "low_raw", "close_raw"))
+            vol, val, cnt = (_none_if_nan(r.get(k)) for k in ("volume", "value", "trade_count"))
+            params.append((
+                symbol_id, r["date"], o, h, lo, c, None,
+                int(vol) if vol is not None else None, val, int(cnt) if cnt is not None else None,
+                settings.PRICE_UNIT, source, now,
+                o, h, lo, c, _none_if_nan(r.get("close_final_raw")), _none_if_nan(r.get("ref_price_raw")), 1.0,
+            ))
+        with self.conn:
+            self.conn.executemany(self._DAILY_UPSERT, params)
+        if recompute:
+            self.recompute_adjustments(symbol_id, source=source)
+        return len(params)
+
+    def previous_close_final(self, symbol_id: int, before_date: str, source: str = PRICE_SOURCE) -> Optional[float]:
+        """قیمت پایانی رسمی آخرین روز معاملاتی قبل از تاریخ داده‌شده."""
+        row = self.conn.execute(
+            "SELECT close_final_raw FROM daily_prices WHERE symbol_id = ? AND source = ? AND date < ? "
+            "ORDER BY date DESC LIMIT 1;", (symbol_id, source, before_date),
+        ).fetchone()
+        return row[0] if row else None
 
     def insert_daily_price(
-        self,
-        symbol_id: int,
-        date: str,
-        open: float,
-        high: float,
-        low: float,
-        close: float,
-        adj_close: float,
-        volume: int,
-        value: float,
-        trade_count: int,
-        source: str = 'pytse',
-        price_unit: str = settings.PRICE_UNIT,
-        open_raw: Optional[float] = None,
-        high_raw: Optional[float] = None,
-        low_raw: Optional[float] = None,
-        close_raw: Optional[float] = None,
-        adjustment_factor: Optional[float] = None,
+        self, symbol_id: int, date: str, open: float, high: float, low: float, close: float,
+        adj_close: Optional[float] = None, volume: Optional[int] = None, value: Optional[float] = None,
+        trade_count: Optional[int] = None, source: str = PRICE_SOURCE, price_unit: str = settings.PRICE_UNIT,
+        open_raw: Optional[float] = None, high_raw: Optional[float] = None, low_raw: Optional[float] = None,
+        close_raw: Optional[float] = None, adjustment_factor: Optional[float] = None,
+        close_final_raw: Optional[float] = None, ref_price_raw: Optional[float] = None,
     ) -> bool:
-        """
-        ثبت قیمت روزانه معامله با ذخیره قطعی مقادیر خام (Point-in-Time) و ضریب تعدیل.
-        از درج رکوردهای تکراری بر اساس (symbol_id, date, source) جلوگیری می‌شود.
-        """
-        now = get_current_tehran_time()
-
-        # تضمین پر بودن داده‌های خام Point-in-Time
+        """ثبت یک کندل روزانه (رابط تک‌رکوردی؛ برای حجم بالا از upsert_daily_prices_df استفاده کنید)."""
         o_raw = open_raw if open_raw is not None else open
         h_raw = high_raw if high_raw is not None else high
         l_raw = low_raw if low_raw is not None else low
         c_raw = close_raw if close_raw is not None else close
-
-        if adjustment_factor is not None:
-            adj_fac = adjustment_factor
-        elif close and close > 0 and adj_close is not None:
-            adj_fac = round(adj_close / close, 6)
-        else:
-            adj_fac = 1.0
-
-        query = """
-        INSERT OR IGNORE INTO daily_prices (
-            symbol_id, date, open, high, low, close, adj_close,
-            volume, value, trade_count, price_unit, source, captured_at,
-            open_raw, high_raw, low_raw, close_raw, adjustment_factor
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
         try:
             with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (
-                        symbol_id, date, open, high, low, close, adj_close,
-                        volume, value, trade_count, price_unit, source, now,
-                        o_raw, h_raw, l_raw, c_raw, adj_fac
-                    )
+                cur = self.conn.execute(
+                    self._DAILY_UPSERT,
+                    (symbol_id, date, o_raw, h_raw, l_raw, c_raw, adj_close, volume, value, trade_count,
+                     price_unit, source, now_tehran_iso(),
+                     o_raw, h_raw, l_raw, c_raw, close_final_raw, ref_price_raw,
+                     adjustment_factor if adjustment_factor is not None else 1.0),
                 )
-                return cursor.rowcount > 0
+                if adj_close is not None or adjustment_factor is not None:
+                    self.conn.execute(
+                        "UPDATE daily_prices SET adj_close = COALESCE(?, adj_close), "
+                        "adjustment_factor = COALESCE(?, adjustment_factor) "
+                        "WHERE symbol_id = ? AND date = ? AND source = ?;",
+                        (adj_close, adjustment_factor, symbol_id, date, source),
+                    )
+                return cur.rowcount > 0
         except Exception as e:
             logger.error("خطا در ثبت قیمت روزانه برای symbol_id=%s در تاریخ %s: %s", symbol_id, date, e)
             return False
 
-    def insert_snapshot(self, symbol_id: int, data_dict: Dict[str, Any]) -> bool:
+    def recompute_adjustments(self, symbol_id: int, source: str = PRICE_SOURCE) -> int:
         """
-        ثبت اسنپ‌شات لحظه‌ای بازار با جزئیات صفوف خرید/فروش و حقیقی/حقوقی.
+        محاسبه مجدد ضریب اقدام شرکتی هر روز و قیمت پایانی تعدیل‌شده رو به عقب (فقط برای نمایش).
+        فقط روزهایی که قیمت مرجع دارند معتبرند؛ بقیه ضریب ۱ می‌گیرند.
         """
-        now = get_current_tehran_time()
-        captured_at = data_dict.get('captured_at', now)
-        source = data_dict.get('source', 'pytse')
-        price_unit = data_dict.get('price_unit', settings.PRICE_UNIT)
-
-        query = """
-        INSERT OR IGNORE INTO snapshots (
-            symbol_id, captured_at, last_price, close_price, open_price,
-            high_price, low_price, volume, value, trade_count,
-            buy_queue_volume, sell_queue_volume,
-            real_buy_count, real_sell_count, legal_buy_count, legal_sell_count,
-            real_buy_volume, real_sell_volume, legal_buy_volume, legal_sell_volume,
-            price_unit, source, provider_timestamp
-        ) VALUES (
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?
-        );
-        """
-        params = (
-            symbol_id,
-            captured_at,
-            data_dict.get('last_price'),
-            data_dict.get('close_price'),
-            data_dict.get('open_price'),
-            data_dict.get('high_price'),
-            data_dict.get('low_price'),
-            data_dict.get('volume'),
-            data_dict.get('value'),
-            data_dict.get('trade_count'),
-            data_dict.get('buy_queue_volume'),
-            data_dict.get('sell_queue_volume'),
-            data_dict.get('real_buy_count'),
-            data_dict.get('real_sell_count'),
-            data_dict.get('legal_buy_count'),
-            data_dict.get('legal_sell_count'),
-            data_dict.get('real_buy_volume'),
-            data_dict.get('real_sell_volume'),
-            data_dict.get('legal_buy_volume'),
-            data_dict.get('legal_sell_volume'),
-            price_unit,
-            source,
-            data_dict.get('provider_timestamp')
+        df = pd.read_sql_query(
+            "SELECT id, date, close_raw, close_final_raw, ref_price_raw FROM daily_prices "
+            "WHERE symbol_id = ? AND source = ? ORDER BY date ASC;",
+            self.conn, params=(symbol_id, source),
         )
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(query, params)
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error("خطا در ثبت اسنپ‌شات برای symbol_id=%s: %s", symbol_id, e)
-            return False
+        if df.empty:
+            return 0
+        factors = market_rules.corporate_action_factors(df)
+        adjusted = market_rules.backward_adjusted_close(df)
+        updates = [
+            (_none_if_nan(round(float(a), 4)) if pd.notna(a) else None, float(f), int(i))
+            for a, f, i in zip(adjusted, factors, df["id"])
+        ]
+        with self.conn:
+            self.conn.executemany("UPDATE daily_prices SET adj_close = ?, adjustment_factor = ? WHERE id = ?;", updates)
+        return len(updates)
 
-    def get_latest_prices(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_daily_prices_df(self, symbol_fa: str, start_date: Optional[str] = None,
+                            end_date: Optional[str] = None, raw_only: bool = True,
+                            source: str = PRICE_SOURCE) -> pd.DataFrame:
         """
-        دریافت آخرین قیمت‌های ثبت شده همراه با اطلاعات و نام فارسی نماد.
+        سابقه قیمت روزانه یک نماد. با raw_only=True (پیش‌فرض) ستون‌های تعدیل‌شده برگردانده نمی‌شوند
+        تا به‌اشتباه وارد فیچرها نشوند (قانون ۱۰ AGENTS.md).
         """
-        query = """
-        SELECT 
-            dp.*,
-            s.symbol_fa,
-            s.name_fa,
-            s.market
-        FROM daily_prices dp
-        JOIN symbols s ON dp.symbol_id = s.id
-        ORDER BY dp.date DESC, dp.captured_at DESC
-        LIMIT ?;
-        """
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query, (limit,))
-            return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error("خطا در دریافت آخرین قیمت‌ها: %s", e)
-            return []
-
-    def get_collection_stats(self) -> List[Dict[str, Any]]:
-        """دریافت خلاصه گزارش وضعیت لاگ‌های گردآوری داده."""
-        query = """
-        SELECT * FROM collection_log
-        ORDER BY started_at DESC
-        LIMIT 20;
-        """
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error("خطا در دریافت آمار گردآوری داده: %s", e)
-            return []
-
-    def log_collection(
-        self,
-        started_at: str,
-        finished_at: str,
-        collection_type: str,
-        symbols_requested: int,
-        symbols_succeeded: int,
-        symbols_failed: int,
-        errors: Optional[str] = None,
-        status: str = 'success'
-    ) -> Optional[int]:
-        """ثبت گزارش فرآیند دریافت اطلاعات در جدول لاگ."""
-        query = """
-        INSERT INTO collection_log (
-            started_at, finished_at, collection_type,
-            symbols_requested, symbols_succeeded, symbols_failed,
-            errors, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (started_at, finished_at, collection_type, symbols_requested, symbols_succeeded, symbols_failed, errors, status)
-                )
-                return cursor.lastrowid
-        except Exception as e:
-            logger.error("خطا در ثبت لاگ گردآوری: %s", e)
-            return None
-
-    def close(self) -> None:
-        """بستن ایمن اتصال پایگاه داده."""
-        if self.conn:
-            try:
-                self.conn.close()
-                self.conn = None
-                logger.info("اتصال به پایگاه داده بسته شد.")
-            except Exception as e:
-                logger.error("خطا در بستن اتصال پایگاه داده: %s", e)
-
-    def log_experiment(
-        self,
-        experiment_id: str,
-        strategy_name: str,
-        symbols_tested: str,
-        parameters_json: str,
-        metrics_json: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        status: str = "completed"
-    ) -> Optional[int]:
-        """ثبت آزمایش یا بکتست جهت رهگیری علمی استراتژی‌ها."""
-        query = """
-        INSERT OR REPLACE INTO experiments (
-            experiment_id, created_at, strategy_name, symbols_tested,
-            start_date, end_date, parameters_json, metrics_json, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (
-                        experiment_id,
-                        get_current_tehran_time(),
-                        strategy_name,
-                        symbols_tested,
-                        start_date,
-                        end_date,
-                        parameters_json,
-                        metrics_json,
-                        status
-                    )
-                )
-                return cursor.lastrowid
-        except Exception as e:
-            logger.error("خطا در ثبت آزمایش: %s", e)
-            return None
-
-    def get_experiments(self) -> List[Dict[str, Any]]:
-        """دریافت سوابق کلیه آزمایش‌ها و نتایج بکتست‌ها."""
-        query = "SELECT * FROM experiments ORDER BY id DESC;"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error("خطا در خواندن آزمایش‌ها: %s", e)
-            return []
-
-    def insert_corporate_action(
-        self,
-        symbol_id: int,
-        event_date: str,
-        event_type: str,
-        adjustment_factor: float = 1.0,
-        cash_dividend: float = 0.0,
-        capital_increase_pct: float = 0.0,
-        description: Optional[str] = None
-    ) -> bool:
-        """ثبت رویداد شرکتی و ضریب تعدیل قیمت."""
-        query = """
-        INSERT OR REPLACE INTO corporate_actions (
-            symbol_id, event_date, event_type, adjustment_factor,
-            cash_dividend, capital_increase_pct, description, captured_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (symbol_id, event_date, event_type, adjustment_factor, cash_dividend, capital_increase_pct, description, get_current_tehran_time())
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error("خطا در ثبت رویداد شرکتی: %s", e)
-            return False
-
-    def insert_market_calendar(
-        self,
-        calendar_date: str,
-        is_trading_day: bool,
-        holiday_reason: Optional[str] = None,
-        market_phase: str = 'regular'
-    ) -> bool:
-        """ثبت وضعیت تقویم بازار."""
-        query = """
-        INSERT OR REPLACE INTO market_calendar (calendar_date, is_trading_day, holiday_reason, market_phase)
-        VALUES (?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(query, (calendar_date, int(is_trading_day), holiday_reason, market_phase))
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error("خطا در ثبت تقویم بازار: %s", e)
-            return False
-
-    def is_trading_day(self, date_str: str) -> bool:
-        """بررسی باز بودن بازار در تاریخ مشخص بر اساس تقویم دیتابیس."""
-        query = "SELECT is_trading_day FROM market_calendar WHERE calendar_date = ? LIMIT 1;"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(query, (date_str,))
-            row = cursor.fetchone()
-            if row:
-                return bool(row["is_trading_day"])
-            # در صورت عدم ثبت در جدول تقویم، از روزهای هفته پیش‌فرض استفاده می‌شود
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            return dt.weekday() in settings.TRADING_DAYS
-        except Exception:
-            return True
-
-    def insert_quality_metric(
-        self,
-        symbol_id: int,
-        trade_date: str,
-        completeness_score: float = 100.0,
-        price_anomaly_flag: bool = False,
-        volume_anomaly_flag: bool = False,
-        quality_score: float = 100.0,
-        notes: Optional[str] = None
-    ) -> bool:
-        """ثبت ارزیابی کیفیت و سلامت داده نماد."""
-        query = """
-        INSERT OR REPLACE INTO data_quality_metrics (
-            symbol_id, trade_date, completeness_score, price_anomaly_flag,
-            volume_anomaly_flag, quality_score, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (symbol_id, trade_date, completeness_score, int(price_anomaly_flag), int(volume_anomaly_flag), quality_score, notes)
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error("خطا در ثبت متریک کیفیت داده: %s", e)
-            return False
-
-    def insert_daily_features(self, symbol_id: int, date: str, features: Dict[str, Any]) -> bool:
-        """ذخیره فاکتورهای محاسبه‌شده روزانه در Feature Store."""
-        query = """
-        INSERT OR REPLACE INTO features_daily (
-            symbol_id, date, return_1d, return_5d, volatility_20d,
-            atr_14d, rsi_14d, sma_20d, sma_50d, volume_ratio_20d,
-            buyer_power_ratio, smart_money_flow, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
-        try:
-            with self.conn:
-                cursor = self.conn.cursor()
-                cursor.execute(
-                    query,
-                    (
-                        symbol_id,
-                        date,
-                        features.get("return_1d"),
-                        features.get("return_5d"),
-                        features.get("volatility_20d"),
-                        features.get("atr_14d"),
-                        features.get("rsi_14d"),
-                        features.get("sma_20d"),
-                        features.get("sma_50d"),
-                        features.get("volume_ratio_20d"),
-                        features.get("buyer_power_ratio"),
-                        features.get("smart_money_flow"),
-                        get_current_tehran_time()
-                    )
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error("خطا در ثبت فیچرهای روزانه: %s", e)
-            return False
-
-    def get_daily_prices_df(
-        self,
-        symbol_fa: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        raw_only: bool = True
-    ):
-        """
-        دریافت سابقه قیمت‌های روزانه به صورت پانداز دیتافریم با تفکیک قطعی داده خام از تعدیل‌شده.
-        """
-        import pandas as pd
         sym_id = self.get_symbol_id(symbol_fa)
         if not sym_id:
             return pd.DataFrame()
-
-        query = """
-        SELECT
-            date,
-            open_raw, high_raw, low_raw, close_raw,
-            open, high, low, close, adj_close, adjustment_factor,
-            volume, value, trade_count
-        FROM daily_prices
-        WHERE symbol_id = ?
-        """
-        params = [sym_id]
+        cols = ("date, open_raw, high_raw, low_raw, close_raw, close_final_raw, ref_price_raw, "
+                "volume, value, trade_count")
+        if not raw_only:
+            cols += ", adj_close, adjustment_factor"
+        query = f"SELECT {cols} FROM daily_prices WHERE symbol_id = ? AND source = ?"
+        params: List[Any] = [sym_id, source]
         if start_date:
             query += " AND date >= ?"
             params.append(start_date)
@@ -619,9 +392,300 @@ class DatabaseManager:
             query += " AND date <= ?"
             params.append(end_date)
         query += " ORDER BY date ASC;"
+        return pd.read_sql_query(query, self.conn, params=params)
 
-        df = pd.read_sql_query(query, self.conn, params=params)
-        return df
+    def get_last_daily_date(self, symbol_id: int, source: str = PRICE_SOURCE) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT MAX(date) AS d FROM daily_prices WHERE symbol_id = ? AND source = ?;", (symbol_id, source)
+        ).fetchone()
+        return row["d"] if row else None
+
+    def get_latest_prices(self, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT dp.*, s.symbol_fa, s.name_fa, s.market
+            FROM daily_prices dp JOIN symbols s ON dp.symbol_id = s.id
+            ORDER BY dp.date DESC, dp.captured_at DESC LIMIT ?;
+            """, (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ═══════════════════════════════════════════════
+    # حقیقی / حقوقی روزانه
+    # ═══════════════════════════════════════════════
+
+    def upsert_client_types_df(self, symbol_id: int, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        now = now_tehran_iso()
+        cols = ["symbol_id", "date"] + CLIENT_TYPE_COLUMNS + ["source", "captured_at"]
+        updates = ", ".join(f"{c} = excluded.{c}" for c in CLIENT_TYPE_COLUMNS + ["captured_at"])
+        query = (
+            f"INSERT INTO client_types_daily ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+            f"ON CONFLICT(symbol_id, date) DO UPDATE SET {updates};"
+        )
+        params = [
+            [symbol_id, r["date"]] + [_none_if_nan(r.get(c)) for c in CLIENT_TYPE_COLUMNS] + ["tsetmc", now]
+            for r in df.to_dict("records")
+        ]
+        with self.conn:
+            self.conn.executemany(query, params)
+        return len(params)
+
+    def get_client_types_df(self, symbol_fa: str, start_date: Optional[str] = None) -> pd.DataFrame:
+        sym_id = self.get_symbol_id(symbol_fa)
+        if not sym_id:
+            return pd.DataFrame()
+        query = f"SELECT date, {', '.join(CLIENT_TYPE_COLUMNS)} FROM client_types_daily WHERE symbol_id = ?"
+        params: List[Any] = [sym_id]
+        if start_date:
+            query += " AND date >= ?"
+            params.append(start_date)
+        return pd.read_sql_query(query + " ORDER BY date ASC;", self.conn, params=params)
+
+    # ═══════════════════════════════════════════════
+    # اسنپ‌شات لحظه‌ای تابلو
+    # ═══════════════════════════════════════════════
+
+    def _snapshot_params(self, symbol_id: int, data: Dict[str, Any]) -> List[Any]:
+        values = dict(data)
+        values.setdefault("captured_at", now_tehran_iso())
+        values.setdefault("source", "tsetmc")
+        values.setdefault("price_unit", settings.PRICE_UNIT)
+        return [symbol_id] + [_none_if_nan(values.get(c)) for c in SNAPSHOT_COLUMNS]
+
+    def _snapshot_query(self) -> str:
+        cols = ["symbol_id"] + SNAPSHOT_COLUMNS
+        return f"INSERT OR IGNORE INTO snapshots ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))});"
+
+    def insert_snapshot(self, symbol_id: int, data_dict: Dict[str, Any]) -> bool:
+        """ثبت اسنپ‌شات لحظه‌ای یک نماد (اگر captured_at نداشته باشد، زمان فعلی تهران ثبت می‌شود)."""
+        try:
+            with self.conn:
+                cur = self.conn.execute(self._snapshot_query(), self._snapshot_params(symbol_id, data_dict))
+                return cur.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت اسنپ‌شات برای symbol_id=%s: %s", symbol_id, e)
+            return False
+
+    def insert_snapshots_bulk(self, rows: Iterable[tuple]) -> int:
+        """ثبت گروهی اسنپ‌شات‌ها؛ ورودی: [(symbol_id, snapshot_dict), ...]"""
+        params = [self._snapshot_params(sym_id, data) for sym_id, data in rows]
+        if not params:
+            return 0
+        with self.conn:
+            self.conn.executemany(self._snapshot_query(), params)
+        return len(params)
+
+    # ═══════════════════════════════════════════════
+    # اطلاعیه‌های کدال و قضاوت‌های هوش مصنوعی
+    # ═══════════════════════════════════════════════
+
+    def upsert_announcements(self, letters: List[Dict[str, Any]]) -> int:
+        """ثبت اطلاعیه‌های کدال (اطلاعیه تکراری با شماره پیگیری یکسان نادیده گرفته می‌شود)."""
+        inserted = 0
+        now = now_tehran_iso()
+        with self.conn:
+            for letter in letters:
+                cur = self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO announcements (
+                        tracing_no, symbol_id, symbol_fa, company_name, title, letter_code,
+                        sent_at, published_at, url, source, captured_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'codal', ?);
+                    """,
+                    (
+                        letter["tracing_no"], self.get_symbol_id(letter.get("symbol_fa", "")),
+                        normalize_symbol(letter.get("symbol_fa", "")), normalize_fa(letter.get("company_name", "")),
+                        normalize_fa(letter["title"]), letter.get("letter_code"),
+                        letter.get("sent_at"), letter.get("published_at"), letter.get("url"), now,
+                    ),
+                )
+                inserted += cur.rowcount
+        return inserted
+
+    def get_unjudged_announcements(self, model: str, questions_version: str, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT a.* FROM announcements a
+            WHERE NOT EXISTS (
+                SELECT 1 FROM announcement_judgments j
+                WHERE j.announcement_id = a.id AND j.model = ? AND j.questions_version = ?
+            )
+            ORDER BY a.published_at DESC LIMIT ?;
+            """, (model, questions_version, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def insert_announcement_judgment(self, announcement_id: int, model: str, questions_version: str,
+                                     judgment: Dict[str, Any]) -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT OR REPLACE INTO announcement_judgments (
+                    announcement_id, model, questions_version, category, category_confidence,
+                    impact_score, impact_confidence, is_material, answers_json, input_tokens, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    announcement_id, model, questions_version, judgment.get("category"),
+                    judgment.get("category_confidence"), judgment.get("impact_score"),
+                    judgment.get("impact_confidence"), judgment.get("is_material"),
+                    json.dumps(judgment.get("raw", {}), ensure_ascii=False), judgment.get("input_tokens"),
+                    now_tehran_iso(),
+                ),
+            )
+            return cur.rowcount > 0
+
+    # ═══════════════════════════════════════════════
+    # لاگ، کیفیت داده، تقویم، اقدامات شرکتی، آزمایش‌ها، فیچرها
+    # ═══════════════════════════════════════════════
+
+    def get_collection_stats(self) -> List[Dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM collection_log ORDER BY started_at DESC LIMIT 20;").fetchall()
+        return [dict(r) for r in rows]
+
+    def log_collection(self, started_at: str, finished_at: str, collection_type: str, symbols_requested: int,
+                       symbols_succeeded: int, symbols_failed: int, errors: Optional[str] = None,
+                       status: str = "success") -> Optional[int]:
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    """
+                    INSERT INTO collection_log (started_at, finished_at, collection_type, symbols_requested,
+                        symbols_succeeded, symbols_failed, errors, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (started_at, finished_at, collection_type, symbols_requested, symbols_succeeded,
+                     symbols_failed, errors, status),
+                )
+                return cur.lastrowid
+        except Exception as e:
+            logger.error("خطا در ثبت لاگ گردآوری: %s", e)
+            return None
+
+    def insert_quality_metric(self, symbol_id: int, trade_date: str, completeness_score: float = 100.0,
+                              price_anomaly_flag: bool = False, volume_anomaly_flag: bool = False,
+                              quality_score: float = 100.0, notes: Optional[str] = None) -> bool:
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO data_quality_metrics (symbol_id, trade_date, completeness_score,
+                        price_anomaly_flag, volume_anomaly_flag, quality_score, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (symbol_id, trade_date, completeness_score, int(price_anomaly_flag),
+                     int(volume_anomaly_flag), quality_score, notes),
+                )
+                return cur.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت متریک کیفیت داده: %s", e)
+            return False
+
+    def insert_quality_metrics_bulk(self, rows: List[Dict[str, Any]]) -> int:
+        """ثبت گروهی متریک‌های کیفیت (سریع؛ برای علامت‌گذاری ناهنجاری‌های تاریخچه کامل)."""
+        if not rows:
+            return 0
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT OR REPLACE INTO data_quality_metrics (symbol_id, trade_date, completeness_score,
+                    price_anomaly_flag, volume_anomaly_flag, quality_score, notes)
+                VALUES (:symbol_id, :trade_date, :completeness_score, :price_anomaly_flag,
+                        :volume_anomaly_flag, :quality_score, :notes);
+                """,
+                [{"completeness_score": 100.0, "quality_score": 100.0, "notes": None, **r} for r in rows],
+            )
+        return len(rows)
+
+    def backup(self, keep: int = 5) -> Path:
+        """نسخه پشتیبان کامل در data/backups (فقط keep نسخه آخر نگه داشته می‌شود)."""
+        target = backup_database(self.conn, self.db_path)
+        backups = sorted((self.db_path.parent / "backups").glob(f"{self.db_path.stem}-*.db"))
+        for old in backups[:-keep]:
+            old.unlink(missing_ok=True)
+        return target
+
+    def integrity_check(self) -> str:
+        """بررسی سلامت فایل دیتابیس (خروجی 'ok' یعنی سالم)."""
+        return self.conn.execute("PRAGMA quick_check;").fetchone()[0]
+
+    def insert_market_calendar(self, calendar_date: str, is_trading_day: bool,
+                               holiday_reason: Optional[str] = None, market_phase: str = "regular") -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT OR REPLACE INTO market_calendar (calendar_date, is_trading_day, holiday_reason, market_phase) "
+                "VALUES (?, ?, ?, ?);", (calendar_date, int(is_trading_day), holiday_reason, market_phase),
+            )
+            return cur.rowcount > 0
+
+    def is_trading_day(self, date_str: str) -> bool:
+        """روز معاملاتی بر اساس تقویم دیتابیس؛ در نبود ثبت، بر اساس روزهای کاری هفته."""
+        row = self.conn.execute(
+            "SELECT is_trading_day FROM market_calendar WHERE calendar_date = ? LIMIT 1;", (date_str,)
+        ).fetchone()
+        if row:
+            return bool(row["is_trading_day"])
+        return datetime.strptime(date_str, "%Y-%m-%d").weekday() in settings.TRADING_DAYS
+
+    def insert_corporate_action(self, symbol_id: int, event_date: str, event_type: str,
+                                adjustment_factor: float = 1.0, cash_dividend: float = 0.0,
+                                capital_increase_pct: float = 0.0, description: Optional[str] = None) -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT OR REPLACE INTO corporate_actions (symbol_id, event_date, event_type, adjustment_factor,
+                    cash_dividend, capital_increase_pct, description, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (symbol_id, event_date, event_type, adjustment_factor, cash_dividend, capital_increase_pct,
+                 description, now_tehran_iso()),
+            )
+            return cur.rowcount > 0
+
+    def log_experiment(self, experiment_id: str, strategy_name: str, symbols_tested: str, parameters_json: str,
+                       metrics_json: str, start_date: Optional[str] = None, end_date: Optional[str] = None,
+                       status: str = "completed", dataset_version: str = "v1.0", features_version: str = "v1.0",
+                       model_version: str = "v1.0") -> Optional[int]:
+        """ثبت آزمایش یا بکتست جهت رهگیری علمی و تکرارپذیری."""
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO experiments (experiment_id, created_at, strategy_name, symbols_tested,
+                        start_date, end_date, dataset_version, features_version, model_version,
+                        parameters_json, metrics_json, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (experiment_id, now_tehran_iso(), strategy_name, symbols_tested, start_date, end_date,
+                     dataset_version, features_version, model_version, parameters_json, metrics_json, status),
+                )
+                return cur.lastrowid
+        except Exception as e:
+            logger.error("خطا در ثبت آزمایش: %s", e)
+            return None
+
+    def get_experiments(self) -> List[Dict[str, Any]]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM experiments ORDER BY id DESC;").fetchall()]
+
+    def insert_daily_features(self, symbol_id: int, date: str, features: Dict[str, Any]) -> bool:
+        keys = ["return_1d", "return_5d", "volatility_20d", "atr_14d", "rsi_14d", "sma_20d", "sma_50d",
+                "volume_ratio_20d", "buyer_power_ratio", "smart_money_flow"]
+        with self.conn:
+            cur = self.conn.execute(
+                f"INSERT OR REPLACE INTO features_daily (symbol_id, date, {', '.join(keys)}, created_at) "
+                f"VALUES (?, ?, {', '.join('?' * len(keys))}, ?);",
+                [symbol_id, date] + [features.get(k) for k in keys] + [now_tehran_iso()],
+            )
+            return cur.rowcount > 0
+
+    def table_counts(self) -> Dict[str, int]:
+        """تعداد رکوردهای هر جدول (برای صفحه سلامت سیستم)."""
+        tables = [r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+        ).fetchall()]
+        return {t: self.conn.execute(f"SELECT COUNT(*) FROM {t};").fetchone()[0] for t in tables}
 
 
 # نام مستعار جهت سازگاری با داشبورد و سایر بخش‌ها

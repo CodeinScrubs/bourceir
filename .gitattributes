@@ -1,0 +1,8 @@
+# یکسان‌سازی پایان خط‌ها: کد و مستندات با LF، فایل‌های اجرایی ویندوز با CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.db binary
+*.png binary
+*.jpg binary

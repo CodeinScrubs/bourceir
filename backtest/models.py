@@ -4,9 +4,8 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional, List, Dict, Any
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class OrderSide(str, Enum):
@@ -50,20 +49,21 @@ class Position:
     """مدل نگهداری سهم (پوزیشن باز یا بسته)."""
     symbol_fa: str
     quantity: int = 0
-    average_entry_price: float = 0.0
+    average_entry_price: float = 0.0   # بهای تمام‌شده هر سهم شامل کارمزد خرید
     total_cost: float = 0.0
     realized_pnl: float = 0.0
+    opened_at: Optional[str] = None    # تاریخ اولین خرید از آخرین باری که پوزیشن صفر بوده
     trades: List[Trade] = field(default_factory=list)
 
 
 @dataclass
 class ClosedTrade:
-    """مدل معامله بسته شده کامل (Round-Trip Trade) جهت محاسبه دقیق و بدون خطای Win Rate."""
+    """معامله رفت و برگشت کامل (Round-Trip) برای محاسبه دقیق Win Rate."""
     symbol_fa: str
     entry_date: str
     exit_date: str
     quantity: int
-    entry_price: float                 # میانگین قیمت ورود
+    entry_price: float                 # میانگین قیمت ورود (بدون کارمزد)
     exit_price: float                  # قیمت خروج
     gross_pnl: float                   # سود ناخالص (ریال)
     commissions: float                 # مجموع کارمزدهای خرید و فروش (ریال)
@@ -79,14 +79,16 @@ class PerformanceMetrics:
     winning_trades: int = 0
     losing_trades: int = 0
     win_rate: float = 0.0              # درصد معاملات برنده (۰ تا ۱۰۰)
-    gross_profit: float = 0.0          # سود ناخالص کل (ریال)
-    gross_loss: float = 0.0            # زیان ناخالص کل (ریال)
-    net_pnl: float = 0.0               # سود یا زیان خالص بعد از کارمزد (ریال)
+    gross_profit: float = 0.0          # مجموع سود معاملات برنده (ریال، خالص از کارمزد)
+    gross_loss: float = 0.0            # مجموع زیان معاملات بازنده (ریال، خالص از کارمزد)
+    net_pnl: float = 0.0               # سود یا زیان خالص معاملات بسته‌شده (ریال)
     profit_factor: float = 0.0         # نسبت سود به زیان
+    expectancy_pct: float = 0.0        # امید ریاضی: میانگین بازده خالص هر معامله (درصد)
     max_drawdown_pct: float = 0.0      # حداکثر افت سرمایه (درصد)
-    total_commissions_paid: float = 0.0# مجموع کارمزد و مالیات پرداختی (ریال)
-    sharpe_ratio: float = 0.0          # نسبت شارپ سالانه
-    initial_capital: float = 0.0       # سرمایه اولیه
-    final_equity: float = 0.0          # ارزش نهایی پرتفوی
-    total_return_pct: float = 0.0      # درصد کل بازدهی سرمایه
+    total_commissions_paid: float = 0.0
+    sharpe_ratio: float = 0.0          # نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری)
+    initial_capital: float = 0.0
+    final_equity: float = 0.0          # ارزش نهایی پرتفوی به قیمت روز (Mark-to-Market)
+    total_return_pct: float = 0.0
+    blocked_orders: int = 0            # سفارش‌هایی که به دلیل صف قفل اجرا نشدند
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)

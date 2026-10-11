@@ -11,6 +11,7 @@ __pycache__/
 
 # محیط مجازی پایتون
 venv/
+venv-*/
 env/
 .venv/
 .env
@@ -62,3 +63,9 @@ htmlcov/
 *.log
 *.bak
 *.tmp
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# تنظیمات شخصی Claude Code (فایل‌های مشترک مثل launch.json ثبت می‌شوند)
+.claude/settings.local.json

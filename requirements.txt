@@ -1,23 +1,25 @@
-# BRS Data Engine v0.1 - Dependencies
-# =====================================
+# BRS Quant Engine — وابستگی‌های مستقیم (Python 3.11)
+# ======================================================
+# برای نصب دقیقاً یکسان روی هر کامپیوتر از requirements.lock.txt استفاده می‌شود (SETUP.bat).
+# بعد از تغییر این فایل، فایل قفل را دوباره بسازید:
+#     uv pip compile requirements.txt --python-version 3.11 --universal -o requirements.lock.txt
 
-# Data provider for Tehran Stock Exchange
-pytse-client>=0.9.0
+# داده و محاسبات
+pandas>=2.2
+numpy>=1.26
+requests>=2.31
+pyyaml>=6.0
+python-dotenv>=1.0
+jdatetime>=5.0          # تاریخ شمسی
+tzdata>=2024.1          # منطقه زمانی تهران در ویندوز
 
-# Data processing
-pandas>=2.0.0
-numpy>=1.24.0
+# داشبورد
+streamlit>=1.37         # st.fragment برای به‌روزرسانی زنده
+psutil>=5.9             # مدیریت کارهای پس‌زمینه داشبورد
 
-# Dashboard
-streamlit>=1.30.0
+# هوش مصنوعی (TypeSafe Jev)
+typesafe-sdk>=0.7
 
-# Utilities
-requests>=2.31.0
-pytz>=2023.3            # Timezone handling
-# jdatetime handled by pytse-client dependency
-
-# Testing
-pytest>=7.4.0
-
-# Configuration
-pyyaml>=6.0.0
+# آزمون و کیفیت کد
+pytest>=8.0
+ruff>=0.6

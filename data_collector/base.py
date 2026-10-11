@@ -1,59 +1,76 @@
 # -*- coding: utf-8 -*-
 """
 لایه انتزاعی و استاندارد تامین‌کنندگان داده (Base Data Provider Interface)
-این ماژول تضمین می‌کند که هسته BRS به هیچ کتابخانه خاصی (مثل pytse-client) وابسته نباشد
-و بتوان در آینده منابع داده دیگر (مانند FinPy-TSE، وب‌سرویس مستقیم TSETMC یا وب‌سوکت کارگزاری)
-را بدون دستکاری سایر بخش‌های پروژه جایگزین یا اضافه کرد.
+
+هسته BRS به هیچ منبع خاصی وابسته نیست. هر منبع داده جدید (وب‌سرویس TSETMC، FinPy، کارگزاری و ...)
+فقط باید این قرارداد را پیاده‌سازی کند. شناسه نماد در همه متدها «ins_code» (شناسه پایدار TSETMC) است.
+
+قرارداد ستون‌های تاریخچه روزانه (همگی خام، تعدیل‌نشده و به ریال):
+    date             YYYY-MM-DD
+    open_raw         اولین قیمت معامله
+    high_raw         بیشترین قیمت
+    low_raw          کمترین قیمت
+    close_raw        آخرین قیمت معامله
+    close_final_raw  قیمت پایانی رسمی
+    ref_price_raw    قیمت مرجع روز (قیمت پایانی دیروز، تعدیل‌شده در روز اقدام شرکتی)
+    volume, value, trade_count
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
+
+DAILY_COLUMNS = [
+    "date", "open_raw", "high_raw", "low_raw", "close_raw", "close_final_raw", "ref_price_raw",
+    "volume", "value", "trade_count",
+]
+
+CLIENT_TYPE_HISTORY_COLUMNS = [
+    "date",
+    "buy_i_volume", "buy_n_volume", "buy_i_value", "buy_n_value", "buy_i_count", "buy_n_count",
+    "sell_i_volume", "sell_n_volume", "sell_i_value", "sell_n_value", "sell_i_count", "sell_n_count",
+]
 
 
 class BaseDataProvider(ABC):
     """کلاس پایه انتزاعی برای تامین‌کنندگان داده بازار بورس."""
 
+    name: str = "base"
+
     @abstractmethod
-    def test_connection(self, test_symbol: str = "خودرو") -> bool:
+    def test_connection(self) -> bool:
         """بررسی برقراری ارتباط با منبع داده."""
-        pass
 
     @abstractmethod
-    def get_symbol_history(
-        self,
-        symbol_fa: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
-    ) -> Optional[pd.DataFrame]:
-        """
-        دریافت سوابق روزانه قیمت‌ها (OHLCV).
-        باید یک دیتافریم استاندارد با ستون‌های زیر بازگرداند:
-        ['date', 'open', 'high', 'low', 'close', 'adj_close', 'volume', 'value', 'trade_count']
-        """
-        pass
+    def search_symbol(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        """یافتن متادیتای یک نماد (شامل ins_code) از روی نام فارسی."""
 
     @abstractmethod
-    def get_live_snapshot(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
+    def get_stock_universe(self, known: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """
-        دریافت اسنپ‌شات لحظه‌ای تابلو برای یک نماد شامل:
-        - قیمت آخرین معامله و پایانی
-        - صف خرید و فروش (مظنه برتر و حجم صف)
-        - حجم و سرانه معاملات حقیقی و حقوقی
+        فهرست سهام داخل دامنه پروژه همراه با متادیتا:
+        [{'symbol_fa', 'name_fa', 'ins_code', 'tse_code', 'market', 'board_code',
+          'instrument_type_code', 'flow', 'sector_code', 'shares_outstanding', 'base_volume'}]
+        known: متادیتای نمادهای از قبل شناخته‌شده به تفکیک ins_code (برای کاهش درخواست‌ها).
+        خروجی خالی یعنی خطا؛ فهرست ناقص نباید برگردانده شود.
         """
-        pass
 
     @abstractmethod
-    def get_symbols_list(self) -> List[Dict[str, Any]]:
-        """
-        دریافت فهرست تمام نمادهای فعال بازار به همراه متادیتا:
-        [{'symbol_fa': '...', 'name_fa': '...', 'tse_code': '...', 'market': '...', 'industry': '...'}]
-        """
-        pass
+    def get_symbol_history(self, ins_code: str, last_n: int = 0) -> Optional[pd.DataFrame]:
+        """تاریخچه روزانه با ستون‌های DAILY_COLUMNS (last_n=0 یعنی کل تاریخچه). در خطا: None."""
 
     @abstractmethod
-    def get_intraday_trades(self, symbol_fa: str, date: Optional[str] = None) -> Optional[pd.DataFrame]:
+    def get_market_snapshots(self) -> Optional[List[Dict[str, Any]]]:
+        """اسنپ‌شات لحظه‌ای کل بازار سهام (قیمت‌ها، دامنه نوسان، ۵ مظنه، حقیقی/حقوقی). در خطا: None."""
+
+    def get_client_types_history(self, ins_code: str, dates: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
         """
-        دریافت ریزمعاملات یا کندل‌های درون‌روزی (برای استراتژی‌های نوسان‌گیری روزانه).
+        تاریخچه روزانه معاملات حقیقی/حقوقی با ستون‌های CLIENT_TYPE_HISTORY_COLUMNS.
+        dates=None یعنی کل تاریخچه؛ لیست تاریخ‌ها یعنی فقط همان روزها (لیست خالی → دیتافریم خالی).
         """
-        pass
+        raise NotImplementedError
+
+    def get_intraday_trades(self, ins_code: str) -> Optional[pd.DataFrame]:
+        """ریزمعاملات روز جاری (زمان، قیمت، حجم)."""
+        raise NotImplementedError

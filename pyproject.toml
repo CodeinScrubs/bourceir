@@ -4,34 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brs-quant-engine"
-version = "0.2.0"
-description = "سامانه هوشمند مهندسی داده و نوسان‌گیری کمی در بورس تهران (TSE)"
+version = "0.5.0"
+description = "سامانه هوشمند نوسان‌گیری درون‌روزی و کوتاه‌مدت سهام بورس و فرابورس تهران"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 license = {text = "MIT"}
-authors = [
-    {name = "BRS Trading Team"}
-]
-dependencies = [
-    "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "requests>=2.31.0",
-    "pytz>=2023.3",
-    "jdatetime>=4.1.0",
-    "streamlit>=1.30.0",
-    "pytse-client>=0.19.0",
-]
+authors = [{name = "BRS Trading Team"}]
+# فهرست کامل و نسخه‌های قفل‌شده: requirements.txt و requirements.lock.txt
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-]
 ml = [
-    "scikit-learn>=1.3.0",
-    "xgboost>=2.0.0",
-    "lightgbm>=4.0.0",
+    "scikit-learn>=1.5",
+    "lightgbm>=4.5",
+    "xgboost>=2.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+addopts = "-q"
+markers = [
+    "network: آزمون‌هایی که به اینترنت (TSETMC/کدال/TypeSafe) نیاز دارند؛ در CI اجرا نمی‌شوند",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["venv", "venv-*", ".venv", "data", "logs"]
+
+[tool.ruff.lint]
+# E9/F: خطاهای واقعی (نام تعریف‌نشده، import بی‌استفاده، خطای نحوی)؛ I: مرتب‌سازی importها
+select = ["E9", "F", "I"]

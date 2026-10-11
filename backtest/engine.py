@@ -1,380 +1,319 @@
 # -*- coding: utf-8 -*-
 """
-موتور شبیه‌سازی و آزمون تاریخی معاملات (Backtest Engine v0.4)
-با پشتیبانی دقیق از واقعیت‌های معاملاتی بورس اوراق بهادار تهران و فرابورس ایران:
-- نرخ کارمزد قانونی خرید: ۰.۳۷۱۲ درصد
-- نرخ کارمزد و مالیات فروش: ۰.۸۸۰۰ درصد (مجموع رفت و برگشت: ۱.۲۵۱۲ درصد)
-- مدل شبیه‌سازی نوبت و پر شدن در صفوف خرید و فروش (Queue Fill Model)
-- مدل لغزش قیمت بر اساس اندازه معامله و اسپرد (Slippage Model)
-- محدودیت نقدشوندگی (Liquidity Constraints / Participation Rate)
+موتور شبیه‌سازی و آزمون تاریخی معاملات (Backtest Engine)
+
+واقعیت‌های معاملاتی بورس تهران و فرابورس که لحاظ می‌شوند:
+- کارمزد خرید ۰.۳۷۱۲٪ و فروش ۰.۸۸٪ (از config/default.yaml — منبع یکتا)
+- سیگنال در پایان روز t ساخته می‌شود و سفارش در روز t+1 اجرا می‌شود (بدون نگاه به آینده)
+- قیمت اجرا = میانگین موزون قیمت روز اجرا (ارزش ÷ حجم) + لغزش؛ هرگز خارج از [کمترین، بیشترین] آن روز
+- خرید در روز «قفل صف خرید» و فروش در روز «قفل صف فروش» انجام نمی‌شود
+  (سفارش فروش تا اولین روز قابل خروج منتظر می‌ماند)
+- سقف مشارکت: حجم سفارش حداکثر ۵٪ حجم معاملات روز
 """
 
-import math
 import logging
-from typing import List, Dict, Any, Optional
-import pandas as pd
-import numpy as np
+from typing import Any, Callable, Dict, List, Optional
 
-from backtest.models import Order, Trade, Position, OrderSide, PerformanceMetrics, ClosedTrade
+import pandas as pd
+
+from backtest.models import ClosedTrade, OrderSide, PerformanceMetrics, Position, Trade
+from config import settings
+from core import market_rules
 
 logger = logging.getLogger(__name__)
+
+TRADING_DAYS_PER_YEAR = 240
+
+SignalFn = Callable[[pd.Series, "BacktestEngine"], Optional[str]]
 
 
 class BacktestEngine:
     """موتور اجرای بکتست واقع‌گرایانه با لحاظ ریزساختار بازار بورس ایران."""
 
-    # کارمزدهای رسمی معاملات سهام در بورس تهران
-    BUY_COMMISSION_RATE = 0.003712   # ۰.۳۷۱۲٪ کارمزد خرید
-    SELL_COMMISSION_RATE = 0.008800  # ۰.۸۸۰۰٪ کارمزد و مالیات فروش
+    BUY_COMMISSION_RATE = settings.FEES["buy"]
+    SELL_COMMISSION_RATE = settings.FEES["sell"]
 
     def __init__(
         self,
-        initial_capital: float = 100_000_000.0,
-        max_volume_participation_pct: float = 0.05,  # حداکثر ۵٪ از حجم روزانه قابل معامله است
-        default_slippage_bps: float = 10.0           # ۱۰ پیپ یا ۰.۱٪ لغزش پیش‌فرض اسپرد
+        initial_capital: Optional[float] = None,
+        max_volume_participation_pct: Optional[float] = None,
+        default_slippage_bps: Optional[float] = None,
     ):
-        """
-        مقداردهی اولیه سرمایه و قیود معاملاتی.
-        """
-        self.initial_capital = initial_capital
-        self.cash = initial_capital
-        self.max_volume_participation_pct = max_volume_participation_pct
-        self.default_slippage_bps = default_slippage_bps
+        cfg = settings.BACKTEST_CONFIG
+        self.initial_capital = float(initial_capital if initial_capital is not None else cfg["initial_capital"])
+        self.cash = self.initial_capital
+        self.max_volume_participation_pct = (
+            max_volume_participation_pct if max_volume_participation_pct is not None
+            else cfg["max_volume_participation_pct"]
+        )
+        self.default_slippage_bps = (
+            default_slippage_bps if default_slippage_bps is not None else cfg["default_slippage_bps"]
+        )
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
         self.closed_trades: List[ClosedTrade] = []
         self.equity_curve: List[Dict[str, Any]] = []
+        self.last_prices: Dict[str, float] = {}
+        self.blocked_orders = 0
 
-    def calculate_slippage_price(
-        self,
-        base_price: float,
-        side: OrderSide,
-        quantity: int,
-        daily_volume: Optional[int] = None
-    ) -> float:
-        """
-        محاسبه قیمت واقعی اجرا با احتساب اسپرد عرضه/تقاضا و فشار حجمی معامله (Market Impact).
-        """
-        # اسپرد پایه
-        base_slippage = (self.default_slippage_bps / 10000.0)
+    # ═══════════════════════════════════════════════
+    # اجرای سفارش
+    # ═══════════════════════════════════════════════
 
-        # فشار حجمی نسبت به حجم روزانه
-        impact = 0.0
+    def calculate_slippage_price(self, base_price: float, side: OrderSide, quantity: int,
+                                 daily_volume: Optional[int] = None) -> float:
+        """قیمت اجرا با احتساب اسپرد و اثر حجم سفارش نسبت به حجم روز (Market Impact)."""
+        slippage = self.default_slippage_bps / 10000.0
         if daily_volume and daily_volume > 0:
-            participation = quantity / daily_volume
-            impact = min(participation * 0.1, 0.02)  # حداکثر ۲٪ لغزش به ازای حجم سنگین
+            slippage += min((quantity / daily_volume) * 0.1, 0.02)
+        return base_price * (1.0 + slippage) if side == OrderSide.BUY else base_price * (1.0 - slippage)
 
-        total_slippage = base_slippage + impact
+    def _participation_cap(self, quantity: int, daily_volume: Optional[int]) -> int:
+        if daily_volume and daily_volume > 0:
+            return min(quantity, int(daily_volume * self.max_volume_participation_pct))
+        return quantity
 
-        if side == OrderSide.BUY:
-            return base_price * (1.0 + total_slippage)
-        else:
-            return base_price * (1.0 - total_slippage)
-
-    def execute_buy(
-        self,
-        symbol_fa: str,
-        price: float,
-        quantity: int,
-        date: str,
-        daily_volume: Optional[int] = None,
-        is_locked_limit_up: bool = False
-    ) -> Optional[Trade]:
-        """
-        اجرای سفارش خرید با بررسی قفل صف خرید، محدودیت نقدشوندگی و کسر کارمزد.
-        """
+    def execute_buy(self, symbol_fa: str, price: float, quantity: int, date: str,
+                    daily_volume: Optional[int] = None, is_locked_limit_up: bool = False,
+                    day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+        """اجرای سفارش خرید با بررسی قفل صف خرید، سقف نقدشوندگی، بازه قیمت روز و کارمزد."""
         if quantity <= 0 or price <= 0:
             return None
-
-        # ۱. قفل صف خرید: اگر سهم صف خرید قفل باشد و معامله‌ای نشود، سفارش پر نمی‌شود
         if is_locked_limit_up:
-            logger.warning("سفارش خرید نماد '%s' در صف خرید قفل شد و اجرا نگردید.", symbol_fa)
+            self.blocked_orders += 1
+            logger.info("خرید «%s» در %s اجرا نشد: صف خرید قفل.", symbol_fa, date)
             return None
 
-        # ۲. قید نقدشوندگی: حجم سفارش نمی‌تواند از درصد معقولی از حجم روزانه بیشتر باشد
-        if daily_volume and daily_volume > 0:
-            max_allowed = int(daily_volume * self.max_volume_participation_pct)
-            if max_allowed <= 0:
-                logger.warning("حجم معاملات روز نماد '%s' برای این حجم کافی نیست.", symbol_fa)
-                return None
-            if quantity > max_allowed:
-                logger.info("حجم سفارش '%s' از %d به سقف نقدشوندگی %d تعدیل شد.", symbol_fa, quantity, max_allowed)
-                quantity = max_allowed
+        quantity = self._participation_cap(quantity, daily_volume)
+        if quantity <= 0:
+            logger.info("حجم معاملات روز «%s» برای این سفارش کافی نیست.", symbol_fa)
+            return None
 
-        # ۳. محاسبه قیمت موثر پس از لغزش (Slippage)
-        execution_price = self.calculate_slippage_price(price, OrderSide.BUY, quantity, daily_volume)
+        execution_price = market_rules.apply_execution_bounds(
+            self.calculate_slippage_price(price, OrderSide.BUY, quantity, daily_volume), day_low, day_high)
+        unit_cost = execution_price * (1 + self.BUY_COMMISSION_RATE)
+        if self.cash < unit_cost * quantity:
+            quantity = int(self.cash / unit_cost)
+            if quantity <= 0:
+                logger.info("موجودی نقد برای خرید «%s» کافی نیست.", symbol_fa)
+                return None
 
         gross_value = execution_price * quantity
         commission = gross_value * self.BUY_COMMISSION_RATE
         total_required = gross_value + commission
-
-        # بررسی موجودی نقد
-        if self.cash < total_required:
-            max_qty = int(self.cash / (execution_price * (1 + self.BUY_COMMISSION_RATE)))
-            if max_qty <= 0:
-                logger.warning("موجودی نقد برای خرید نماد '%s' ناکافی است.", symbol_fa)
-                return None
-            quantity = max_qty
-            gross_value = execution_price * quantity
-            commission = gross_value * self.BUY_COMMISSION_RATE
-            total_required = gross_value + commission
-
         self.cash -= total_required
 
-        trade = Trade(
-            symbol_fa=symbol_fa,
-            side=OrderSide.BUY,
-            quantity=quantity,
-            price=round(execution_price, 2),
-            gross_value=round(gross_value, 2),
-            commission=round(commission, 2),
-            net_value=round(total_required, 2),
-            date=date
-        )
+        trade = Trade(symbol_fa=symbol_fa, side=OrderSide.BUY, quantity=quantity, price=round(execution_price, 2),
+                      gross_value=round(gross_value, 2), commission=round(commission, 2),
+                      net_value=round(total_required, 2), date=date)
         self.trades.append(trade)
 
-        # به‌روزرسانی پوزیشن
-        if symbol_fa not in self.positions:
-            self.positions[symbol_fa] = Position(symbol_fa=symbol_fa)
-
-        pos = self.positions[symbol_fa]
-        new_total_qty = pos.quantity + quantity
+        pos = self.positions.setdefault(symbol_fa, Position(symbol_fa=symbol_fa))
+        if pos.quantity == 0:
+            pos.opened_at = date
+        pos.quantity += quantity
         pos.total_cost += total_required
-        pos.average_entry_price = pos.total_cost / new_total_qty if new_total_qty > 0 else 0.0
-        pos.quantity = new_total_qty
+        pos.average_entry_price = pos.total_cost / pos.quantity
         pos.trades.append(trade)
-
+        self.last_prices[symbol_fa] = execution_price
         return trade
 
-    def execute_sell(
-        self,
-        symbol_fa: str,
-        price: float,
-        quantity: int,
-        date: str,
-        daily_volume: Optional[int] = None,
-        is_locked_limit_down: bool = False
-    ) -> Optional[Trade]:
-        """
-        اجرای سفارش فروش با بررسی قفل صف فروش، کسر مالیات و کارمزد.
-        """
-        if symbol_fa not in self.positions or self.positions[symbol_fa].quantity <= 0:
-            logger.warning("پوزیشن بازی برای فروش نماد '%s' وجود ندارد.", symbol_fa)
+    def execute_sell(self, symbol_fa: str, price: float, quantity: int, date: str,
+                     daily_volume: Optional[int] = None, is_locked_limit_down: bool = False,
+                     day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+        """اجرای سفارش فروش با بررسی قفل صف فروش، سقف نقدشوندگی، بازه قیمت روز، مالیات و کارمزد."""
+        pos = self.positions.get(symbol_fa)
+        if pos is None or pos.quantity <= 0:
+            logger.warning("پوزیشن بازی برای فروش «%s» وجود ندارد.", symbol_fa)
             return None
-
-        # ۱. قفل صف فروش: اگر سهم صف فروش قفل باشد، خروج ناممکن است
         if is_locked_limit_down:
-            logger.warning("فروش نماد '%s' به دلیل صف فروش قفل ناموفق بود و پوزیشن باقی ماند.", symbol_fa)
+            self.blocked_orders += 1
+            logger.info("فروش «%s» در %s اجرا نشد: صف فروش قفل.", symbol_fa, date)
             return None
 
-        pos = self.positions[symbol_fa]
-        sell_qty = min(quantity, pos.quantity)
+        sell_qty = self._participation_cap(min(quantity, pos.quantity), daily_volume)
+        if sell_qty <= 0:
+            return None
 
-        # ۲. قید نقدشوندگی
-        if daily_volume and daily_volume > 0:
-            max_allowed = int(daily_volume * self.max_volume_participation_pct)
-            if max_allowed > 0 and sell_qty > max_allowed:
-                sell_qty = max_allowed
-
-        # ۳. قیمت موثر با لغزش فروش
-        execution_price = self.calculate_slippage_price(price, OrderSide.SELL, sell_qty, daily_volume)
-
+        execution_price = market_rules.apply_execution_bounds(
+            self.calculate_slippage_price(price, OrderSide.SELL, sell_qty, daily_volume), day_low, day_high)
         gross_value = execution_price * sell_qty
         commission = gross_value * self.SELL_COMMISSION_RATE
         net_received = gross_value - commission
-
         self.cash += net_received
 
-        trade = Trade(
-            symbol_fa=symbol_fa,
-            side=OrderSide.SELL,
-            quantity=sell_qty,
-            price=round(execution_price, 2),
-            gross_value=round(gross_value, 2),
-            commission=round(commission, 2),
-            net_value=round(net_received, 2),
-            date=date
-        )
+        trade = Trade(symbol_fa=symbol_fa, side=OrderSide.SELL, quantity=sell_qty, price=round(execution_price, 2),
+                      gross_value=round(gross_value, 2), commission=round(commission, 2),
+                      net_value=round(net_received, 2), date=date)
         self.trades.append(trade)
 
-        # ایجاد رکورد معامله بسته شده کامل (ClosedTrade) برای محاسبه دقیق Win Rate
-        entry_price = pos.average_entry_price
-        cost_basis = entry_price * sell_qty
+        cost_basis = pos.average_entry_price * sell_qty            # شامل کارمزد خرید
+        buy_gross = cost_basis / (1.0 + self.BUY_COMMISSION_RATE)  # ارزش خرید بدون کارمزد
         net_trade_pnl = net_received - cost_basis
-        gross_trade_pnl = (execution_price * sell_qty) - (cost_basis / (1.0 + self.BUY_COMMISSION_RATE))
-        total_trade_comm = (cost_basis - (cost_basis / (1.0 + self.BUY_COMMISSION_RATE))) + commission
-        ret_pct = (net_trade_pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
-
-        entry_date = pos.trades[0].date if pos.trades else date
-        closed_trade = ClosedTrade(
-            symbol_fa=symbol_fa,
-            entry_date=entry_date,
-            exit_date=date,
-            quantity=sell_qty,
-            entry_price=round(cost_basis / sell_qty / (1.0 + self.BUY_COMMISSION_RATE), 2),
-            exit_price=round(execution_price, 2),
-            gross_pnl=round(gross_trade_pnl, 2),
-            commissions=round(total_trade_comm, 2),
+        self.closed_trades.append(ClosedTrade(
+            symbol_fa=symbol_fa, entry_date=pos.opened_at or date, exit_date=date, quantity=sell_qty,
+            entry_price=round(buy_gross / sell_qty, 2), exit_price=round(execution_price, 2),
+            gross_pnl=round(gross_value - buy_gross, 2),
+            commissions=round((cost_basis - buy_gross) + commission, 2),
             net_pnl=round(net_trade_pnl, 2),
-            return_pct=round(ret_pct, 2),
-            is_winner=net_trade_pnl > 0
-        )
-        self.closed_trades.append(closed_trade)
+            return_pct=round(net_trade_pnl / cost_basis * 100.0, 4) if cost_basis > 0 else 0.0,
+            is_winner=net_trade_pnl > 0,
+        ))
 
-        # به‌روزرسانی پوزیشن
-        cost_of_sold = pos.average_entry_price * sell_qty
         pos.realized_pnl += net_trade_pnl
-
         pos.quantity -= sell_qty
         if pos.quantity == 0:
             pos.total_cost = 0.0
             pos.average_entry_price = 0.0
+            pos.opened_at = None
         else:
-            pos.total_cost -= cost_of_sold
-
+            pos.total_cost -= cost_basis
         pos.trades.append(trade)
+        self.last_prices[symbol_fa] = execution_price
         return trade
 
+    # ═══════════════════════════════════════════════
+    # ارزش پرتفوی و متریک‌ها
+    # ═══════════════════════════════════════════════
+
+    def mark_to_market(self) -> float:
+        """ارزش کل پرتفوی = نقد + ارزش روز سهام‌ها (با آخرین قیمت شناخته‌شده هر نماد)."""
+        holdings = sum(
+            pos.quantity * self.last_prices.get(sym, pos.average_entry_price)
+            for sym, pos in self.positions.items()
+        )
+        return self.cash + holdings
+
+    def record_equity(self, date: str) -> None:
+        self.equity_curve.append({"date": date, "equity": round(self.mark_to_market(), 2)})
+
     def calculate_metrics(self) -> PerformanceMetrics:
-        """
-        محاسبه دقیق شاخص‌های آماری عملکرد بکتست از روی معاملات بسته‌شده و منحنی ارزش پرتفوی.
-        """
+        """محاسبه شاخص‌های عملکرد از روی معاملات بسته‌شده و منحنی ارزش پرتفوی."""
+        final_equity = self.mark_to_market()
+        total_return_pct = (final_equity / self.initial_capital - 1.0) * 100.0 if self.initial_capital > 0 else 0.0
         if not self.trades:
-            return PerformanceMetrics(
-                initial_capital=self.initial_capital,
-                final_equity=self.cash,
-                total_return_pct=0.0
-            )
+            return PerformanceMetrics(initial_capital=self.initial_capital, final_equity=round(final_equity, 2),
+                                      total_return_pct=round(total_return_pct, 2),
+                                      blocked_orders=self.blocked_orders, equity_curve=self.equity_curve)
 
-        total_closed = len(self.closed_trades)
-        winning_trades = sum(1 for t in self.closed_trades if t.is_winner)
-        losing_trades = sum(1 for t in self.closed_trades if not t.is_winner)
-        win_rate = (winning_trades / total_closed * 100.0) if total_closed > 0 else 0.0
-
-        gross_profit = sum(t.net_pnl for t in self.closed_trades if t.is_winner)
-        gross_loss = sum(abs(t.net_pnl) for t in self.closed_trades if not t.is_winner)
-        net_pnl = gross_profit - gross_loss
+        closed = self.closed_trades
+        winners = [t for t in closed if t.is_winner]
+        losers = [t for t in closed if not t.is_winner]
+        gross_profit = sum(t.net_pnl for t in winners)
+        gross_loss = sum(abs(t.net_pnl) for t in losers)
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
-        total_commissions = sum(t.commission for t in self.trades)
+        expectancy = sum(t.return_pct for t in closed) / len(closed) if closed else 0.0
 
-        # محاسبه Maximum Drawdown از روی Equity Curve
         max_dd_pct = 0.0
-        if self.equity_curve:
-            equities = [pt["equity"] for pt in self.equity_curve]
+        equities = [pt["equity"] for pt in self.equity_curve]
+        if equities:
             peak = equities[0]
             for eq in equities:
-                if eq > peak:
-                    peak = eq
+                peak = max(peak, eq)
                 if peak > 0:
-                    dd = ((peak - eq) / peak) * 100.0
-                    if dd > max_dd_pct:
-                        max_dd_pct = dd
+                    max_dd_pct = max(max_dd_pct, (peak - eq) / peak * 100.0)
 
-        # محاسبه نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری بورس تهران)
         sharpe = 0.0
-        if len(self.equity_curve) > 2:
-            equities = [pt["equity"] for pt in self.equity_curve]
-            returns = [
-                (equities[i] - equities[i - 1]) / equities[i - 1]
-                for i in range(1, len(equities))
-                if equities[i - 1] > 0
-            ]
-            if len(returns) > 1:
-                mean_ret = sum(returns) / len(returns)
-                variance = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1)
-                std_ret = variance ** 0.5
-                if std_ret > 1e-6:
-                    sharpe = round((mean_ret / std_ret) * (240 ** 0.5), 2)
-
-        # محاسبه ارزش جاری پوزیشن‌های باز بر مبنای بهای تمام‌شده
-        open_positions_val = sum(pos.quantity * pos.average_entry_price for pos in self.positions.values())
-        final_equity = self.cash + open_positions_val
-        total_return_pct = (
-            ((final_equity - self.initial_capital) / self.initial_capital) * 100.0
-            if self.initial_capital > 0 else 0.0
-        )
+        if len(equities) > 2:
+            returns = pd.Series(equities).pct_change().dropna()
+            if len(returns) > 1 and returns.std() > 1e-9:
+                sharpe = float(returns.mean() / returns.std() * (TRADING_DAYS_PER_YEAR ** 0.5))
 
         return PerformanceMetrics(
             total_trades=len(self.trades),
-            winning_trades=winning_trades,
-            losing_trades=losing_trades,
-            win_rate=round(win_rate, 2),
+            winning_trades=len(winners),
+            losing_trades=len(losers),
+            win_rate=round(len(winners) / len(closed) * 100.0, 2) if closed else 0.0,
             gross_profit=round(gross_profit, 2),
             gross_loss=round(gross_loss, 2),
-            net_pnl=round(net_pnl, 2),
+            net_pnl=round(gross_profit - gross_loss, 2),
             profit_factor=round(profit_factor, 2),
+            expectancy_pct=round(expectancy, 4),
             max_drawdown_pct=round(max_dd_pct, 2),
-            total_commissions_paid=round(total_commissions, 2),
+            total_commissions_paid=round(sum(t.commission for t in self.trades), 2),
             sharpe_ratio=round(sharpe, 2),
             initial_capital=round(self.initial_capital, 2),
             final_equity=round(final_equity, 2),
             total_return_pct=round(total_return_pct, 2),
-            equity_curve=self.equity_curve
+            blocked_orders=self.blocked_orders,
+            equity_curve=self.equity_curve,
         )
 
-    def run_replay_simulation(
-        self,
-        prices_df: pd.DataFrame,
-        symbol_fa: str,
-        strategy_signal_fn: Any
-    ) -> PerformanceMetrics:
-        """
-        اجرای حلقه شبیه‌سازی تاریخی (Historical Replay Loop) گام‌به‌گام روی داده‌های روزانه یا کندل‌ها.
-        
-        پارامترها:
-            prices_df: دیتافریم حاوی داده‌های تاریخی مرتب‌شده بر اساس تاریخ
-            symbol_fa: نام فارسی نماد
-            strategy_signal_fn: تابعی که به ازای هر گام (row, engine) سیگنال صادر می‌کند ('BUY', 'SELL', None)
-        """
-        sorted_df = prices_df.sort_values(by="date").reset_index(drop=True)
+    # ═══════════════════════════════════════════════
+    # شبیه‌سازی تاریخی روزانه
+    # ═══════════════════════════════════════════════
 
-        for _, row in sorted_df.iterrows():
+    @staticmethod
+    def _prepare(prices_df: pd.DataFrame) -> pd.DataFrame:
+        """یکسان‌سازی ستون‌ها: داده دیتابیس (*_raw) یا دیتافریم ساده (date/close/volume)."""
+        df = prices_df.sort_values("date").reset_index(drop=True).copy()
+        for col in ("open", "high", "low", "close"):
+            if f"{col}_raw" not in df.columns and col in df.columns:
+                df[f"{col}_raw"] = df[col]
+        if "close_raw" not in df.columns:
+            raise ValueError("دیتافریم قیمت باید ستون close_raw یا close داشته باشد")
+        df["_mark"] = market_rules.official_close(df)
+        has_range = {"high_raw", "low_raw"}.issubset(df.columns)
+        if has_range and {"value", "volume"}.issubset(df.columns):
+            df["_fill"] = market_rules.daily_vwap(df).fillna(df["open_raw"] if "open_raw" in df.columns else df["_mark"])
+        else:
+            df["_fill"] = df["open_raw"] if "open_raw" in df.columns else df["_mark"]
+        if has_range and "volume" in df.columns:
+            flags = market_rules.lock_flags(df)
+            df["_locked_up"], df["_locked_down"] = flags["locked_up"], flags["locked_down"]
+        else:
+            df["_locked_up"] = df["_locked_down"] = False
+        if "volume" not in df.columns:
+            df["volume"] = None
+        return df
+
+    def run_replay_simulation(self, prices_df: pd.DataFrame, symbol_fa: str, strategy_signal_fn: SignalFn,
+                              allocation_pct: float = 0.95) -> PerformanceMetrics:
+        """
+        حلقه شبیه‌سازی تاریخی روزانه بدون نگاه به آینده:
+        روز t: ابتدا سفارش ثبت‌شده در روز t-1 اجرا می‌شود ← سپس استراتژی با داده‌های تا پایان روز t
+        تصمیم می‌گیرد ← سفارش جدید برای روز t+1 ثبت می‌شود ← ارزش پرتفوی با قیمت پایانی روز t ثبت می‌شود.
+
+        strategy_signal_fn(row, engine) باید 'BUY'، 'SELL' یا None برگرداند.
+        """
+        df = self._prepare(prices_df)
+        pending: Optional[str] = None
+        prev_volume: Optional[float] = None
+
+        for _, row in df.iterrows():
             date_str = str(row["date"])
-            close_p = float(row["close_raw"]) if ("close_raw" in row and pd.notna(row["close_raw"])) else float(row["close"])
-            vol = int(row["volume"]) if ("volume" in row and pd.notna(row["volume"])) else None
+            fill_price = float(row["_fill"]) if pd.notna(row["_fill"]) else None
+            day_volume = int(row["volume"]) if pd.notna(row["volume"]) else None
+            # سقف مشارکت با کمترین حجم بین روز تصمیم و روز اجرا (محافظه‌کارانه)
+            cap_volume = min(v for v in (day_volume, prev_volume) if v) if (day_volume or prev_volume) else None
+            low = row["low_raw"] if "low_raw" in row and pd.notna(row["low_raw"]) else None
+            high = row["high_raw"] if "high_raw" in row and pd.notna(row["high_raw"]) else None
 
-            # دریافت تصمیم استراتژی
-            signal = strategy_signal_fn(row, self)
+            # ۱. اجرای سفارش روز قبل
+            if pending == "BUY" and fill_price:
+                qty = int(self.cash * allocation_pct / (fill_price * (1.0 + self.BUY_COMMISSION_RATE)))
+                if qty > 0:
+                    self.execute_buy(symbol_fa, fill_price, qty, date_str, daily_volume=cap_volume,
+                                     is_locked_limit_up=bool(row["_locked_up"]), day_low=low, day_high=high)
+                pending = None  # سیگنال خرید کهنه نمی‌ماند؛ استراتژی می‌تواند دوباره سیگنال بدهد
+            elif pending == "SELL" and fill_price:
+                pos = self.positions.get(symbol_fa)
+                if pos and pos.quantity > 0:
+                    self.execute_sell(symbol_fa, fill_price, pos.quantity, date_str, daily_volume=cap_volume,
+                                      is_locked_limit_down=bool(row["_locked_down"]), day_low=low, day_high=high)
+                pos = self.positions.get(symbol_fa)
+                if not pos or pos.quantity == 0:
+                    pending = None  # تا خروج کامل، سفارش فروش باقی می‌ماند
 
-            is_limit_up = False
-            is_limit_down = False
-            if "high" in row and "low" in row and row["high"] == row["low"]:
-                if "yesterday" in row and row["close"] > row["yesterday"]:
-                    is_limit_up = True
-                elif "yesterday" in row and row["close"] < row["yesterday"]:
-                    is_limit_down = True
+            # ۲. تصمیم استراتژی با داده‌های تا پایان امروز
+            signal = strategy_signal_fn(row.drop(labels=[c for c in row.index if c.startswith("_")]), self)
+            if signal in ("BUY", "SELL"):
+                pending = signal
 
-            if signal == "BUY":
-                alloc_cash = self.cash * 0.95
-                if alloc_cash > 0 and close_p > 0:
-                    target_qty = int(alloc_cash / (close_p * (1.0 + self.BUY_COMMISSION_RATE)))
-                    if target_qty > 0:
-                        self.execute_buy(
-                            symbol_fa=symbol_fa,
-                            price=close_p,
-                            quantity=target_qty,
-                            date=date_str,
-                            daily_volume=vol,
-                            is_locked_limit_up=is_limit_up
-                        )
-            elif signal == "SELL":
-                if symbol_fa in self.positions and self.positions[symbol_fa].quantity > 0:
-                    qty_to_sell = self.positions[symbol_fa].quantity
-                    self.execute_sell(
-                        symbol_fa=symbol_fa,
-                        price=close_p,
-                        quantity=qty_to_sell,
-                        date=date_str,
-                        daily_volume=vol,
-                        is_locked_limit_down=is_limit_down
-                    )
-
-            # به‌روزرسانی منحنی ارزش کل سرمایه (Mark-to-Market Equity)
-            current_holdings_val = sum(pos.quantity * close_p for pos in self.positions.values())
-            current_equity = self.cash + current_holdings_val
-            self.equity_curve.append({
-                "date": date_str,
-                "equity": round(current_equity, 2)
-            })
+            # ۳. ارزش‌گذاری پرتفوی با قیمت پایانی امروز
+            if pd.notna(row["_mark"]):
+                self.last_prices[symbol_fa] = float(row["_mark"])
+            self.record_equity(date_str)
+            prev_volume = day_volume
 
         return self.calculate_metrics()
