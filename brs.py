@@ -13,6 +13,7 @@
     python brs.py live --force --cycles 1     یک اسنپ‌شات فوری حتی خارج از ساعات بازار
     python brs.py codal --judge               دریافت اطلاعیه‌های کدال و ارزیابی با هوش مصنوعی Jev
     python brs.py backup                      نسخه پشتیبان از دیتابیس (۵ نسخه آخر نگه داشته می‌شود)
+    python brs.py features                    ساخت انبار فیچر (بعد از هر update خودکار انجام می‌شود)
 """
 
 import argparse
@@ -90,8 +91,32 @@ def cmd_update(args) -> int:
     titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
     for key, report in reports.items():
         _print_report(titles.get(key, key), report)
+    if not args.symbols and not args.no_features:
+        _build_features(collector.db)
     collector.db.close()
     return 0 if all(r.get("status") != "failed" for r in reports.values()) else 1
+
+
+def _build_features(db) -> dict:
+    from features.store import build_feature_store
+
+    print()
+    print("🧮 ساخت انبار فیچر...", flush=True)
+    manifest = build_feature_store(db)
+    print(f"   • نسخه {manifest['version']}: {manifest['rows']:,} ردیف، {manifest['symbols']} نماد، "
+          f"تا {manifest['date_max']}", flush=True)
+    return manifest
+
+
+def cmd_features(args) -> int:
+    from database.db import DatabaseManager
+
+    db = DatabaseManager()
+    try:
+        _build_features(db)
+    finally:
+        db.close()
+    return 0
 
 
 def cmd_universe(args) -> int:
@@ -169,7 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("update", help="به‌روزرسانی همه داده‌ها")
     p.add_argument("--symbols", default="", help="نمادها با کاما (پیش‌فرض: کل سهام بورس و فرابورس)")
     p.add_argument("--full", action="store_true", help="دریافت دوباره کل تاریخچه")
+    p.add_argument("--no-features", action="store_true", help="بدون ساخت دوباره انبار فیچر در پایان")
     p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser("features", help="ساخت انبار فیچر (فیچرهای روزانه و بازار)")
+    p.set_defaults(func=cmd_features)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)

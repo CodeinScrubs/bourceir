@@ -47,7 +47,7 @@ def test_dashboard_pages_on_empty_database(dashboard_db):
     assert any("هنوز داده‌ای ثبت نشده" in w.value for w in at.warning)
 
 
-def test_dashboard_pages_with_data(dashboard_db, market_watch_rows, closing_price_daily, client_type_all):
+def test_dashboard_pages_with_data(dashboard_db, market_watch_rows, closing_price_daily, client_type_all, monkeypatch):
     class _NoCodal:
         def get_latest(self, pages=3, symbol_fa=None):
             return []
@@ -64,9 +64,15 @@ def test_dashboard_pages_with_data(dashboard_db, market_watch_rows, closing_pric
     collector.collect_market_snapshot()
     db.close()
 
+    from features import store
+
+    monkeypatch.setattr(store, "FEATURES_ROOT", dashboard_db.parent / "features")
+    store.build_feature_store(DatabaseManager(db_path=dashboard_db))
     at = _run_all_pages(DASHBOARD)
     at.sidebar.radio[0].set_value("📊 بررسی نماد").run()
     assert any("قیمت پایانی" in m.label for m in at.metric)
+    feature_table = at.dataframe[-1].value
+    assert "قدرت خریدار" in set(feature_table["فیچر"])
     at.sidebar.radio[0].set_value("📡 دیده‌بان زنده").run()
     table = at.dataframe[0].value.set_index("نماد")
     assert set(table.index) == {"فولاد", "خزامیا"}  # هر دو سهم داخل دامنه ثبت شده‌اند
