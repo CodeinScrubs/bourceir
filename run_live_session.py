@@ -37,6 +37,7 @@ if str(BASE_DIR) not in sys.path:
 from config import settings
 from data_collector.provider import TSEDataProvider
 from data_collector.monitor import DataFreshnessMonitor
+from data_collector.validator import DataValidator
 from database.db import DatabaseManager
 
 # تنظیم لاگر
@@ -133,6 +134,16 @@ def run_session(
                         print(f"{sym:<8} | {'دریافت ناموفق':<18} | {'-':<8} | {'❌ قطع ارتباط':<16} | {'-':<12}")
                         continue
 
+                    # اعتبارسنجی ساختاری اسنپ‌شات پیش از ثبت
+                    is_valid, val_errors = DataValidator.validate_snapshot(snapshot)
+                    if not is_valid:
+                        print(f"{sym:<8} | {'رد اسنپ‌شات':<18} | {'-':<8} | {'🔴 نامعتبر':<16} | {'-':<12}")
+                        if db:
+                            sym_id = db.get_symbol_id(sym)
+                            if sym_id:
+                                db.insert_quality_metric(sym_id, datetime.now().strftime("%Y-%m-%d"), completeness_score=50.0, quality_score=40.0, notes="; ".join(val_errors))
+                        continue
+
                     # بررسی سلامت، تاخیر و جهش قیمت توسط مانیتور
                     health_report = monitor.inspect_snapshot(sym, snapshot)
 
@@ -142,6 +153,8 @@ def run_session(
                         if sym_id:
                             db.insert_snapshot(sym_id, snapshot)
                             total_snapshots_saved += 1
+                            if health_report["warnings"]:
+                                db.insert_quality_metric(sym_id, datetime.now().strftime("%Y-%m-%d"), completeness_score=90.0, price_anomaly_flag=True, quality_score=75.0, notes="; ".join(health_report["warnings"]))
 
                     cycle_success += 1
                     price_str = f"{snapshot.get('last_price', 0):,}" if snapshot.get('last_price') else "نامشخص"

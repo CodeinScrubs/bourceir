@@ -198,3 +198,44 @@ CREATE TABLE IF NOT EXISTS experiments (
     status TEXT DEFAULT 'completed'     -- وضعیت: 'running', 'completed', 'failed'
 );
 """
+
+# جدول انبار ویژگی‌های روزانه (Daily Feature Store): مرجع یکتای فاکتورهای تکنیکال و بازار
+CREATE_FEATURES_DAILY_TABLE = """
+CREATE TABLE IF NOT EXISTS features_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    return_1d REAL,
+    return_5d REAL,
+    volatility_20d REAL,
+    atr_14d REAL,
+    rsi_14d REAL,
+    sma_20d REAL,
+    sma_50d REAL,
+    volume_ratio_20d REAL,
+    buyer_power_ratio REAL,
+    smart_money_flow REAL,
+    created_at TIMESTAMP,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, date)
+);
+"""
+
+# جدول انبار ویژگی‌های درون‌روزی (Intraday Feature Store): مرجع یکتای فاکتورهای نوسان‌گیری و اسکالپ
+CREATE_FEATURES_INTRADAY_TABLE = """
+CREATE TABLE IF NOT EXISTS features_intraday (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    buyer_power REAL,
+    queue_pressure REAL,
+    order_imbalance REAL,
+    smart_money_inflow REAL,
+    volume_acceleration REAL,
+    bid_ask_spread_bps REAL,
+    created_at TIMESTAMP,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, timestamp)
+);
+"""

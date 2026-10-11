@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
 
-from backtest.models import Order, Trade, Position, OrderSide, PerformanceMetrics
+from backtest.models import Order, Trade, Position, OrderSide, PerformanceMetrics, ClosedTrade
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class BacktestEngine:
         self.default_slippage_bps = default_slippage_bps
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
+        self.closed_trades: List[ClosedTrade] = []
         self.equity_curve: List[Dict[str, Any]] = []
 
     def calculate_slippage_price(
@@ -196,10 +197,33 @@ class BacktestEngine:
         )
         self.trades.append(trade)
 
-        # محاسبه سود/زیان
+        # ایجاد رکورد معامله بسته شده کامل (ClosedTrade) برای محاسبه دقیق Win Rate
+        entry_price = pos.average_entry_price
+        cost_basis = entry_price * sell_qty
+        net_trade_pnl = net_received - cost_basis
+        gross_trade_pnl = (execution_price * sell_qty) - (cost_basis / (1.0 + self.BUY_COMMISSION_RATE))
+        total_trade_comm = (cost_basis - (cost_basis / (1.0 + self.BUY_COMMISSION_RATE))) + commission
+        ret_pct = (net_trade_pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+
+        entry_date = pos.trades[0].date if pos.trades else date
+        closed_trade = ClosedTrade(
+            symbol_fa=symbol_fa,
+            entry_date=entry_date,
+            exit_date=date,
+            quantity=sell_qty,
+            entry_price=round(cost_basis / sell_qty / (1.0 + self.BUY_COMMISSION_RATE), 2),
+            exit_price=round(execution_price, 2),
+            gross_pnl=round(gross_trade_pnl, 2),
+            commissions=round(total_trade_comm, 2),
+            net_pnl=round(net_trade_pnl, 2),
+            return_pct=round(ret_pct, 2),
+            is_winner=net_trade_pnl > 0
+        )
+        self.closed_trades.append(closed_trade)
+
+        # به‌روزرسانی پوزیشن
         cost_of_sold = pos.average_entry_price * sell_qty
-        realized_pnl = net_received - cost_of_sold
-        pos.realized_pnl += realized_pnl
+        pos.realized_pnl += net_trade_pnl
 
         pos.quantity -= sell_qty
         if pos.quantity == 0:
@@ -213,31 +237,62 @@ class BacktestEngine:
 
     def calculate_metrics(self) -> PerformanceMetrics:
         """
-        محاسبه شاخص‌های آماری عملکرد بکتست.
+        محاسبه دقیق شاخص‌های آماری عملکرد بکتست از روی معاملات بسته‌شده و منحنی ارزش پرتفوی.
         """
         if not self.trades:
-            return PerformanceMetrics()
+            return PerformanceMetrics(
+                initial_capital=self.initial_capital,
+                final_equity=self.cash,
+                total_return_pct=0.0
+            )
 
-        sell_trades = [t for t in self.trades if t.side == OrderSide.SELL]
-        total_trades = len(sell_trades)
-        winning_trades = 0
-        losing_trades = 0
-        gross_profit = 0.0
-        gross_loss = 0.0
+        total_closed = len(self.closed_trades)
+        winning_trades = sum(1 for t in self.closed_trades if t.is_winner)
+        losing_trades = sum(1 for t in self.closed_trades if not t.is_winner)
+        win_rate = (winning_trades / total_closed * 100.0) if total_closed > 0 else 0.0
+
+        gross_profit = sum(t.net_pnl for t in self.closed_trades if t.is_winner)
+        gross_loss = sum(abs(t.net_pnl) for t in self.closed_trades if not t.is_winner)
+        net_pnl = gross_profit - gross_loss
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
         total_commissions = sum(t.commission for t in self.trades)
 
-        for pos in self.positions.values():
-            if pos.realized_pnl > 0:
-                winning_trades += 1
-                gross_profit += pos.realized_pnl
-            elif pos.realized_pnl < 0:
-                losing_trades += 1
-                gross_loss += abs(pos.realized_pnl)
+        # محاسبه Maximum Drawdown از روی Equity Curve
+        max_dd_pct = 0.0
+        if self.equity_curve:
+            equities = [pt["equity"] for pt in self.equity_curve]
+            peak = equities[0]
+            for eq in equities:
+                if eq > peak:
+                    peak = eq
+                if peak > 0:
+                    dd = ((peak - eq) / peak) * 100.0
+                    if dd > max_dd_pct:
+                        max_dd_pct = dd
 
-        total_closed = winning_trades + losing_trades
-        win_rate = (winning_trades / total_closed * 100.0) if total_closed > 0 else 0.0
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
-        net_pnl = gross_profit - gross_loss
+        # محاسبه نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری بورس تهران)
+        sharpe = 0.0
+        if len(self.equity_curve) > 2:
+            equities = [pt["equity"] for pt in self.equity_curve]
+            returns = [
+                (equities[i] - equities[i - 1]) / equities[i - 1]
+                for i in range(1, len(equities))
+                if equities[i - 1] > 0
+            ]
+            if len(returns) > 1:
+                mean_ret = sum(returns) / len(returns)
+                variance = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1)
+                std_ret = variance ** 0.5
+                if std_ret > 1e-6:
+                    sharpe = round((mean_ret / std_ret) * (240 ** 0.5), 2)
+
+        # محاسبه ارزش جاری پوزیشن‌های باز بر مبنای بهای تمام‌شده
+        open_positions_val = sum(pos.quantity * pos.average_entry_price for pos in self.positions.values())
+        final_equity = self.cash + open_positions_val
+        total_return_pct = (
+            ((final_equity - self.initial_capital) / self.initial_capital) * 100.0
+            if self.initial_capital > 0 else 0.0
+        )
 
         return PerformanceMetrics(
             total_trades=len(self.trades),
@@ -248,7 +303,78 @@ class BacktestEngine:
             gross_loss=round(gross_loss, 2),
             net_pnl=round(net_pnl, 2),
             profit_factor=round(profit_factor, 2),
-            max_drawdown_pct=0.0,
+            max_drawdown_pct=round(max_dd_pct, 2),
             total_commissions_paid=round(total_commissions, 2),
-            sharpe_ratio=0.0
+            sharpe_ratio=round(sharpe, 2),
+            initial_capital=round(self.initial_capital, 2),
+            final_equity=round(final_equity, 2),
+            total_return_pct=round(total_return_pct, 2),
+            equity_curve=self.equity_curve
         )
+
+    def run_replay_simulation(
+        self,
+        prices_df: pd.DataFrame,
+        symbol_fa: str,
+        strategy_signal_fn: Any
+    ) -> PerformanceMetrics:
+        """
+        اجرای حلقه شبیه‌سازی تاریخی (Historical Replay Loop) گام‌به‌گام روی داده‌های روزانه یا کندل‌ها.
+        
+        پارامترها:
+            prices_df: دیتافریم حاوی داده‌های تاریخی مرتب‌شده بر اساس تاریخ
+            symbol_fa: نام فارسی نماد
+            strategy_signal_fn: تابعی که به ازای هر گام (row, engine) سیگنال صادر می‌کند ('BUY', 'SELL', None)
+        """
+        sorted_df = prices_df.sort_values(by="date").reset_index(drop=True)
+
+        for _, row in sorted_df.iterrows():
+            date_str = str(row["date"])
+            close_p = float(row["close_raw"]) if ("close_raw" in row and pd.notna(row["close_raw"])) else float(row["close"])
+            vol = int(row["volume"]) if ("volume" in row and pd.notna(row["volume"])) else None
+
+            # دریافت تصمیم استراتژی
+            signal = strategy_signal_fn(row, self)
+
+            is_limit_up = False
+            is_limit_down = False
+            if "high" in row and "low" in row and row["high"] == row["low"]:
+                if "yesterday" in row and row["close"] > row["yesterday"]:
+                    is_limit_up = True
+                elif "yesterday" in row and row["close"] < row["yesterday"]:
+                    is_limit_down = True
+
+            if signal == "BUY":
+                alloc_cash = self.cash * 0.95
+                if alloc_cash > 0 and close_p > 0:
+                    target_qty = int(alloc_cash / (close_p * (1.0 + self.BUY_COMMISSION_RATE)))
+                    if target_qty > 0:
+                        self.execute_buy(
+                            symbol_fa=symbol_fa,
+                            price=close_p,
+                            quantity=target_qty,
+                            date=date_str,
+                            daily_volume=vol,
+                            is_locked_limit_up=is_limit_up
+                        )
+            elif signal == "SELL":
+                if symbol_fa in self.positions and self.positions[symbol_fa].quantity > 0:
+                    qty_to_sell = self.positions[symbol_fa].quantity
+                    self.execute_sell(
+                        symbol_fa=symbol_fa,
+                        price=close_p,
+                        quantity=qty_to_sell,
+                        date=date_str,
+                        daily_volume=vol,
+                        is_locked_limit_down=is_limit_down
+                    )
+
+            # به‌روزرسانی منحنی ارزش کل سرمایه (Mark-to-Market Equity)
+            current_holdings_val = sum(pos.quantity * close_p for pos in self.positions.values())
+            current_equity = self.cash + current_holdings_val
+            self.equity_curve.append({
+                "date": date_str,
+                "equity": round(current_equity, 2)
+            })
+
+        return self.calculate_metrics()

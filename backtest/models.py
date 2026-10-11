@@ -57,8 +57,24 @@ class Position:
 
 
 @dataclass
+class ClosedTrade:
+    """مدل معامله بسته شده کامل (Round-Trip Trade) جهت محاسبه دقیق و بدون خطای Win Rate."""
+    symbol_fa: str
+    entry_date: str
+    exit_date: str
+    quantity: int
+    entry_price: float                 # میانگین قیمت ورود
+    exit_price: float                  # قیمت خروج
+    gross_pnl: float                   # سود ناخالص (ریال)
+    commissions: float                 # مجموع کارمزدهای خرید و فروش (ریال)
+    net_pnl: float                     # سود یا زیان خالص نهایی (ریال)
+    return_pct: float                  # درصد بازدهی خالص معامله
+    is_winner: bool                    # آیا معامله سودده بود؟
+
+
+@dataclass
 class PerformanceMetrics:
-    """شاخص‌های آماری عملکرد بکتست."""
+    """شاخص‌های آماری و عملکرد پرتفوی در بکتست."""
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
@@ -69,4 +85,8 @@ class PerformanceMetrics:
     profit_factor: float = 0.0         # نسبت سود به زیان
     max_drawdown_pct: float = 0.0      # حداکثر افت سرمایه (درصد)
     total_commissions_paid: float = 0.0# مجموع کارمزد و مالیات پرداختی (ریال)
-    sharpe_ratio: float = 0.0          # نسبت شارپ
+    sharpe_ratio: float = 0.0          # نسبت شارپ سالانه
+    initial_capital: float = 0.0       # سرمایه اولیه
+    final_equity: float = 0.0          # ارزش نهایی پرتفوی
+    total_return_pct: float = 0.0      # درصد کل بازدهی سرمایه
+    equity_curve: List[Dict[str, Any]] = field(default_factory=list)

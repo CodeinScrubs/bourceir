@@ -23,6 +23,8 @@ from database.models import (
     CREATE_INTRADAY_TRADES_TABLE,
     CREATE_DATA_QUALITY_TABLE,
     CREATE_EXPERIMENTS_TABLE,
+    CREATE_FEATURES_DAILY_TABLE,
+    CREATE_FEATURES_INTRADAY_TABLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ class DatabaseManager:
 
         self.conn: Optional[sqlite3.Connection] = None
         self._connect()
+        self.init_db()
 
     def _connect(self) -> None:
         """برقراری اتصال امن با دیتابیس SQLite."""
@@ -100,6 +103,8 @@ class DatabaseManager:
                 cursor.execute(CREATE_INTRADAY_TRADES_TABLE)
                 cursor.execute(CREATE_DATA_QUALITY_TABLE)
                 cursor.execute(CREATE_EXPERIMENTS_TABLE)
+                cursor.execute(CREATE_FEATURES_DAILY_TABLE)
+                cursor.execute(CREATE_FEATURES_INTRADAY_TABLE)
             self._run_column_migrations()
             logger.info("ساختار کلیه جداول و مایگریشن‌های پایگاه داده با موفقیت آماده‌سازی شد.")
         except Exception as e:
@@ -135,6 +140,17 @@ class DatabaseManager:
                 except sqlite3.OperationalError:
                     # ستون از قبل وجود دارد؛ نادیده گرفته می‌شود
                     pass
+
+            # بک‌فیل خودکار رکوردهای قبلی جهت اطمینان از مقدار داشتن ستون‌های Point-in-Time
+            try:
+                cursor.execute("""
+                UPDATE daily_prices 
+                SET open_raw = open, high_raw = high, low_raw = low, close_raw = close,
+                    adjustment_factor = CASE WHEN close > 0 THEN adj_close / close ELSE 1.0 END
+                WHERE open_raw IS NULL;
+                """)
+            except Exception as backfill_err:
+                logger.debug("عدم نیاز به بک‌فیل یا خطا: %s", backfill_err)
 
     def insert_symbol(
         self,
@@ -203,24 +219,49 @@ class DatabaseManager:
         value: float,
         trade_count: int,
         source: str = 'pytse',
-        price_unit: str = settings.PRICE_UNIT
+        price_unit: str = settings.PRICE_UNIT,
+        open_raw: Optional[float] = None,
+        high_raw: Optional[float] = None,
+        low_raw: Optional[float] = None,
+        close_raw: Optional[float] = None,
+        adjustment_factor: Optional[float] = None,
     ) -> bool:
         """
-        ثبت قیمت روزانه معامله با INSERT OR IGNORE جهت جلوگیری از تکرار داده‌ها.
+        ثبت قیمت روزانه معامله با ذخیره قطعی مقادیر خام (Point-in-Time) و ضریب تعدیل.
+        از درج رکوردهای تکراری بر اساس (symbol_id, date, source) جلوگیری می‌شود.
         """
         now = get_current_tehran_time()
+
+        # تضمین پر بودن داده‌های خام Point-in-Time
+        o_raw = open_raw if open_raw is not None else open
+        h_raw = high_raw if high_raw is not None else high
+        l_raw = low_raw if low_raw is not None else low
+        c_raw = close_raw if close_raw is not None else close
+
+        if adjustment_factor is not None:
+            adj_fac = adjustment_factor
+        elif close and close > 0 and adj_close is not None:
+            adj_fac = round(adj_close / close, 6)
+        else:
+            adj_fac = 1.0
+
         query = """
         INSERT OR IGNORE INTO daily_prices (
             symbol_id, date, open, high, low, close, adj_close,
-            volume, value, trade_count, price_unit, source, captured_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            volume, value, trade_count, price_unit, source, captured_at,
+            open_raw, high_raw, low_raw, close_raw, adjustment_factor
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         try:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute(
                     query,
-                    (symbol_id, date, open, high, low, close, adj_close, volume, value, trade_count, price_unit, source, now)
+                    (
+                        symbol_id, date, open, high, low, close, adj_close,
+                        volume, value, trade_count, price_unit, source, now,
+                        o_raw, h_raw, l_raw, c_raw, adj_fac
+                    )
                 )
                 return cursor.rowcount > 0
         except Exception as e:
@@ -416,6 +457,172 @@ class DatabaseManager:
         except Exception as e:
             logger.error("خطا در خواندن آزمایش‌ها: %s", e)
             return []
+
+    def insert_corporate_action(
+        self,
+        symbol_id: int,
+        event_date: str,
+        event_type: str,
+        adjustment_factor: float = 1.0,
+        cash_dividend: float = 0.0,
+        capital_increase_pct: float = 0.0,
+        description: Optional[str] = None
+    ) -> bool:
+        """ثبت رویداد شرکتی و ضریب تعدیل قیمت."""
+        query = """
+        INSERT OR REPLACE INTO corporate_actions (
+            symbol_id, event_date, event_type, adjustment_factor,
+            cash_dividend, capital_increase_pct, description, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    query,
+                    (symbol_id, event_date, event_type, adjustment_factor, cash_dividend, capital_increase_pct, description, get_current_tehran_time())
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت رویداد شرکتی: %s", e)
+            return False
+
+    def insert_market_calendar(
+        self,
+        calendar_date: str,
+        is_trading_day: bool,
+        holiday_reason: Optional[str] = None,
+        market_phase: str = 'regular'
+    ) -> bool:
+        """ثبت وضعیت تقویم بازار."""
+        query = """
+        INSERT OR REPLACE INTO market_calendar (calendar_date, is_trading_day, holiday_reason, market_phase)
+        VALUES (?, ?, ?, ?);
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(query, (calendar_date, int(is_trading_day), holiday_reason, market_phase))
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت تقویم بازار: %s", e)
+            return False
+
+    def is_trading_day(self, date_str: str) -> bool:
+        """بررسی باز بودن بازار در تاریخ مشخص بر اساس تقویم دیتابیس."""
+        query = "SELECT is_trading_day FROM market_calendar WHERE calendar_date = ? LIMIT 1;"
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(query, (date_str,))
+            row = cursor.fetchone()
+            if row:
+                return bool(row["is_trading_day"])
+            # در صورت عدم ثبت در جدول تقویم، از روزهای هفته پیش‌فرض استفاده می‌شود
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.weekday() in settings.TRADING_DAYS
+        except Exception:
+            return True
+
+    def insert_quality_metric(
+        self,
+        symbol_id: int,
+        trade_date: str,
+        completeness_score: float = 100.0,
+        price_anomaly_flag: bool = False,
+        volume_anomaly_flag: bool = False,
+        quality_score: float = 100.0,
+        notes: Optional[str] = None
+    ) -> bool:
+        """ثبت ارزیابی کیفیت و سلامت داده نماد."""
+        query = """
+        INSERT OR REPLACE INTO data_quality_metrics (
+            symbol_id, trade_date, completeness_score, price_anomaly_flag,
+            volume_anomaly_flag, quality_score, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    query,
+                    (symbol_id, trade_date, completeness_score, int(price_anomaly_flag), int(volume_anomaly_flag), quality_score, notes)
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت متریک کیفیت داده: %s", e)
+            return False
+
+    def insert_daily_features(self, symbol_id: int, date: str, features: Dict[str, Any]) -> bool:
+        """ذخیره فاکتورهای محاسبه‌شده روزانه در Feature Store."""
+        query = """
+        INSERT OR REPLACE INTO features_daily (
+            symbol_id, date, return_1d, return_5d, volatility_20d,
+            atr_14d, rsi_14d, sma_20d, sma_50d, volume_ratio_20d,
+            buyer_power_ratio, smart_money_flow, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    query,
+                    (
+                        symbol_id,
+                        date,
+                        features.get("return_1d"),
+                        features.get("return_5d"),
+                        features.get("volatility_20d"),
+                        features.get("atr_14d"),
+                        features.get("rsi_14d"),
+                        features.get("sma_20d"),
+                        features.get("sma_50d"),
+                        features.get("volume_ratio_20d"),
+                        features.get("buyer_power_ratio"),
+                        features.get("smart_money_flow"),
+                        get_current_tehran_time()
+                    )
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("خطا در ثبت فیچرهای روزانه: %s", e)
+            return False
+
+    def get_daily_prices_df(
+        self,
+        symbol_fa: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        raw_only: bool = True
+    ):
+        """
+        دریافت سابقه قیمت‌های روزانه به صورت پانداز دیتافریم با تفکیک قطعی داده خام از تعدیل‌شده.
+        """
+        import pandas as pd
+        sym_id = self.get_symbol_id(symbol_fa)
+        if not sym_id:
+            return pd.DataFrame()
+
+        query = """
+        SELECT
+            date,
+            open_raw, high_raw, low_raw, close_raw,
+            open, high, low, close, adj_close, adjustment_factor,
+            volume, value, trade_count
+        FROM daily_prices
+        WHERE symbol_id = ?
+        """
+        params = [sym_id]
+        if start_date:
+            query += " AND date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND date <= ?"
+            params.append(end_date)
+        query += " ORDER BY date ASC;"
+
+        df = pd.read_sql_query(query, self.conn, params=params)
+        return df
+
 
 # نام مستعار جهت سازگاری با داشبورد و سایر بخش‌ها
 BRSDatabase = DatabaseManager

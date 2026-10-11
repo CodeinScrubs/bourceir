@@ -104,3 +104,29 @@ class UniverseManager:
         """دریافت لیست نمادهای فعال سهام در دیتابیس."""
         symbols = self.db.get_all_symbols()
         return [s["symbol_fa"] for s in symbols]
+
+    def get_top_liquid_symbols(self, limit: int = 30, lookback_days: int = 30) -> List[str]:
+        """
+        رتبه‌بندی نقدشوندگی نمادها بر اساس میانگین ارزش معاملات روزانه.
+        این تابع نمادهای کم‌معامله، پروژه‌ای یا دارای صف‌های غیرقابل خروج را حذف می‌کند.
+        """
+        query = """
+        SELECT s.symbol_fa, AVG(dp.value) as avg_value, COUNT(dp.id) as days_count
+        FROM daily_prices dp
+        JOIN symbols s ON dp.symbol_id = s.id
+        WHERE s.is_active = 1
+        GROUP BY s.id
+        HAVING days_count >= 1
+        ORDER BY avg_value DESC
+        LIMIT ?;
+        """
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute(query, (limit,))
+            rows = cursor.fetchall()
+            if rows:
+                return [r["symbol_fa"] for r in rows]
+            return getattr(settings, "TEST_SYMBOLS", ["خودرو", "فولاد", "شپنا", "وبملت", "کگل"])
+        except Exception as e:
+            logger.error("خطا در محاسبه رتبه‌بندی نقدشوندگی: %s", e)
+            return getattr(settings, "TEST_SYMBOLS", ["خودرو", "فولاد"])

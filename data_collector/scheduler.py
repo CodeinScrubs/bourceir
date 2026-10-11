@@ -14,6 +14,7 @@ import pandas as pd
 from config import settings
 from database.db import DatabaseManager, get_current_tehran_time
 from data_collector.provider import TSEDataProvider
+from data_collector.validator import DataValidator
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,19 @@ class DataCollector:
                     val_val = float(row['value']) if pd.notna(row.get('value')) else None
                     count_val = int(row['trade_count']) if pd.notna(row.get('trade_count')) else None
 
+                    # اعتبارسنجی کندل پیش از درج در دیتابیس
+                    candle_dict = {
+                        'date': date_val, 'open': open_val, 'high': high_val,
+                        'low': low_val, 'close': close_val, 'volume': vol_val, 'value': val_val
+                    }
+                    is_valid, validation_errors = DataValidator.validate_daily_candle(candle_dict)
+                    if not is_valid:
+                        logger.warning("رد رکورد نامعتبر برای نماد %s در %s: %s", sym, date_val, "; ".join(validation_errors))
+                        continue
+
+                    # محاسبه ضریب تعدیل
+                    adj_fac = round(adj_close_val / close_val, 6) if (close_val and close_val > 0 and adj_close_val is not None) else 1.0
+
                     success = self.db.insert_daily_price(
                         symbol_id=sym_id,
                         date=date_val,
@@ -143,7 +157,12 @@ class DataCollector:
                         value=val_val,
                         trade_count=count_val,
                         source='pytse',
-                        price_unit=settings.PRICE_UNIT
+                        price_unit=settings.PRICE_UNIT,
+                        open_raw=open_val,
+                        high_raw=high_val,
+                        low_raw=low_val,
+                        close_raw=close_val,
+                        adjustment_factor=adj_fac
                     )
                     if success:
                         inserted_for_sym += 1
@@ -211,6 +230,15 @@ class DataCollector:
                 snapshot = self.provider.get_live_snapshot(sym)
                 if snapshot is None:
                     err_msg = f"عدم دریافت اسنپ‌شات برای نماد '{sym}'"
+                    logger.warning(err_msg)
+                    errors.append(err_msg)
+                    failed += 1
+                    continue
+
+                # اعتبارسنجی اسنپ‌شات پیش از ثبت در پایگاه داده
+                is_valid, snap_errors = DataValidator.validate_snapshot(snapshot)
+                if not is_valid:
+                    err_msg = f"اسنپ‌شات نامعتبر برای نماد '{sym}': {'; '.join(snap_errors)}"
                     logger.warning(err_msg)
                     errors.append(err_msg)
                     failed += 1

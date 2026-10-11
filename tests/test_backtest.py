@@ -126,3 +126,56 @@ def test_extended_database_tables(tmp_path):
     assert experiments[0]["experiment_id"] == "EXP-TEST-001"
 
     db.close()
+
+
+def test_win_rate_accuracy_with_profit_and_loss():
+    """
+    بررسی حل باگ تجمیع پوزیشن‌ها: یک معامله برنده و یک معامله بازنده روی یک نماد
+    باید دقیقاً نرخ برد ۵۰٪ (Win Rate = 50.0%) گزارش کند نه ۱۰۰٪.
+    """
+    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=0.0)
+
+    # معامله ۱ (برنده): خرید در ۱۰,۰۰۰ و فروش در ۱۲,۰۰۰ (سود ۲۰٪)
+    engine.execute_buy(symbol_fa="فولاد", price=10_000.0, quantity=1000, date="2026-10-01")
+    engine.execute_sell(symbol_fa="فولاد", price=12_000.0, quantity=1000, date="2026-10-02")
+
+    # معامله ۲ (بازنده): خرید در ۱۲,۰۰۰ و فروش در ۱۰,۰۰۰ (زیان)
+    engine.execute_buy(symbol_fa="فولاد", price=12_000.0, quantity=1000, date="2026-10-03")
+    engine.execute_sell(symbol_fa="فولاد", price=10_000.0, quantity=1000, date="2026-10-04")
+
+    metrics = engine.calculate_metrics()
+    assert len(engine.closed_trades) == 2, "باید دقیقا ۲ معامله بسته‌شده ثبت شده باشد"
+    assert metrics.winning_trades == 1, "باید ۱ معامله برنده باشد"
+    assert metrics.losing_trades == 1, "باید ۱ معامله بازنده باشد"
+    assert metrics.win_rate == 50.0, f"نرخ برد باید ۵۰٪ باشد اما {metrics.win_rate} گزارش شد"
+
+
+def test_historical_replay_simulation():
+    """
+    بررسی اجرای حلقه شبیه‌سازی گام‌به‌گام تاریخی (Replay Loop) و ردیابی منحنی رشد سرمایه
+    """
+    import pandas as pd
+    engine = BacktestEngine(initial_capital=50_000_000.0, default_slippage_bps=0.0)
+
+    # ساخت سری داده تاریخی شبیه‌سازی‌شده (۵ روز)
+    data = [
+        {"date": "2026-10-01", "close": 1000.0, "volume": 100000},
+        {"date": "2026-10-02", "close": 1050.0, "volume": 100000},
+        {"date": "2026-10-03", "close": 1100.0, "volume": 100000},
+        {"date": "2026-10-04", "close": 1020.0, "volume": 100000},
+        {"date": "2026-10-05", "close": 1080.0, "volume": 100000},
+    ]
+    df = pd.DataFrame(data)
+
+    def simple_strategy(row, eng):
+        if row["date"] == "2026-10-01":
+            return "BUY"
+        elif row["date"] == "2026-10-03":
+            return "SELL"
+        return None
+
+    metrics = engine.run_replay_simulation(df, "خودرو", simple_strategy)
+    assert len(metrics.equity_curve) == 5, "منحنی ارزش سرمایه باید به ازای هر ۵ روز ثبت شده باشد"
+    assert metrics.winning_trades == 1
+    assert metrics.win_rate == 100.0
+    assert metrics.final_equity > metrics.initial_capital
