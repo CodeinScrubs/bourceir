@@ -22,6 +22,8 @@ from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
+from features.labels_fa import FEATURE_LABELS_FA, format_feature  # noqa: E402
+from features.store import load_manifest, load_symbol_features  # noqa: E402
 from ops import jobs  # noqa: E402
 
 st.set_page_config(page_title="BRS — دستیار نوسان‌گیری بورس", page_icon="📈", layout="wide")
@@ -288,6 +290,32 @@ def page_symbol() -> None:
     if "real_flow" in table.columns:
         out["پول حقیقی (م.ت)"] = (table["real_flow"] / 1e10).round(1)
     st.dataframe(out, hide_index=True, width="stretch")
+    feature_panel(symbol)
+
+
+@st.cache_data(ttl=300)
+def cached_symbol_features(symbol: str) -> pd.DataFrame:
+    return load_symbol_features(symbol)
+
+
+def feature_panel(symbol: str) -> None:
+    """آخرین مقدار فیچرهای نماد از انبار فیچر (همان ورودی‌هایی که مدل‌ها می‌بینند)."""
+    manifest = load_manifest()
+    with st.expander("📐 فیچرهای آخرین روز (ورودی مدل‌های هوش مصنوعی)"):
+        if not manifest:
+            st.info("انبار فیچر هنوز ساخته نشده است. «به‌روزرسانی داده‌ها» آن را در پایان می‌سازد.")
+            return
+        feats = cached_symbol_features(symbol)
+        if feats.empty:
+            st.info("برای این نماد فیچری ثبت نشده است.")
+            return
+        last = feats.iloc[-1]
+        st.caption(f"نسخه {manifest['version']} — تاریخ {to_jalali(last['date'])} — ساخته‌شده در "
+                   f"{to_jalali(manifest['created_at'], with_time=True)}")
+        st.dataframe(pd.DataFrame([
+            {"فیچر": label, "مقدار": format_feature(name, last.get(name)), "توضیح": help_text}
+            for name, (label, help_text, _) in FEATURE_LABELS_FA.items()
+        ]), hide_index=True, width="stretch", height=420)
 
 
 def page_live() -> None:
