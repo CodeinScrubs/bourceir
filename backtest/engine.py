@@ -12,6 +12,8 @@
 """
 
 import logging
+import math
+from numbers import Real
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -38,6 +40,8 @@ class BacktestEngine:
         initial_capital: Optional[float] = None,
         max_volume_participation_pct: Optional[float] = None,
         default_slippage_bps: Optional[float] = None,
+        allow_unverified_fills: bool = False,
+        periods_per_year: Optional[float] = None,
     ):
         cfg = settings.BACKTEST_CONFIG
         self.initial_capital = float(initial_capital if initial_capital is not None else cfg["initial_capital"])
@@ -49,6 +53,16 @@ class BacktestEngine:
         self.default_slippage_bps = (
             default_slippage_bps if default_slippage_bps is not None else cfg["default_slippage_bps"]
         )
+        if not math.isfinite(self.initial_capital) or self.initial_capital <= 0:
+            raise ValueError("سرمایه اولیه باید مثبت و متناهی باشد")
+        if not 0 < self.max_volume_participation_pct <= 0.05 or not 0 <= self.default_slippage_bps < 10000:
+            raise ValueError("سقف مشارکت یا لغزش نامعتبر است")
+        if periods_per_year is not None and (not math.isfinite(periods_per_year) or periods_per_year <= 0):
+            raise ValueError("تناوب بازده نامعتبر است")
+        self.allow_unverified_fills = allow_unverified_fills
+        self.periods_per_year = periods_per_year
+        self._used = {}
+        self._episodes = {}
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
         self.closed_trades: List[ClosedTrade] = []
@@ -68,40 +82,65 @@ class BacktestEngine:
             slippage += min((quantity / daily_volume) * 0.1, 0.02)
         return base_price * (1.0 + slippage) if side == OrderSide.BUY else base_price * (1.0 - slippage)
 
-    def _participation_cap(self, quantity: int, daily_volume: Optional[int]) -> int:
-        if daily_volume and daily_volume > 0:
-            return min(quantity, int(daily_volume * self.max_volume_participation_pct))
-        return quantity
+    @staticmethod
+    def _positive(value):
+        return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+    def _sized_fill(self, symbol, price, quantity, date, daily_volume, daily_value, side, low, high):
+        if not self._positive(price) or not self._positive(quantity) or not float(quantity).is_integer():
+            return 0, 0.0
+        if any(v is not None and not self._positive(v) for v in (daily_volume, daily_value, low, high)):
+            return 0, 0.0
+        if not self.allow_unverified_fills and any(v is None for v in (daily_volume, daily_value, low, high)):
+            return 0, 0.0
+        if low is not None and high is not None and not low <= price <= high:
+            return 0, 0.0
+        key = (symbol, str(date)[:10])
+        used_volume, used_value = self._used.get(key, (0, 0.0))
+        cap = int(quantity)
+        if daily_volume is not None:
+            cap = min(cap, max(0, int(daily_volume * self.max_volume_participation_pct) - used_volume))
+        value_budget = float("inf") if daily_value is None else max(
+            0.0, daily_value * self.max_volume_participation_pct - used_value)
+        if side == OrderSide.BUY:
+            value_budget = min(value_budget, self.cash / (1 + self.BUY_COMMISSION_RATE))
+        # لغزش تابع مقدار نهایی است؛ کاهش حجم نباید با لغزش حجم بزرگ قبلی محاسبه شود.
+        left, right = 0, cap
+        while left < right:
+            q = (left + right + 1) // 2
+            fill = market_rules.apply_execution_bounds(self.calculate_slippage_price(price, side, q, daily_volume), low, high)
+            if q * fill <= value_budget:
+                left = q
+            else:
+                right = q - 1
+        fill = market_rules.apply_execution_bounds(self.calculate_slippage_price(price, side, left, daily_volume), low, high)
+        return left, fill
+
+    def _record_participation(self, symbol, date, quantity, value):
+        key = (symbol, str(date)[:10])
+        used_volume, used_value = self._used.get(key, (0, 0.0))
+        self._used[key] = used_volume + quantity, used_value + value
 
     def execute_buy(self, symbol_fa: str, price: float, quantity: int, date: str,
-                    daily_volume: Optional[int] = None, is_locked_limit_up: bool = False,
-                    day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+                    daily_volume: Optional[int] = None, is_locked_limit_up: Optional[bool] = None,
+                    day_low: Optional[float] = None, day_high: Optional[float] = None,
+                    daily_value: Optional[float] = None) -> Optional[Trade]:
         """اجرای سفارش خرید با بررسی قفل صف خرید، سقف نقدشوندگی، بازه قیمت روز و کارمزد."""
-        if quantity <= 0 or price <= 0:
-            return None
-        if is_locked_limit_up:
+        if is_locked_limit_up is True or (is_locked_limit_up is None and not self.allow_unverified_fills):
             self.blocked_orders += 1
             logger.info("خرید «%s» در %s اجرا نشد: صف خرید قفل.", symbol_fa, date)
             return None
 
-        quantity = self._participation_cap(quantity, daily_volume)
+        quantity, execution_price = self._sized_fill(symbol_fa, price, quantity, date, daily_volume,
+                                                       daily_value, OrderSide.BUY, day_low, day_high)
         if quantity <= 0:
-            logger.info("حجم معاملات روز «%s» برای این سفارش کافی نیست.", symbol_fa)
             return None
-
-        execution_price = market_rules.apply_execution_bounds(
-            self.calculate_slippage_price(price, OrderSide.BUY, quantity, daily_volume), day_low, day_high)
-        unit_cost = execution_price * (1 + self.BUY_COMMISSION_RATE)
-        if self.cash < unit_cost * quantity:
-            quantity = int(self.cash / unit_cost)
-            if quantity <= 0:
-                logger.info("موجودی نقد برای خرید «%s» کافی نیست.", symbol_fa)
-                return None
 
         gross_value = execution_price * quantity
         commission = gross_value * self.BUY_COMMISSION_RATE
         total_required = gross_value + commission
         self.cash -= total_required
+        self._record_participation(symbol_fa, date, quantity, gross_value)
 
         trade = Trade(symbol_fa=symbol_fa, side=OrderSide.BUY, quantity=quantity, price=round(execution_price, 2),
                       gross_value=round(gross_value, 2), commission=round(commission, 2),
@@ -111,6 +150,10 @@ class BacktestEngine:
         pos = self.positions.setdefault(symbol_fa, Position(symbol_fa=symbol_fa))
         if pos.quantity == 0:
             pos.opened_at = date
+            self._episodes[symbol_fa] = {"cost": 0.0, "buy_gross": 0.0, "sell_gross": 0.0,
+                                        "sell_fees": 0.0, "qty": 0, "entry": date}
+        self._episodes[symbol_fa]["cost"] += total_required
+        self._episodes[symbol_fa]["buy_gross"] += gross_value
         pos.quantity += quantity
         pos.total_cost += total_required
         pos.average_entry_price = pos.total_cost / pos.quantity
@@ -119,28 +162,31 @@ class BacktestEngine:
         return trade
 
     def execute_sell(self, symbol_fa: str, price: float, quantity: int, date: str,
-                     daily_volume: Optional[int] = None, is_locked_limit_down: bool = False,
-                     day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+                     daily_volume: Optional[int] = None, is_locked_limit_down: Optional[bool] = None,
+                     day_low: Optional[float] = None, day_high: Optional[float] = None,
+                    daily_value: Optional[float] = None) -> Optional[Trade]:
         """اجرای سفارش فروش با بررسی قفل صف فروش، سقف نقدشوندگی، بازه قیمت روز، مالیات و کارمزد."""
         pos = self.positions.get(symbol_fa)
         if pos is None or pos.quantity <= 0:
             logger.warning("پوزیشن بازی برای فروش «%s» وجود ندارد.", symbol_fa)
             return None
-        if is_locked_limit_down:
+        if is_locked_limit_down is True or (is_locked_limit_down is None and not self.allow_unverified_fills):
             self.blocked_orders += 1
             logger.info("فروش «%s» در %s اجرا نشد: صف فروش قفل.", symbol_fa, date)
             return None
 
-        sell_qty = self._participation_cap(min(quantity, pos.quantity), daily_volume)
+        if not self._positive(quantity) or not float(quantity).is_integer():
+            return None
+        sell_qty, execution_price = self._sized_fill(symbol_fa, price, min(quantity, pos.quantity), date,
+                                                       daily_volume, daily_value, OrderSide.SELL, day_low, day_high)
         if sell_qty <= 0:
             return None
 
-        execution_price = market_rules.apply_execution_bounds(
-            self.calculate_slippage_price(price, OrderSide.SELL, sell_qty, daily_volume), day_low, day_high)
         gross_value = execution_price * sell_qty
         commission = gross_value * self.SELL_COMMISSION_RATE
         net_received = gross_value - commission
         self.cash += net_received
+        self._record_participation(symbol_fa, date, sell_qty, gross_value)
 
         trade = Trade(symbol_fa=symbol_fa, side=OrderSide.SELL, quantity=sell_qty, price=round(execution_price, 2),
                       gross_value=round(gross_value, 2), commission=round(commission, 2),
@@ -148,17 +194,21 @@ class BacktestEngine:
         self.trades.append(trade)
 
         cost_basis = pos.average_entry_price * sell_qty            # شامل کارمزد خرید
-        buy_gross = cost_basis / (1.0 + self.BUY_COMMISSION_RATE)  # ارزش خرید بدون کارمزد
         net_trade_pnl = net_received - cost_basis
-        self.closed_trades.append(ClosedTrade(
-            symbol_fa=symbol_fa, entry_date=pos.opened_at or date, exit_date=date, quantity=sell_qty,
-            entry_price=round(buy_gross / sell_qty, 2), exit_price=round(execution_price, 2),
-            gross_pnl=round(gross_value - buy_gross, 2),
-            commissions=round((cost_basis - buy_gross) + commission, 2),
-            net_pnl=round(net_trade_pnl, 2),
-            return_pct=round(net_trade_pnl / cost_basis * 100.0, 4) if cost_basis > 0 else 0.0,
-            is_winner=net_trade_pnl > 0,
-        ))
+        episode = self._episodes[symbol_fa]
+        episode["sell_gross"] += gross_value
+        episode["sell_fees"] += commission
+        episode["qty"] += sell_qty
+        if pos.quantity == sell_qty:
+            pnl = episode["sell_gross"] - episode["sell_fees"] - episode["cost"]
+            self.closed_trades.append(ClosedTrade(
+                symbol_fa=symbol_fa, entry_date=episode["entry"], exit_date=date, quantity=episode["qty"],
+                entry_price=episode["buy_gross"] / episode["qty"],
+                exit_price=episode["sell_gross"] / episode["qty"],
+                gross_pnl=episode["sell_gross"] - episode["buy_gross"],
+                commissions=episode["cost"] - episode["buy_gross"] + episode["sell_fees"],
+                net_pnl=pnl, return_pct=pnl / episode["cost"] * 100, is_winner=pnl > 0,
+            ))
 
         pos.realized_pnl += net_trade_pnl
         pos.quantity -= sell_qty
@@ -201,11 +251,11 @@ class BacktestEngine:
         losers = [t for t in closed if not t.is_winner]
         gross_profit = sum(t.net_pnl for t in winners)
         gross_loss = sum(abs(t.net_pnl) for t in losers)
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
         expectancy = sum(t.return_pct for t in closed) / len(closed) if closed else 0.0
 
         max_dd_pct = 0.0
-        equities = [pt["equity"] for pt in self.equity_curve]
+        equities = [self.initial_capital] + [pt["equity"] for pt in self.equity_curve]
         if equities:
             peak = equities[0]
             for eq in equities:
@@ -213,11 +263,11 @@ class BacktestEngine:
                 if peak > 0:
                     max_dd_pct = max(max_dd_pct, (peak - eq) / peak * 100.0)
 
-        sharpe = 0.0
-        if len(equities) > 2:
+        sharpe = None
+        if self.periods_per_year is not None and len(equities) > 2:
             returns = pd.Series(equities).pct_change().dropna()
             if len(returns) > 1 and returns.std() > 1e-9:
-                sharpe = float(returns.mean() / returns.std() * (TRADING_DAYS_PER_YEAR ** 0.5))
+                sharpe = float(returns.mean() / returns.std() * (self.periods_per_year ** 0.5))
 
         return PerformanceMetrics(
             total_trades=len(self.trades),
@@ -226,12 +276,14 @@ class BacktestEngine:
             win_rate=round(len(winners) / len(closed) * 100.0, 2) if closed else 0.0,
             gross_profit=round(gross_profit, 2),
             gross_loss=round(gross_loss, 2),
-            net_pnl=round(gross_profit - gross_loss, 2),
-            profit_factor=round(profit_factor, 2),
+            net_pnl=round(final_equity - self.initial_capital, 2),
+            realized_pnl=round(sum(p.realized_pnl for p in self.positions.values()), 2),
+            unverified_fill_mode=self.allow_unverified_fills,
+            profit_factor=round(profit_factor, 2) if profit_factor is not None else None,
             expectancy_pct=round(expectancy, 4),
             max_drawdown_pct=round(max_dd_pct, 2),
             total_commissions_paid=round(sum(t.commission for t in self.trades), 2),
-            sharpe_ratio=round(sharpe, 2),
+            sharpe_ratio=round(sharpe, 2) if sharpe is not None else None,
             initial_capital=round(self.initial_capital, 2),
             final_equity=round(final_equity, 2),
             total_return_pct=round(total_return_pct, 2),
@@ -243,10 +295,20 @@ class BacktestEngine:
     # شبیه‌سازی تاریخی روزانه
     # ═══════════════════════════════════════════════
 
-    @staticmethod
-    def _prepare(prices_df: pd.DataFrame) -> pd.DataFrame:
+    def _prepare(self, prices_df: pd.DataFrame) -> pd.DataFrame:
         """یکسان‌سازی ستون‌ها: داده دیتابیس (*_raw) یا دیتافریم ساده (date/close/volume)."""
+        if prices_df["date"].duplicated().any():
+            raise ValueError("تاریخ تکراری در ورودی بکتست")
+        required = {"high_raw", "low_raw", "close_raw", "close_final_raw", "ref_price_raw", "volume", "value"}
+        if not self.allow_unverified_fills and not required.issubset(prices_df.columns):
+            raise ValueError("قیمت خام، مرجع، بازه و نقدشوندگی برای بکتست لازم‌اند")
         df = prices_df.sort_values("date").reset_index(drop=True).copy()
+        if not self.allow_unverified_fills:
+            for column in ("high_raw", "low_raw", "close_final_raw", "ref_price_raw", "volume", "value"):
+                values = pd.to_numeric(df[column], errors="coerce")
+                valid = values.map(lambda v: math.isfinite(v) and (v >= 0 if column in {"volume", "value"} else v > 0))
+                if not valid.all():
+                    raise ValueError(f"داده اجرای معتبر در ستون {column} موجود نیست")
         for col in ("open", "high", "low", "close"):
             if f"{col}_raw" not in df.columns and col in df.columns:
                 df[f"{col}_raw"] = df[col]
@@ -255,7 +317,11 @@ class BacktestEngine:
         df["_mark"] = market_rules.official_close(df)
         has_range = {"high_raw", "low_raw"}.issubset(df.columns)
         if has_range and {"value", "volume"}.issubset(df.columns):
-            df["_fill"] = market_rules.daily_vwap(df).fillna(df["open_raw"] if "open_raw" in df.columns else df["_mark"])
+            df["_fill"] = market_rules.daily_vwap(df)
+            if self.allow_unverified_fills:
+                df["_fill"] = df["_fill"].fillna(df["open_raw"] if "open_raw" in df.columns else df["_mark"])
+            elif (df["_fill"].isna() & (df["volume"] > 0)).any():
+                raise ValueError("ارزش/حجم با بازه قیمت روز سازگار نیست؛ اجرای ساختگی ممنوع است")
         else:
             df["_fill"] = df["open_raw"] if "open_raw" in df.columns else df["_mark"]
         if has_range and "volume" in df.columns:
@@ -276,6 +342,8 @@ class BacktestEngine:
 
         strategy_signal_fn(row, engine) باید 'BUY'، 'SELL' یا None برگرداند.
         """
+        if not 0 < allocation_pct <= 1:
+            raise ValueError("سهم سرمایه تخصیص‌یافته باید بین صفر و یک باشد")
         df = self._prepare(prices_df)
         pending: Optional[str] = None
         prev_volume: Optional[float] = None
@@ -285,28 +353,36 @@ class BacktestEngine:
             fill_price = float(row["_fill"]) if pd.notna(row["_fill"]) else None
             day_volume = int(row["volume"]) if pd.notna(row["volume"]) else None
             # سقف مشارکت با کمترین حجم بین روز تصمیم و روز اجرا (محافظه‌کارانه)
-            cap_volume = min(v for v in (day_volume, prev_volume) if v) if (day_volume or prev_volume) else None
+            cap_volume = min(day_volume, prev_volume) if day_volume is not None and prev_volume is not None else day_volume
             low = row["low_raw"] if "low_raw" in row and pd.notna(row["low_raw"]) else None
             high = row["high_raw"] if "high_raw" in row and pd.notna(row["high_raw"]) else None
+
+            if not self.allow_unverified_fills and self.positions.get(symbol_fa, Position(symbol_fa)).quantity:
+                ref = row.get("ref_price_raw")
+                prior = self.last_prices.get(symbol_fa)
+                if self._positive(ref) and self._positive(prior) and abs(ref / prior - 1) > 1e-6:
+                    raise ValueError("قیمت مرجع تغییر کرده است؛ حسابداری اقدام شرکتی برای پوزیشن باز هنوز پشتیبانی نمی‌شود")
 
             # ۱. اجرای سفارش روز قبل
             if pending == "BUY" and fill_price:
                 qty = int(self.cash * allocation_pct / (fill_price * (1.0 + self.BUY_COMMISSION_RATE)))
                 if qty > 0:
                     self.execute_buy(symbol_fa, fill_price, qty, date_str, daily_volume=cap_volume,
-                                     is_locked_limit_up=bool(row["_locked_up"]), day_low=low, day_high=high)
+                                     is_locked_limit_up=bool(row["_locked_up"]), day_low=low, day_high=high,
+                                     daily_value=row.get("value"))
                 pending = None  # سیگنال خرید کهنه نمی‌ماند؛ استراتژی می‌تواند دوباره سیگنال بدهد
             elif pending == "SELL" and fill_price:
                 pos = self.positions.get(symbol_fa)
                 if pos and pos.quantity > 0:
                     self.execute_sell(symbol_fa, fill_price, pos.quantity, date_str, daily_volume=cap_volume,
-                                      is_locked_limit_down=bool(row["_locked_down"]), day_low=low, day_high=high)
+                                      is_locked_limit_down=bool(row["_locked_down"]), day_low=low, day_high=high,
+                                      daily_value=row.get("value"))
                 pos = self.positions.get(symbol_fa)
                 if not pos or pos.quantity == 0:
                     pending = None  # تا خروج کامل، سفارش فروش باقی می‌ماند
 
             # ۲. تصمیم استراتژی با داده‌های تا پایان امروز
-            signal = strategy_signal_fn(row.drop(labels=[c for c in row.index if c.startswith("_")]), self)
+            signal = strategy_signal_fn(row.drop(labels=[c for c in row.index if c.startswith("_") or c in {"adj_close", "adjustment_factor", "open", "high", "low", "close"}]), self)
             if signal in ("BUY", "SELL"):
                 pending = signal
 

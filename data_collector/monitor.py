@@ -7,6 +7,7 @@
 """
 
 import logging
+import math
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -22,10 +23,10 @@ def buyer_power(snapshot: Dict[str, Any]) -> Optional[float]:
     قدرت خریدار حقیقی = سرانه خرید حقیقی ÷ سرانه فروش حقیقی.
     بزرگ‌تر از ۱ یعنی خریداران حقیقی به‌طور میانگین حجم بیشتری می‌خرند (ورود پول درشت حقیقی).
     """
-    rb_vol = snapshot.get("real_buy_volume") or 0
-    rb_cnt = snapshot.get("real_buy_count") or 0
-    rs_vol = snapshot.get("real_sell_volume") or 0
-    rs_cnt = snapshot.get("real_sell_count") or 0
+    values = [snapshot.get(k) for k in ("real_buy_volume", "real_buy_count", "real_sell_volume", "real_sell_count")]
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in values):
+        return None
+    rb_vol, rb_cnt, rs_vol, rs_cnt = values
     if rb_cnt > 0 and rs_cnt > 0 and rs_vol > 0:
         return round((rb_vol / rb_cnt) / (rs_vol / rs_cnt), 2)
     return None
@@ -51,30 +52,38 @@ class DataFreshnessMonitor:
     def inspect_snapshot(self, symbol_fa: str, snapshot: Dict[str, Any],
                          now: Optional[datetime] = None) -> Dict[str, Any]:
         """بررسی یک اسنپ‌شات لحظه‌ای و بازگرداندن کارت سلامت آن."""
-        now = (now or now_tehran()).astimezone(TEHRAN_TZ)
+        now = _to_tehran(now or now_tehran())
         last_price = snapshot.get("last_price")
         provider_time_str = snapshot.get("provider_timestamp")
 
-        delay_seconds = 0
-        status_flag = "🟢 Fresh"
+        delay_seconds = None
+        status_flag = "⚪ Unknown"
         warnings = []
 
         if provider_time_str:
             try:
-                delay_seconds = max(0, int((now - _to_tehran(provider_time_str)).total_seconds()))
+                delay_seconds = int((now - _to_tehran(provider_time_str)).total_seconds())
+                if delay_seconds < -5:
+                    warnings.append("زمان منبع از ساعت رایانه جلوتر است؛ ساعت یا تاریخ منبع را بررسی کنید.")
+                else:
+                    status_flag = "🟢 Fresh"
             except Exception:
-                delay_seconds = 0
+                warnings.append("زمان منبع معتبر نیست؛ تازگی داده نامعلوم است.")
 
             # فریز بودن سرور: تایم‌استمپ سرور با وجود گذشت زمان تغییر نکرده
             if self.last_seen_timestamps.get(symbol_fa) == provider_time_str:
                 warnings.append("⚠️ تایم‌استمپ سرور تغییر نکرده است (احتمال پاسخ کش‌شده سرور بورس).")
-                status_flag = "🟡 Delayed"
+                if status_flag == "🟢 Fresh":
+                    status_flag = "🟡 Delayed"
             self.last_seen_timestamps[symbol_fa] = provider_time_str
 
-        if delay_seconds > self.stale_threshold_seconds:
+        else:
+            warnings.append("تاریخ و زمان کامل منبع موجود نیست؛ تازگی داده نامعلوم است.")
+
+        if delay_seconds is not None and delay_seconds > self.stale_threshold_seconds:
             status_flag = "🔴 Stale / Frozen"
             warnings.append(f"تاخیر سرور ({delay_seconds} ثانیه) از آستانه مجاز بیشتر است.")
-        elif delay_seconds > self.delayed_threshold_seconds:
+        elif delay_seconds is not None and delay_seconds > self.delayed_threshold_seconds:
             status_flag = "🟡 Delayed"
 
         # جهش نامتعارف قیمت بین دو اسنپ‌شات (Bad Tick)
@@ -91,11 +100,11 @@ class DataFreshnessMonitor:
         return {
             "symbol": symbol_fa,
             "checked_at": now.strftime("%H:%M:%S"),
-            "provider_time": provider_time_str or now.isoformat(),
+            "provider_time": provider_time_str,
             "delay_seconds": delay_seconds,
             "status": status_flag,
             "last_price": last_price,
-            "buyer_power": bp if bp is not None else 1.0,
+            "buyer_power": bp,
             "warnings": warnings,
-            "is_healthy": status_flag == "🟢 Fresh",
+            "is_healthy": status_flag == "🟢 Fresh" and not warnings,
         }

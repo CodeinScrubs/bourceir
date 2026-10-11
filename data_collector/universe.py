@@ -37,26 +37,11 @@ class UniverseManager:
         تشخیص تقریبی سهم عادی فقط از روی نام/ISIN (برای وقتی که کد yVal در دسترس نیست).
         روش اصلی و دقیق، فیلتر yVal در TsetmcProvider.is_in_scope است.
         """
+        import re
+
         sym = normalize_symbol(symbol_fa)
-        if not sym:
-            return False
-        if sym[-1].isdigit():  # تابلوی بلوکی/عمده یا اوراق
-            return False
-        if len(sym) > 3 and sym.endswith("ح"):  # حق تقدم
-            return False
-        if sym.startswith(("اخزا", "اراد", "اشاد", "اجاد", "سلف", "گام", "تسه", "تملی", "صکوک")):
-            return False
-        if sym.startswith(("ض", "ط")) and any(ch.isdigit() for ch in sym):  # اختیار معامله
-            return False
-        funds = {
-            "دارا یکم", "پالایش", "اهرم", "توان", "فراز", "کاریس", "سرو", "جهش", "موج", "شتاب", "عیار",
-            "طلا", "گوهر", "کهربا", "زرفام", "تابان", "افق", "اعتماد", "امین", "یاقوت", "فیروزه",
-        }
-        if sym in {normalize_symbol(f) for f in funds}:
-            return False
-        if isin_code and not isin_code.strip().startswith("IRO"):
-            return False
-        return True
+        return bool(sym and not sym[-1:].isdigit() and isinstance(isin_code, str)
+                    and re.fullmatch(r"IRO[1357][A-Z0-9]{8}", isin_code))
 
     def sync_universe(self) -> Dict[str, int]:
         """

@@ -8,12 +8,14 @@
 - همه مایگریشن‌ها باید «تکرارپذیر» (idempotent) نوشته شوند تا روی دیتابیس‌های قدیمی هم امن باشند.
 """
 
+import hashlib
 import importlib.util
 import logging
 import re
 import sqlite3
 from pathlib import Path
 from typing import List, Optional, Tuple
+from uuid import uuid4
 
 from core.timeutils import now_tehran_iso
 
@@ -76,7 +78,7 @@ def backup_database(conn: sqlite3.Connection, db_path: Path) -> Optional[Path]:
     """تهیه نسخه پشتیبان کامل از دیتابیس (با API رسمی backup در SQLite) در data/backups."""
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = now_tehran_iso()[:19].replace(":", "").replace("-", "")
+    stamp = now_tehran_iso().replace(":", "").replace("-", "").replace("+", "_") + "-" + uuid4().hex[:8]
     target = backup_dir / f"{db_path.stem}-{stamp}-v{current_version(conn)}.db"
     dest = sqlite3.connect(target)
     try:
@@ -93,26 +95,51 @@ def _run_python_migration(conn: sqlite3.Connection, path: Path) -> None:
     spec.loader.exec_module(module)
     if not hasattr(module, "upgrade"):
         raise RuntimeError(f"مایگریشن {path.name} تابع upgrade(conn) ندارد")
-    with conn:
-        module.upgrade(conn)
+    module.upgrade(conn)
+
+
+def _run_sql_migration(conn: sqlite3.Connection, path: Path) -> None:
+    # executescript تراکنش باز را commit می‌کند؛ هر دستور باید در همان تراکنش اجرا شود.
+    pending = ""
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            conn.execute(pending)
+            pending = ""
+    if pending.strip() and any(not line.strip().startswith("--") for line in pending.splitlines() if line.strip()):
+        raise RuntimeError(f"دستور SQL ناتمام در {path.name}")
 
 
 def apply_migrations(conn: sqlite3.Connection) -> List[str]:
     """اعمال همه مایگریشن‌های اجرانشده به ترتیب. خروجی: نام مایگریشن‌های اعمال‌شده."""
     applied_now = []
-    version = current_version(conn)
+    current_version(conn)
+    with conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS migration_checksums (version INTEGER PRIMARY KEY, sha256 TEXT NOT NULL)")
+    recorded = {row[0]: row[1] for row in conn.execute("SELECT version,name FROM schema_migrations")}
     for number, name, path in discover_migrations():
-        if number <= version:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        checksum = conn.execute("SELECT sha256 FROM migration_checksums WHERE version=?", (number,)).fetchone()
+        if checksum and checksum[0] != digest:
+            raise RuntimeError(f"فایل مایگریشن اعمال‌شده تغییر کرده است: {path.name}")
+        if number in recorded:
+            if recorded[number] != name:
+                raise RuntimeError(f"نام مایگریشن با دیتابیس سازگار نیست: {path.name}")
+            # نسخه‌های قبل checksum نداشتند؛ مبنای محلی ثبت می‌شود، نه اثبات تاریخچه قدیمی.
+            with conn:
+                conn.execute("INSERT OR IGNORE INTO migration_checksums VALUES (?,?)", (number, digest))
             continue
         logger.info("اعمال مایگریشن %s ...", name)
-        if path.suffix == ".sql":
-            conn.executescript(path.read_text(encoding="utf-8"))
-        else:
-            _run_python_migration(conn, path)
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if path.suffix == ".sql":
+                _run_sql_migration(conn, path)
+            else:
+                _run_python_migration(conn, path)
             conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);",
                 (number, name, now_tehran_iso()),
             )
+            conn.execute("INSERT INTO migration_checksums VALUES (?,?)", (number, digest))
         applied_now.append(name)
     return applied_now

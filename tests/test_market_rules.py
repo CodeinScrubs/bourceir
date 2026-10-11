@@ -64,7 +64,7 @@ def test_vwap_is_clipped_to_day_range():
     df = pd.DataFrame({"low_raw": [100.0, 100.0], "high_raw": [110.0, 110.0],
                        "volume": [10, 0], "value": [1500.0, 0.0]})
     vwap = market_rules.daily_vwap(df)
-    assert vwap.iloc[0] == 110.0          # داده خراب (۱۵۰) به بیشترین قیمت روز محدود شد
+    assert pd.isna(vwap.iloc[0])          # داده خراب (۱۵۰) رد شد؛ قیمت جایگزین ساخته نشد
     assert pd.isna(vwap.iloc[1])          # روز بدون حجم میانگین ندارد
 
 

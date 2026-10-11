@@ -45,24 +45,29 @@ def is_trading_weekday(day: Union[date, datetime]) -> bool:
 
 def is_market_open(at: Optional[datetime] = None) -> bool:
     """آیا بازار در این لحظه (به وقت تهران) در ساعات معاملات است؟"""
-    at = (at or now_tehran()).astimezone(TEHRAN_TZ)
+    at = at or now_tehran()
+    at = at.replace(tzinfo=TEHRAN_TZ) if at.tzinfo is None else at.astimezone(TEHRAN_TZ)
     if not is_trading_weekday(at):
         return False
     start = _parse_hhmm(settings.TRADING_HOURS.get("start", "09:00"))
     end = _parse_hhmm(settings.TRADING_HOURS.get("end", "12:30"))
-    return start <= at.time() <= end
+    return start <= at.time() < end
 
 
 def deven_to_iso(deven: Union[int, str]) -> str:
     """تبدیل تاریخ عددی TSETMC (مثل 20261010) به YYYY-MM-DD."""
     s = str(int(deven))
-    return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+    if len(s) != 8:
+        raise ValueError("تاریخ TSETMC باید هشت رقم باشد")
+    return date(int(s[:4]), int(s[4:6]), int(s[6:])).isoformat()
 
 
 def heven_to_time(heven: Union[int, str]) -> str:
     """تبدیل ساعت عددی TSETMC (مثل 91530 یا 164657) به HH:MM:SS."""
     s = str(int(heven)).zfill(6)
-    return f"{s[0:2]}:{s[2:4]}:{s[4:6]}"
+    if len(s) != 6:
+        raise ValueError("ساعت TSETMC نامعتبر است")
+    return dtime(int(s[:2]), int(s[2:4]), int(s[4:])).isoformat()
 
 
 def to_jalali(gregorian: Union[str, date, datetime, None], with_time: bool = False, fa_digits: bool = True) -> str:

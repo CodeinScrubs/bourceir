@@ -21,6 +21,7 @@ from config import settings  # noqa: E402
 from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
+from data_collector.monitor import DataFreshnessMonitor, buyer_power  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
 from features.labels_fa import FEATURE_LABELS_FA, format_feature  # noqa: E402
 from features.store import load_manifest, load_symbol_features  # noqa: E402
@@ -82,13 +83,19 @@ def billion_toman(rial_value) -> float:
 
 @st.cache_data(ttl=60)
 def symbol_list() -> list:
-    return query_df("SELECT symbol_fa FROM symbols WHERE is_active = 1 ORDER BY symbol_fa;")["symbol_fa"].tolist()
+    with ro_db() as db:
+        return [s["symbol_fa"] for s in db.get_universe_symbols()]
 
 
 @st.cache_data(ttl=60)
 def market_pulse() -> dict:
     """نبض بازار در آخرین روز معاملاتی ثبت‌شده (فقط سهام داخل دامنه پروژه)."""
-    last = query_df("SELECT MAX(date) AS d FROM daily_prices WHERE source = 'tsetmc';")["d"].iloc[0]
+    with ro_db() as db:
+        ids = [s["id"] for s in db.get_universe_symbols()]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    last = query_df(f"SELECT MAX(date) AS d FROM daily_prices WHERE source='tsetmc' AND symbol_id IN ({placeholders});", tuple(ids))["d"].iloc[0]
     if not last:
         return {}
     df = query_df(
@@ -98,6 +105,9 @@ def market_pulse() -> dict:
         LEFT JOIN client_types_daily ct ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date
         WHERE dp.date = ? AND dp.source = 'tsetmc';
         """, (last,))
+    df = df[df["symbol_id"].isin(ids)]
+    if df.empty:
+        return {}
     flags = market_rules.lock_flags(df)
     ret = market_rules.pit_daily_returns(df)
     return {
@@ -135,12 +145,13 @@ def latest_snapshots() -> pd.DataFrame:
         return pd.DataFrame()
     day = last[:10]
     # بازه روی captured_at تا ایندکس استفاده شود ("~" بعد از همه ارقام و حرف T قرار می‌گیرد)
-    return query_df(
+    result = query_df(
         """
         SELECT s.symbol_fa, s.name_fa, sn.*
         FROM snapshots sn JOIN symbols s ON s.id = sn.symbol_id
         WHERE sn.id IN (SELECT MAX(id) FROM snapshots WHERE captured_at >= ? AND captured_at < ? GROUP BY symbol_id);
         """, (day, day + "~"))
+    return result[result["symbol_fa"].isin(symbol_list())]
 
 
 # ═══════════════════════════════════════════════
@@ -294,8 +305,8 @@ def page_symbol() -> None:
 
 
 @st.cache_data(ttl=300)
-def cached_symbol_features(symbol: str) -> pd.DataFrame:
-    return load_symbol_features(symbol)
+def cached_symbol_features(symbol: str, run_id=None) -> pd.DataFrame:
+    return load_symbol_features(symbol, run_id=run_id)
 
 
 def feature_panel(symbol: str) -> None:
@@ -305,7 +316,7 @@ def feature_panel(symbol: str) -> None:
         if not manifest:
             st.info("انبار فیچر هنوز ساخته نشده است. «به‌روزرسانی داده‌ها» آن را در پایان می‌سازد.")
             return
-        feats = cached_symbol_features(symbol)
+        feats = cached_symbol_features(symbol, manifest.get("run_id"))
         if feats.empty:
             st.info("برای این نماد فیچری ثبت نشده است.")
             return
@@ -333,8 +344,12 @@ def page_live() -> None:
         snaps = snaps.copy()
         snaps["change_pct"] = (snaps["close_price"] / snaps["ref_price"] - 1) * 100
         snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["close_price"] / 1e10
-        snaps["buyer_power"] = (snaps["real_buy_volume"] / snaps["real_buy_count"]) / (
-            snaps["real_sell_volume"] / snaps["real_sell_count"])
+        snaps["buyer_power"] = snaps.apply(lambda row: buyer_power(row.to_dict()), axis=1)
+        monitor = DataFreshnessMonitor(stale_threshold_seconds=settings.STALE_DATA_THRESHOLD_SECONDS)
+        health = [monitor.inspect_snapshot(r["symbol_fa"], r) for r in snaps.to_dict("records")]
+        snaps["freshness"] = [r["status"] for r in health]
+        snaps["delay_seconds"] = [r["delay_seconds"] for r in health]
+        st.caption("تاریخ و زمان کامل منبع اگر موجود نباشد، تازگی نامعلوم است. حجم مظنه روی سقف/کف، اثبات قفل صف یا امکان اجرا نیست.")
         view_filter = st.radio("نمایش", ["همه", "فقط صف خرید", "فقط صف فروش", "قدرت خریدار > ۲"], horizontal=True)
         if view_filter == "فقط صف خرید":
             snaps = snaps[snaps["buy_queue_volume"] > 0]
@@ -342,16 +357,21 @@ def page_live() -> None:
             snaps = snaps[snaps["sell_queue_volume"] > 0]
         elif view_filter == "قدرت خریدار > ۲":
             snaps = snaps[snaps["buyer_power"] > 2]
+        if snaps.empty:
+            st.info("نمادی با این فیلتر وجود ندارد.")
+            return
         snaps = snaps.sort_values("value", ascending=False)
         st.caption(f"آخرین ثبت: {to_jalali(snaps['captured_at'].max(), with_time=True)} — {to_fa_digits(len(snaps))} نماد")
         st.dataframe(pd.DataFrame({
             "نماد": snaps["symbol_fa"],
+            "تازگی منبع": snaps["freshness"],
+            "تاخیر (ثانیه)": snaps["delay_seconds"],
             "آخرین": snaps["last_price"],
             "پایانی": snaps["close_price"],
             "تغییر ٪": snaps["change_pct"].round(2),
             "صف خرید (حجم)": snaps["buy_queue_volume"],
             "صف فروش (حجم)": snaps["sell_queue_volume"],
-            "قدرت خریدار": snaps["buyer_power"].round(2),
+            "قدرت خریدار": pd.to_numeric(snaps["buyer_power"], errors="coerce").round(2),
             "پول حقیقی (م.ت)": snaps["real_flow_bt"].round(1),
             "ارزش (م.ت)": (snaps["value"] / 1e10).round(1),
         }), hide_index=True, width="stretch", height=600)

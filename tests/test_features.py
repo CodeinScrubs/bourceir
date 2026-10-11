@@ -119,7 +119,7 @@ def test_market_and_relative_features():
     assert market.loc["d1", "mkt_breadth"] == pytest.approx(2 / 3)
     assert market.loc["d2", "mkt_breadth"] == 0.0
     assert market.loc["d1", "mkt_locked_up_ratio"] == pytest.approx(1 / 3)
-    assert market.loc["d1", "mkt_real_flow_ratio"] == pytest.approx(5 / 300)
+    assert market.loc["d1", "mkt_real_flow_ratio"] == pytest.approx(5 / 200)
     rel = add_relative_features(panel).set_index(["date", "symbol"])
     assert rel.loc[("d1", "a"), "rel_ret_5d"] == pytest.approx(0.05)
 
@@ -128,7 +128,7 @@ def test_feature_store_build_and_load(db, tmp_path):
     for i, symbol in enumerate(["فولاد", "خودرو"]):
         prices, ct = synthetic_history(seed=i)
         sym_id = db.upsert_symbol({"symbol_fa": symbol, "ins_code": str(i), "instrument_type_code": 300})
-        db.upsert_daily_prices_df(sym_id, prices)
+        db.upsert_daily_prices_df(sym_id, prices, raw_provenance="tsetmc:daily")
         db.upsert_client_types_df(sym_id, ct)
     manifest = build_feature_store(db, root=tmp_path)
     assert manifest["rows"] == 2 * N_DAYS and manifest["symbols"] == 2

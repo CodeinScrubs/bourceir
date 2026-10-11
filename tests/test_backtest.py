@@ -16,7 +16,7 @@ def test_commissions_come_from_config():
 
 
 def test_backtest_commission_calculation():
-    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=0.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=100_000_000.0, default_slippage_bps=0.0)
     buy = engine.execute_buy("فولاد", price=10_000.0, quantity=1000, date="2026-10-01")
     assert buy.gross_value == 10_000_000.0
     assert buy.commission == pytest.approx(10_000_000.0 * 0.003712, abs=1.0)
@@ -31,7 +31,7 @@ def test_backtest_commission_calculation():
 
 
 def test_locked_queues_and_participation_cap():
-    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=20.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=100_000_000.0, default_slippage_bps=20.0)
     assert engine.execute_buy("خودرو", 5000.0, 1000, "2026-10-02", is_locked_limit_up=True) is None
     trade = engine.execute_buy("فولاد", 10_000.0, 5000, "2026-10-02", daily_volume=20_000)
     assert trade.quantity == 1000  # سقف ۵٪ حجم روز
@@ -42,13 +42,13 @@ def test_locked_queues_and_participation_cap():
 
 def test_fill_price_never_outside_day_range():
     """باگ نسخه قبل: لغزش، قیمت خرید را به ۳۸۸۳.۸۸ (بالاتر از سقف مجاز ۳۸۸۰) می‌رساند."""
-    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=10.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=100_000_000.0, default_slippage_bps=10.0)
     trade = engine.execute_buy("فولاد", 3880.0, 1000, "2026-10-06", day_low=3880.0, day_high=3880.0)
     assert trade.price == 3880.0
 
 
 def test_win_rate_accuracy_and_entry_date_after_reentry():
-    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=0.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=100_000_000.0, default_slippage_bps=0.0)
     engine.execute_buy("فولاد", 10_000.0, 1000, "2026-10-01")
     engine.execute_sell("فولاد", 12_000.0, 1000, "2026-10-02")
     engine.execute_buy("فولاد", 12_000.0, 1000, "2026-10-03")
@@ -61,7 +61,7 @@ def test_win_rate_accuracy_and_entry_date_after_reentry():
 
 def test_replay_executes_on_next_day_without_lookahead():
     """سیگنال در پایان روز t، اجرا در روز t+1."""
-    engine = BacktestEngine(initial_capital=50_000_000.0, default_slippage_bps=0.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=50_000_000.0, default_slippage_bps=0.0)
     df = pd.DataFrame([
         {"date": "2026-10-01", "close": 1000.0, "volume": 100_000},
         {"date": "2026-10-02", "close": 1050.0, "volume": 100_000},
@@ -113,7 +113,7 @@ def test_final_equity_is_mark_to_market():
         {"date": "d2", "close": 1000.0, "volume": 1_000_000},
         {"date": "d3", "close": 2000.0, "volume": 1_000_000},
     ])
-    engine = BacktestEngine(initial_capital=1_000_000.0, default_slippage_bps=0.0)
+    engine = BacktestEngine(allow_unverified_fills=True, initial_capital=1_000_000.0, default_slippage_bps=0.0)
     metrics = engine.run_replay_simulation(df, "x", lambda row, eng: "BUY" if row["date"] == "d1" else None)
     held = engine.positions["x"].quantity
     assert metrics.final_equity == pytest.approx(engine.cash + held * 2000.0)
@@ -126,7 +126,7 @@ def test_reproducibility():
     def strategy(row, eng):
         return "BUY" if row["date"] == "2026-10-01" else ("SELL" if row["date"] == "2026-10-03" else None)
 
-    runs = [BacktestEngine(initial_capital=10_000_000.0, default_slippage_bps=5.0).run_replay_simulation(df, "s", strategy)
+    runs = [BacktestEngine(allow_unverified_fills=True, initial_capital=10_000_000.0, default_slippage_bps=5.0).run_replay_simulation(df, "s", strategy)
             for _ in range(2)]
     assert runs[0].net_pnl == runs[1].net_pnl
     assert runs[0].final_equity == runs[1].final_equity

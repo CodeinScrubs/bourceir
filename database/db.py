@@ -193,8 +193,9 @@ class DatabaseManager:
                     existing = self.conn.execute("SELECT ins_code FROM symbols WHERE id = ?;", (row["id"],)).fetchone()
                     if existing["ins_code"] and existing["ins_code"] != ins_code:
                         # معمولاً یعنی انتقال نماد بین بازارها (مثلاً فرابورس به بورس) با شناسه جدید
-                        logger.warning("شناسه TSETMC نماد «%s» از %s به %s تغییر کرد.", symbol_fa,
+                        logger.error("تعارض شناسه TSETMC نماد «%s»: %s و %s؛ نگاشت باید بررسی شود.", symbol_fa,
                                        existing["ins_code"], ins_code)
+                        return None
                 updates = {k: v for k, v in fields.items() if v is not None}
                 updates.update({"symbol_fa": symbol_fa, "updated_at": now, "last_seen_at": now, "is_active": 1})
                 self.conn.execute(
@@ -256,7 +257,8 @@ class DatabaseManager:
             f"SELECT * FROM symbols WHERE is_active = 1 AND instrument_type_code IN ({placeholders}) "
             "ORDER BY symbol_fa ASC;", allowed,
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in rows if r["instrument_type"] == "stock" and (
+            not settings.UNIVERSE["exclude_block_boards"] or not r["symbol_fa"][-1:].isdigit())]
 
     # ═══════════════════════════════════════════════
     # قیمت‌های روزانه
@@ -266,8 +268,8 @@ class DatabaseManager:
     INSERT INTO daily_prices (
         symbol_id, date, open, high, low, close, adj_close, volume, value, trade_count,
         price_unit, source, captured_at,
-        open_raw, high_raw, low_raw, close_raw, close_final_raw, ref_price_raw, adjustment_factor
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        open_raw, high_raw, low_raw, close_raw, close_final_raw, ref_price_raw, adjustment_factor, raw_price_provenance
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(symbol_id, date, source) DO UPDATE SET
         open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close,
         volume = excluded.volume, value = excluded.value, trade_count = excluded.trade_count,
@@ -275,11 +277,12 @@ class DatabaseManager:
         open_raw = excluded.open_raw, high_raw = excluded.high_raw, low_raw = excluded.low_raw,
         close_raw = excluded.close_raw,
         close_final_raw = COALESCE(excluded.close_final_raw, daily_prices.close_final_raw),
-        ref_price_raw = COALESCE(excluded.ref_price_raw, daily_prices.ref_price_raw);
+        ref_price_raw = COALESCE(excluded.ref_price_raw, daily_prices.ref_price_raw),
+        raw_price_provenance = excluded.raw_price_provenance;
     """
 
     def upsert_daily_prices_df(self, symbol_id: int, df: pd.DataFrame, source: str = PRICE_SOURCE,
-                               recompute: bool = True) -> int:
+                               recompute: bool = True, raw_provenance: str = "unverified") -> int:
         """
         ثبت گروهی کندل‌های روزانه استاندارد (خروجی BaseDataProvider.get_symbol_history).
         رکورد موجود با داده تازه منبع به‌روز می‌شود. خروجی: تعداد ردیف‌های پردازش‌شده.
@@ -287,6 +290,11 @@ class DatabaseManager:
         """
         if df is None or df.empty:
             return 0
+        from core.validation import DataValidator
+
+        df, removed = DataValidator.validate_daily_dataframe(df)
+        if removed:
+            raise ValueError(f"{removed} رکورد روزانه نامعتبر یا متعارض در مرز ذخیره‌سازی")
         now = now_tehran_iso()
         params = []
         for row in df.itertuples(index=False):
@@ -297,7 +305,7 @@ class DatabaseManager:
                 symbol_id, r["date"], o, h, lo, c, None,
                 int(vol) if vol is not None else None, val, int(cnt) if cnt is not None else None,
                 settings.PRICE_UNIT, source, now,
-                o, h, lo, c, _none_if_nan(r.get("close_final_raw")), _none_if_nan(r.get("ref_price_raw")), 1.0,
+                o, h, lo, c, _none_if_nan(r.get("close_final_raw")), _none_if_nan(r.get("ref_price_raw")), 1.0, raw_provenance,
             ))
         with self.conn:
             self.conn.executemany(self._DAILY_UPSERT, params)
@@ -326,6 +334,14 @@ class DatabaseManager:
         h_raw = high_raw if high_raw is not None else high
         l_raw = low_raw if low_raw is not None else low
         c_raw = close_raw if close_raw is not None else close
+        from core.validation import DataValidator
+
+        valid, errors = DataValidator.validate_daily_candle({
+            "date": date, "open_raw": o_raw, "high_raw": h_raw, "low_raw": l_raw, "close_raw": c_raw,
+            "volume": volume, "value": value,
+        })
+        if not valid or price_unit != "Rial":
+            raise ValueError("; ".join(errors) or "واحد قیمت باید ریال باشد")
         try:
             with self.conn:
                 cur = self.conn.execute(
@@ -333,7 +349,7 @@ class DatabaseManager:
                     (symbol_id, date, o_raw, h_raw, l_raw, c_raw, adj_close, volume, value, trade_count,
                      price_unit, source, now_tehran_iso(),
                      o_raw, h_raw, l_raw, c_raw, close_final_raw, ref_price_raw,
-                     adjustment_factor if adjustment_factor is not None else 1.0),
+                     adjustment_factor if adjustment_factor is not None else 1.0, "unverified"),
                 )
                 if adj_close is not None or adjustment_factor is not None:
                     self.conn.execute(
@@ -371,7 +387,7 @@ class DatabaseManager:
 
     def get_daily_prices_df(self, symbol_fa: str, start_date: Optional[str] = None,
                             end_date: Optional[str] = None, raw_only: bool = True,
-                            source: str = PRICE_SOURCE) -> pd.DataFrame:
+                            source: str = PRICE_SOURCE, verified_only: bool = False) -> pd.DataFrame:
         """
         سابقه قیمت روزانه یک نماد. با raw_only=True (پیش‌فرض) ستون‌های تعدیل‌شده برگردانده نمی‌شوند
         تا به‌اشتباه وارد فیچرها نشوند (قانون ۱۰ AGENTS.md).
@@ -385,6 +401,8 @@ class DatabaseManager:
             cols += ", adj_close, adjustment_factor"
         query = f"SELECT {cols} FROM daily_prices WHERE symbol_id = ? AND source = ?"
         params: List[Any] = [sym_id, source]
+        if verified_only:
+            query += " AND raw_price_provenance IN ('tsetmc:daily','tsetmc:session')"
         if start_date:
             query += " AND date >= ?"
             params.append(start_date)
@@ -452,6 +470,11 @@ class DatabaseManager:
         values.setdefault("captured_at", now_tehran_iso())
         values.setdefault("source", "tsetmc")
         values.setdefault("price_unit", settings.PRICE_UNIT)
+        from core.validation import DataValidator
+
+        valid, errors = DataValidator.validate_snapshot(values)
+        if not valid or values["price_unit"] != "Rial":
+            raise ValueError("; ".join(errors) or "واحد قیمت باید ریال باشد")
         return [symbol_id] + [_none_if_nan(values.get(c)) for c in SNAPSHOT_COLUMNS]
 
     def _snapshot_query(self) -> str:
@@ -474,8 +497,8 @@ class DatabaseManager:
         if not params:
             return 0
         with self.conn:
-            self.conn.executemany(self._snapshot_query(), params)
-        return len(params)
+            cursor = self.conn.executemany(self._snapshot_query(), params)
+        return cursor.rowcount
 
     # ═══════════════════════════════════════════════
     # اطلاعیه‌های کدال و قضاوت‌های هوش مصنوعی
@@ -564,9 +587,9 @@ class DatabaseManager:
             logger.error("خطا در ثبت لاگ گردآوری: %s", e)
             return None
 
-    def insert_quality_metric(self, symbol_id: int, trade_date: str, completeness_score: float = 100.0,
+    def insert_quality_metric(self, symbol_id: int, trade_date: str, completeness_score: Optional[float] = None,
                               price_anomaly_flag: bool = False, volume_anomaly_flag: bool = False,
-                              quality_score: float = 100.0, notes: Optional[str] = None) -> bool:
+                              quality_score: Optional[float] = None, notes: Optional[str] = None) -> bool:
         try:
             with self.conn:
                 cur = self.conn.execute(
@@ -601,6 +624,8 @@ class DatabaseManager:
 
     def backup(self, keep: int = 5) -> Path:
         """نسخه پشتیبان کامل در data/backups (فقط keep نسخه آخر نگه داشته می‌شود)."""
+        if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+            raise ValueError("حداقل یک نسخه پشتیبان باید نگه داشته شود")
         target = backup_database(self.conn, self.db_path)
         backups = sorted((self.db_path.parent / "backups").glob(f"{self.db_path.stem}-*.db"))
         for old in backups[:-keep]:
@@ -653,7 +678,7 @@ class DatabaseManager:
             with self.conn:
                 cur = self.conn.execute(
                     """
-                    INSERT OR REPLACE INTO experiments (experiment_id, created_at, strategy_name, symbols_tested,
+                    INSERT INTO experiments (experiment_id, created_at, strategy_name, symbols_tested,
                         start_date, end_date, dataset_version, features_version, model_version,
                         parameters_json, metrics_json, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

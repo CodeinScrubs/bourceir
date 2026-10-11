@@ -35,7 +35,9 @@ def compute_market_features(panel: pd.DataFrame) -> pd.DataFrame:
         "mkt_symbols": grouped["symbol"].count(),
     })
     if {"real_net_value", "value"}.issubset(panel.columns):
-        flows = grouped[["real_net_value", "value"]].sum(min_count=1)
+        matched = panel[panel["real_net_value"].notna() & panel["value"].notna()]
+        flows = matched.groupby("date")[["real_net_value", "value"]].sum(min_count=1)
+        flows["value"] = flows["value"].where(flows["value"] > 0)
         covered = grouped["real_net_value"].count()
         # روزهایی که داده حقیقی/حقوقی کمتر از نیمی از نمادها منتشر شده، نامعتبر حساب می‌شوند
         market["mkt_real_flow_ratio"] = (flows["real_net_value"] / flows["value"]).where(covered >= 0.5 * market["mkt_symbols"])

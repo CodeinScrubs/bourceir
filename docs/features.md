@@ -1,18 +1,21 @@
 # انبار فیچر BRS (Feature Store) — فاز ۱-ب
 
+> به‌روزرسانی بازبینی ۲۰۲۶-۱۰-۱۱: قرارداد جدید، محدودیت‌ها و رفتار اصلاح‌شده در [foundation_review_fa.md](foundation_review_fa.md) ثبت شده است. مسیر نصب فعلی [windows_phase1_fa.md](windows_phase1_fa.md) است. ادعاهای اجرای قبلی این سند در این بازبینی مستقلاً تأیید نشده‌اند.
+
+
 فیچرها ورودی مدل‌های پیش‌بینی هستند. همه آن‌ها از داده خام Point-in-Time ساخته می‌شوند و **فیچر روز t فقط از داده
 تا پایان روز t** استفاده می‌کند (برای تصمیم معاملاتی روز t+1).
 
 ## ساخت و استفاده
 - ساخت خودکار: در پایان هر «به‌روزرسانی داده‌ها» (یا دستی: `python brs.py features`)
-- محل ذخیره: `data/features/<نسخه>/daily.parquet` + `manifest.json` (فهرست فیچرها، تعداد ردیف، پوشش هر فیچر)
+- محل ذخیره: `data/features/<نسخه>/<run_id>/daily.parquet` + `<run_id>/manifest.json` (فهرست فیچرها، تعداد ردیف، پوشش هر فیچر)
 - خواندن در کد:
 ```python
 from features.store import load_feature_store, load_symbol_features
 panel = load_feature_store()                 # همه نمادها: ستون‌های date، symbol و فیچرها
 foolad = load_symbol_features("فولاد")       # فقط یک نماد
 ```
-- نسخه فعلی: `daily-v1` (~۱.۵ میلیون ردیف، ۵۹۴ نماد). **هر تغییر در منطق فیچرها = نسخه جدید** در
+- نسخه فعلی: `daily-v2` (~۱.۵ میلیون ردیف، ۵۹۴ نماد). **هر تغییر در منطق فیچرها = نسخه جدید** در
   `features/daily.py` (`FEATURE_SET_VERSION`) تا آزمایش‌های قبلی قابل بازتولید بمانند.
 
 ## تضمین‌های کیفیت (آزمون خودکار در `tests/test_features.py`)

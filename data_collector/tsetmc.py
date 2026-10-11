@@ -13,7 +13,7 @@
 
 import logging
 import time
-from datetime import timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -253,6 +253,10 @@ class TsetmcProvider(BaseDataProvider):
         })
         # روزهای بدون معامله (توقف نماد) کندل ندارند
         df = df[df["volume"] > 0].sort_values("date").reset_index(drop=True)
+        now = now_tehran()
+        df = df[df["date"] <= now.date().isoformat()]
+        if now.strftime("%H:%M") < "13:00":
+            df = df[df["date"] < now.date().isoformat()]
         df, removed = DataValidator.validate_daily_dataframe(df)
         if removed:
             logger.warning("نماد %s: %d رکورد نامعتبر حذف شد.", ins_code, removed)
@@ -300,16 +304,15 @@ class TsetmcProvider(BaseDataProvider):
         return {str(r["insCode"]): r for r in (data or {}).get("clientTypeAllDto", [])}
 
     @staticmethod
-    def _provider_timestamp(heven: Any) -> Optional[str]:
-        """زمان آخرین به‌روزرسانی سرور؛ اگر از ساعت فعلی جلوتر باشد، متعلق به روز معاملاتی قبل است."""
-        if not heven:
+    def _provider_timestamp(heven: Any, deven: Any = None) -> Optional[str]:
+        """ساعت بدون تاریخ منبع کافی نیست؛ تاریخ امروز/دیروز هرگز حدس زده نمی‌شود."""
+        if not heven or not deven:
             return None
-        now = now_tehran()
-        hh, mm, ss = (int(p) for p in heven_to_time(heven).split(":"))
-        stamp = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
-        if stamp > now + timedelta(minutes=1):
-            stamp -= timedelta(days=1)
-        return stamp.astimezone(TEHRAN_TZ).isoformat()
+        try:
+            stamp = datetime.fromisoformat(f"{deven_to_iso(deven)}T{heven_to_time(heven)}")
+            return stamp.replace(tzinfo=TEHRAN_TZ).isoformat()
+        except (ValueError, TypeError, OverflowError):
+            return None
 
     @classmethod
     def snapshot_from_market_watch(cls, row: Dict[str, Any], client_type: Optional[Dict[str, Any]],
@@ -319,7 +322,7 @@ class TsetmcProvider(BaseDataProvider):
             "ins_code": str(row.get("insCode")),
             "symbol_fa": normalize_symbol(row.get("lva", "")),
             "captured_at": captured_at,
-            "provider_timestamp": cls._provider_timestamp(row.get("hEven")),
+            "provider_timestamp": cls._provider_timestamp(row.get("hEven"), row.get("dEven")),
             "last_trade_time": heven_to_time(row["hEven"]) if row.get("hEven") else None,
             "last_price": row.get("pdv"),
             "close_price": row.get("pcl"),
@@ -348,8 +351,9 @@ class TsetmcProvider(BaseDataProvider):
             snap[f"ask_count_{n}"] = level.get("zmo")
         # صف خرید/فروش فقط وقتی معنا دارد که بهترین مظنه روی سقف/کف دامنه نوسان باشد
         limit_up, limit_down = snap["price_limit_up"], snap["price_limit_down"]
-        snap["buy_queue_volume"] = snap.get("bid_vol_1") if limit_up and snap.get("bid_price_1") == limit_up else 0
-        snap["sell_queue_volume"] = snap.get("ask_vol_1") if limit_down and snap.get("ask_price_1") == limit_down else 0
+        for side, limit, field in (("bid", limit_up, "buy_queue_volume"), ("ask", limit_down, "sell_queue_volume")):
+            price, volume = snap.get(f"{side}_price_1"), snap.get(f"{side}_vol_1")
+            snap[field] = None if not limit or price is None or volume is None else (volume if price == limit else 0)
         if client_type:
             snap.update({
                 "real_buy_volume": client_type.get("buy_I_Volume"),
@@ -392,11 +396,11 @@ class TsetmcProvider(BaseDataProvider):
         return {"date": market_date, "candles": candles}
 
     def get_market_snapshots(self) -> Optional[List[Dict[str, Any]]]:
-        captured_at = now_tehran_iso()
         data = self._get_json(MARKET_WATCH_STOCKS, rate_limit=False)
         if not data:
             return None
         client_types = self.get_client_types_today()
+        captured_at = now_tehran_iso()  # داده فقط بعد از دریافت هر دو پاسخ در دسترس ماست
         return [
             self.snapshot_from_market_watch(row, client_types.get(str(row.get("insCode"))), captured_at)
             for row in data.get("marketwatch", [])

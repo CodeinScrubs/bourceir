@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from config import settings
+from core.text import normalize_symbol
 from core.timeutils import is_market_open, now_tehran, now_tehran_iso
 from data_collector.base import DAILY_COLUMNS, BaseDataProvider
 from data_collector.codal import CodalProvider
@@ -57,10 +58,7 @@ class DataCollector:
 
     @staticmethod
     def _fingerprint(snap: Dict[str, Any]) -> tuple:
-        return tuple(snap.get(k) for k in (
-            "trade_count", "last_price", "close_price", "bid_price_1", "bid_vol_1", "ask_price_1", "ask_vol_1",
-            "real_buy_volume", "real_sell_volume",
-        ))
+        return tuple(sorted((k, v) for k, v in snap.items() if k != "captured_at"))
 
     # ═══════════════════════════════════════════════
     # کمکی‌ها
@@ -79,7 +77,8 @@ class DataCollector:
         """یافتن نماد در دیتابیس با ins_code؛ در صورت نبود، جستجو در منبع داده و ثبت."""
         sym = self.db.get_symbol(symbol_fa)
         if sym and sym.get("ins_code"):
-            return sym
+            return sym if sym["is_active"] and TsetmcProvider.is_in_scope(
+                sym["symbol_fa"], sym.get("instrument_type_code")) else None
         meta = self.provider.search_symbol(symbol_fa)
         if not meta:
             return None
@@ -104,6 +103,11 @@ class DataCollector:
             "errors": errors, "status": status,
         }
         report.update(extra or {})
+        if extra:
+            import json
+            with self.db.conn:
+                self.db.conn.execute("UPDATE collection_log SET details_json=? WHERE id=last_insert_rowid()",
+                                     (json.dumps({k: v for k, v in extra.items() if k != "snapshots"}, ensure_ascii=False),))
         logger.info("گردآوری «%s» پایان یافت: %s (موفق %d، ناموفق %d)", collection_type, status, succeeded, failed)
         return report
 
@@ -146,8 +150,10 @@ class DataCollector:
         if (now_tehran().date() - date.fromisoformat(last)).days > INCREMENTAL_MAX_GAP_DAYS:
             return None
         missing = self.db.conn.execute(
-            "SELECT date FROM daily_prices WHERE symbol_id = ? AND source = 'tsetmc' AND date > ? ORDER BY date;",
-            (symbol_id, last),
+            "SELECT dp.date FROM daily_prices dp LEFT JOIN client_types_daily ct "
+            "ON ct.symbol_id=dp.symbol_id AND ct.date=dp.date "
+            "WHERE dp.symbol_id=? AND dp.source='tsetmc' AND (ct.id IS NULL OR dp.date>=?) ORDER BY dp.date;",
+            (symbol_id, last),  # آخرین روز نیز دوباره خوانده می‌شود؛ آمار حقیقی/حقوقی ممکن است اصلاح شود
         ).fetchall()
         return [r["date"] for r in missing] or []
 
@@ -173,12 +179,13 @@ class DataCollector:
                     errors.append(f"عدم دریافت تاریخچه «{sym}»")
                     failed += 1
                     continue
-                rows_saved += self.db.upsert_daily_prices_df(meta["id"], df)
+                rows_saved += self.db.upsert_daily_prices_df(meta["id"], df, raw_provenance="tsetmc:daily")
 
                 flags = DataValidator.quant_anomaly_flags(df)
                 flagged = df.index[flags["price_anomaly"] | flags["volume_anomaly"]]
                 anomalies += self.db.insert_quality_metrics_bulk([{
-                    "symbol_id": meta["id"], "trade_date": df.at[idx, "date"], "quality_score": 70.0,
+                    "symbol_id": meta["id"], "trade_date": df.at[idx, "date"], "quality_score": None,
+                    "completeness_score": None,
                     "price_anomaly_flag": int(flags.at[idx, "price_anomaly"]),
                     "volume_anomaly_flag": int(flags.at[idx, "volume_anomaly"]),
                     "notes": "ناهنجاری کمی در تاریخچه روزانه",
@@ -207,7 +214,7 @@ class DataCollector:
             return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
                     "symbols_failed": 0, "errors": [], "message": "معاملات امروز هنوز نهایی نشده است (بعد از ساعت ۱۳)."}
 
-        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
         saved = rejected = 0
         for candle in result["candles"]:
             sym = known.get(candle["ins_code"])
@@ -217,7 +224,7 @@ class DataCollector:
             if df.empty:
                 rejected += 1
                 continue
-            self.db.upsert_daily_prices_df(sym["id"], df, recompute=False)
+            self.db.upsert_daily_prices_df(sym["id"], df, recompute=False, raw_provenance="tsetmc:session")
             prev_close = self.db.previous_close_final(sym["id"], candle["date"])
             ref = candle.get("ref_price_raw")
             if prev_close and ref and abs(ref / prev_close - 1.0) > 1e-6:
@@ -258,11 +265,11 @@ class DataCollector:
         """
         started_at = now_tehran_iso()
         snapshots = self.provider.get_market_snapshots()
-        if snapshots is None:
+        if not snapshots:
             return self._finish("snapshot", started_at, 0, 0, 1, ["دیده‌بان بازار از TSETMC دریافت نشد"])
 
-        wanted = set(symbols) if symbols else None
-        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        wanted = {normalize_symbol(s) for s in symbols} if symbols else None
+        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
         rows, errors = [], []
         rejected = unchanged = 0
         for snap in snapshots:
@@ -273,16 +280,19 @@ class DataCollector:
             if self._last_fingerprints.get(snap["ins_code"]) == fingerprint:
                 unchanged += 1
                 continue
-            self._last_fingerprints[snap["ins_code"]] = fingerprint
             is_valid, snap_errors = DataValidator.validate_snapshot(snap)
             if not is_valid:
                 rejected += 1
                 errors.append(f"{sym['symbol_fa']}: {'; '.join(snap_errors)}")
-                self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=50.0,
-                                              quality_score=40.0, notes="; ".join(snap_errors))
+                self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=None,
+                                              quality_score=None, notes="; ".join(snap_errors))
                 continue
             rows.append((sym["id"], snap))
         saved = self.db.insert_snapshots_bulk(rows)
+        for _, snap in rows:
+            self._last_fingerprints[snap["ins_code"]] = self._fingerprint(snap)
+        if not rows and not unchanged and not rejected:
+            return self._finish("snapshot", started_at, 0, 0, 1, ["هیچ سهم هدفی در پاسخ دیده‌بان نبود"])
         return self._finish("snapshot", started_at, saved + rejected, saved, rejected, errors,
                             {"market_rows": len(snapshots), "unchanged_skipped": unchanged,
                              "snapshots": [s for _, s in rows]})
@@ -315,7 +325,7 @@ class DataCollector:
         letters = self.codal.get_latest(pages=pages, symbol_fa=symbol_fa)
         if not letters:
             return self._finish("codal", started_at, 0, 0, 1, ["اطلاعیه‌ای از کدال دریافت نشد"])
-        tracked = {s["symbol_fa"] for s in self.db.get_all_symbols()}
+        tracked = {s["symbol_fa"] for s in self.db.get_universe_symbols()}
         in_scope = [letter for letter in letters if letter["symbol_fa"] in tracked]
         inserted = self.db.upsert_announcements(in_scope)
         return self._finish("codal", started_at, len(letters), len(in_scope), 0, [],

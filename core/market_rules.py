@@ -57,18 +57,18 @@ def reference_price(df: pd.DataFrame) -> pd.Series:
     """قیمت مرجع روز؛ در نبود آن، قیمت پایانی روز معاملاتی قبل."""
     prev_close = official_close(df).shift(1)
     if "ref_price_raw" in df.columns:
-        return df["ref_price_raw"].where(df["ref_price_raw"] > 0).fillna(prev_close)
+        return df["ref_price_raw"].where(df["ref_price_raw"] > 0)
     return prev_close
 
 
 def daily_vwap(df: pd.DataFrame) -> pd.Series:
     """
     میانگین موزون قیمت روز = ارزش معاملات ÷ حجم (قیمت واقع‌بینانه برای کسی که در طول روز معامله می‌کند).
-    به بازه [کمترین، بیشترین] روز محدود می‌شود تا داده خراب قیمت غیرممکن تولید نکند.
+    اگر بیرون بازه [کمترین، بیشترین] باشد، نامعتبر است؛ عدد خراب با قیمت ساختگی جایگزین نمی‌شود.
     """
     volume = df["volume"].astype(float)
     vwap = (df["value"].astype(float) / volume).where(volume > 0)
-    return vwap.clip(lower=df["low_raw"], upper=df["high_raw"])
+    return vwap.where(vwap.between(df["low_raw"], df["high_raw"]))
 
 
 # ═══════════════════════════════════════════════

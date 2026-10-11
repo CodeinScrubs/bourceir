@@ -17,9 +17,11 @@
 """
 
 import argparse
+import json
 import logging
 import sys
 import time
+from dataclasses import asdict
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -40,7 +42,15 @@ logger = logging.getLogger("brs")
 
 
 def setup_logging(verbose: bool = False, command: str = "brs") -> None:
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    from datetime import datetime
+
+    from core.timeutils import TEHRAN_TZ
+
+    class TehranFormatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):
+            return datetime.fromtimestamp(record.created, TEHRAN_TZ).strftime(datefmt or "%Y-%m-%d %H:%M:%S%z")
+
+    fmt = TehranFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     # حداکثر ۵ فایل ۵ مگابایتی؛ هر دستور فایل جدا دارد تا اجرای هم‌زمان (پایش زنده + به‌روزرسانی)
     # در ویندوز هنگام چرخش فایل لاگ تداخل نداشته باشد
     file_handler = RotatingFileHandler(settings.LOG_DIR / f"brs-{command}.log", maxBytes=5 * 1024 * 1024,
@@ -77,8 +87,19 @@ def _print_report(title: str, report: dict) -> None:
 def cmd_doctor(args) -> int:
     from ops.doctor import ERROR, format_report, run_doctor
 
-    report = run_doctor(include_network=not args.offline)
+    if not 1 <= args.timeout <= 120:
+        raise ValueError("مهلت درخواست باید بین ۱ تا ۱۲۰ ثانیه باشد")
+    settings.REQUEST_TIMEOUT_SECONDS = args.timeout
+    report = run_doctor(include_network=not args.offline, market_only=args.market_only)
     print(format_report(report))
+    if args.json:
+        from core.timeutils import now_tehran_iso
+        target = Path(args.json)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"checked_at": now_tehran_iso(), "platform": sys.platform,
+                   "python": sys.version, "network_tested": not args.offline,
+                   "overall": report.worst, "checks": [asdict(check) for check in report.checks]}
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return 1 if report.worst == ERROR else 0
 
 
@@ -91,10 +112,12 @@ def cmd_update(args) -> int:
     titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
     for key, report in reports.items():
         _print_report(titles.get(key, key), report)
-    if not args.symbols and not args.no_features:
+    if not args.symbols and not args.no_features and all(
+        r.get("status") not in {"failed", "partial"} for r in reports.values()
+    ):
         _build_features(collector.db)
     collector.db.close()
-    return 0 if all(r.get("status") != "failed" for r in reports.values()) else 1
+    return 0 if all(r.get("status") not in {"failed", "partial"} for r in reports.values()) else 1
 
 
 def _build_features(db) -> dict:
@@ -123,39 +146,51 @@ def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector()
-    _print_report("جامعه سهام", collector.sync_universe())
+    report = collector.sync_universe()
+    _print_report("جامعه سهام", report)
     collector.db.close()
-    return 0
+    return 0 if report["status"] == "success" else 1
 
 
 def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
 
+    if args.interval < 1 or args.cycles < 0:
+        raise ValueError("فاصله باید مثبت و تعداد چرخه نامنفی باشد")
     collector = DataCollector(symbols=_symbols(args.symbols))
     if not collector.db.get_universe_symbols() and not args.symbols:
         print("⚠️ جامعه سهام هنوز ثبت نشده؛ ابتدا همگام‌سازی انجام می‌شود...", flush=True)
         collector.sync_universe()
     cycles = 0
+    failed = False
     print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
     try:
         while True:
+            started = time.monotonic()
+            cycles += 1
             now = now_tehran().strftime("%H:%M:%S")
-            if not args.force and not is_market_open():
+            calendar = collector.db.conn.execute("SELECT is_trading_day FROM market_calendar WHERE calendar_date=?",
+                                                  (now_tehran().date().isoformat(),)).fetchone()
+            closed = not is_market_open() or (calendar is not None and not calendar[0])
+            if not args.force and closed:
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
             else:
-                report = collector.collect_market_snapshot(symbols=_symbols(args.symbols))
-                print(f"[{now}] ✅ ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
+                report = collector.collect_snapshots(symbols=_symbols(args.symbols)) if args.symbols else collector.collect_market_snapshot()
+                failed = failed or report["status"] in {"failed", "partial"}
+                print(f"[{now}] {report['status']} | ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
                       f"{report.get('unchanged_skipped', 0)} | رد شده {report['symbols_failed']}", flush=True)
-                cycles += 1
             if args.cycles and cycles >= args.cycles:
                 break
-            time.sleep(args.interval)
+            elapsed = time.monotonic() - started
+            if elapsed > args.interval:
+                logger.warning("چرخه دریافت %.1f ثانیه طول کشید؛ فاصله هدف %s ثانیه قابل تحقق نبود", elapsed, args.interval)
+            time.sleep(max(0, args.interval - elapsed))
     except KeyboardInterrupt:
         print("\n🛑 پایش زنده متوقف شد.")
     finally:
         collector.db.close()
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_codal(args) -> int:
@@ -188,7 +223,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("doctor", help="بررسی سلامت سامانه")
-    p.add_argument("--offline", action="store_true", help="بدون آزمایش اتصال اینترنت")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--offline", action="store_true", help="بدون آزمایش اتصال اینترنت")
+    mode.add_argument("--market-only", action="store_true", help="فقط فید TSETMC؛ بدون بررسی سرویس هوش مصنوعی")
+    p.add_argument("--json", default="", help="مسیر ذخیره گزارش JSON عیب‌یابی")
+    p.add_argument("--timeout", type=float, default=20, help="مهلت اتصال/خواندن هر درخواست شبکه به ثانیه")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("update", help="به‌روزرسانی همه داده‌ها")

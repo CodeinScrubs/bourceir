@@ -81,12 +81,14 @@ class PerformanceMetrics:
     win_rate: float = 0.0              # درصد معاملات برنده (۰ تا ۱۰۰)
     gross_profit: float = 0.0          # مجموع سود معاملات برنده (ریال، خالص از کارمزد)
     gross_loss: float = 0.0            # مجموع زیان معاملات بازنده (ریال، خالص از کارمزد)
-    net_pnl: float = 0.0               # سود یا زیان خالص معاملات بسته‌شده (ریال)
-    profit_factor: float = 0.0         # نسبت سود به زیان
+    net_pnl: float = 0.0               # تغییر ارزش کل پرتفوی (تحقق‌یافته و باز)
+    profit_factor: Optional[float] = None         # نسبت سود به زیان
     expectancy_pct: float = 0.0        # امید ریاضی: میانگین بازده خالص هر معامله (درصد)
     max_drawdown_pct: float = 0.0      # حداکثر افت سرمایه (درصد)
     total_commissions_paid: float = 0.0
-    sharpe_ratio: float = 0.0          # نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری)
+    sharpe_ratio: Optional[float] = None          # نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری)
+    realized_pnl: float = 0.0
+    unverified_fill_mode: bool = False
     initial_capital: float = 0.0
     final_equity: float = 0.0          # ارزش نهایی پرتفوی به قیمت روز (Mark-to-Market)
     total_return_pct: float = 0.0

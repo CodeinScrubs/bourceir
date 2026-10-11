@@ -18,7 +18,7 @@ import pandas as pd
 
 from core import market_rules
 
-FEATURE_SET_VERSION = "daily-v1"  # هر تغییر در منطق فیچرها → نسخه جدید
+FEATURE_SET_VERSION = "daily-v2"  # هر تغییر در منطق فیچرها → نسخه جدید
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -51,10 +51,16 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     """
     محاسبه فیچرهای روزانه یک نماد. همه عملیات علّی (causal) هستند: rolling و ewm روی گذشته، shift مثبت.
     """
+    if prices["date"].duplicated().any() or (client_types is not None and client_types["date"].duplicated().any()):
+        raise ValueError("برای هر نماد و تاریخ فقط یک ورودی فیچر مجاز است")
     df = prices.sort_values("date").reset_index(drop=True)
     out = pd.DataFrame({"date": df["date"]})
     if df.empty:
         return out.reindex(columns=["date"] + DAILY_FEATURES)
+
+    for col in ("close_final_raw", "ref_price_raw"):
+        if col not in df or not (pd.to_numeric(df[col], errors="coerce").gt(0) & np.isfinite(df[col])).all():
+            raise ValueError(f"فیچر بدون مقدار معتبر {col} ساخته نمی‌شود")
 
     # ─── بازده و شاخص بازده بدون جهش اقدام شرکتی ───
     ret = market_rules.pit_daily_returns(df)
@@ -76,7 +82,8 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
     out["rsi_14d"] = 100.0 - 100.0 / (1.0 + _safe_div(avg_gain, avg_loss))
-    out.loc[(avg_loss == 0) & avg_gain.notna(), "rsi_14d"] = 100.0
+    out.loc[(avg_loss == 0) & (avg_gain > 0), "rsi_14d"] = 100.0
+    out.loc[(avg_loss == 0) & (avg_gain == 0), "rsi_14d"] = 50.0
 
     # ─── موقعیت نسبت به میانگین و سقف/کف (روی شاخص بازده) ───
     out["dist_sma_20d"] = index / index.rolling(20, min_periods=15).mean() - 1.0

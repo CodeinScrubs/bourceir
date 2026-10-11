@@ -11,6 +11,7 @@
 """
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -37,6 +38,8 @@ if load_dotenv is not None:
 
 # تعیین محیط اجرا (development یا production)
 ENV = os.getenv("BRS_ENV", "development").lower()
+if ENV not in {"development", "production"}:
+    raise ValueError("BRS_ENV باید development یا production باشد")
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,19 +54,49 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
-    if yaml is None or not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        logger.warning("خطا در خواندن فایل تنظیمات %s: %s — از مقادیر پیش‌فرض استفاده می‌شود.", path, e)
-        return {}
+    if yaml is None:
+        raise RuntimeError("PyYAML نصب نیست؛ SETUP.bat را اجرا کنید")
+    with path.open(encoding="utf-8") as stream:
+        value = yaml.safe_load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"تنظیمات {path.name} باید نگاشت کلید و مقدار باشد")
+    return value
+
+
+def validate_config(config):
+    for key in ("project", "market", "universe", "data_collection", "fees", "backtest", "governance", "ai"):
+        if not isinstance(config.get(key), dict):
+            raise ValueError(f"بخش تنظیمات نامعتبر: {key}")
+    for key in ("enforce_point_in_time", "prevent_lookahead_bias"):
+        if config["governance"].get(key) is not True:
+            raise ValueError(f"حفاظت {key} باید فعال باشد")
+    market = config["market"]
+    if market.get("timezone") != "Asia/Tehran" or market.get("price_unit") != "Rial":
+        raise ValueError("واحد ریال و منطقه زمانی تهران الزامی است")
+    universe = config["universe"]
+    if universe.get("instrument_types") != [300, 303]:
+        raise ValueError("دامنه پایه فقط سهام بورس و فرابورس است")
+    for key in ("include_base_market", "include_sme_market", "exclude_block_boards"):
+        if not isinstance(universe.get(key), bool):
+            raise ValueError(f"مقدار {key} باید true یا false باشد")
+    for section, key, low, high in (
+        ("fees", "buy", 0, 1), ("fees", "sell", 0, 1),
+        ("backtest", "max_volume_participation_pct", 0.000001, 0.05),
+        ("backtest", "initial_capital", 1, float("inf")),
+        ("backtest", "default_slippage_bps", 0, 10000),
+        ("data_collection", "request_timeout_seconds", 0.1, 120),
+        ("data_collection", "polling_interval_seconds", 1, 3600),
+        ("data_collection", "max_retries", 0, 5),
+    ):
+        value = config[section].get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+            raise ValueError(f"مقدار نامعتبر {section}.{key}")
 
 
 CONFIG: Dict[str, Any] = _load_yaml(CONFIG_DIR / "default.yaml")
 if ENV == "production":
     CONFIG = _deep_merge(CONFIG, _load_yaml(CONFIG_DIR / "production.yaml"))
+validate_config(CONFIG)
 
 _project = CONFIG.get("project", {})
 _market = CONFIG.get("market", {})
@@ -75,9 +108,9 @@ _ai = CONFIG.get("ai", {})
 
 # ─── پروژه و مسیرها ───
 PROJECT_NAME = _project.get("name", "BRS Quant Engine")
-VERSION = str(_project.get("version", "0.5.0"))
-DATA_DIR = BASE_DIR / "data"
-LOG_DIR = BASE_DIR / "logs"
+VERSION = str(_project.get("version", "0.5.1"))
+DATA_DIR = Path(os.getenv("BRS_DATA_DIR", str(BASE_DIR / "data")))
+LOG_DIR = Path(os.getenv("BRS_LOG_DIR", str(BASE_DIR / "logs")))
 # امکان تغییر مسیر دیتابیس با متغیر محیطی (برای تست‌ها و محیط‌های جدا)
 DB_PATH = Path(os.getenv("BRS_DB_PATH", str(DATA_DIR / "brs.db")))
 

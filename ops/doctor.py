@@ -58,9 +58,9 @@ class DoctorReport:
 
 
 def _timed_get(url: str, timeout: float = 20.0):
-    started = time.time()
+    started = time.monotonic()
     response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (BRS Doctor)"})
-    return response, time.time() - started
+    return response, time.monotonic() - started
 
 
 def check_python(report: DoctorReport) -> None:
@@ -68,13 +68,13 @@ def check_python(report: DoctorReport) -> None:
     if (v.major, v.minor) == (3, 11):
         report.add("نسخه پایتون", OK, f"{v.major}.{v.minor}.{v.micro}")
     else:
-        report.add("نسخه پایتون", WARN, f"{v.major}.{v.minor}.{v.micro}",
+        report.add("نسخه پایتون", ERROR, f"{v.major}.{v.minor}.{v.micro}",
                    "نسخه استاندارد پروژه پایتون 3.11 است. SETUP.bat را دوباره اجرا کنید.")
 
 
 def check_packages(report: DoctorReport) -> None:
     missing = []
-    for module in ("pandas", "numpy", "requests", "streamlit", "yaml", "jdatetime", "dotenv", "typesafe_sdk"):
+    for module in ("pandas", "numpy", "requests", "streamlit", "yaml", "jdatetime", "dotenv", "typesafe_sdk", "psutil", "pyarrow"):
         try:
             importlib.import_module(module)
         except ImportError:
@@ -90,15 +90,12 @@ def check_tsetmc(report: DoctorReport) -> Optional[datetime]:
     from data_collector.tsetmc import MARKET_WATCH_STOCKS
 
     try:
-        # سرور TSETMC گاهی یک پاسخ را دیر می‌دهد؛ بهترین زمان از دو تلاش ملاک است
         response, elapsed = _timed_get(MARKET_WATCH_STOCKS, timeout=settings.REQUEST_TIMEOUT_SECONDS)
-        if elapsed > 5:
-            response, elapsed = min(
-                (response, elapsed), _timed_get(MARKET_WATCH_STOCKS, timeout=settings.REQUEST_TIMEOUT_SECONDS),
-                key=lambda item: item[1],
-            )
         response.raise_for_status()
-        count = len(response.json().get("marketwatch", []))
+        rows = response.json().get("marketwatch")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("پاسخ دیده‌بان خالی یا نامعتبر است")
+        count = len(rows)
         if elapsed > 5:
             report.add("اتصال به TSETMC", WARN, f"کند: {elapsed:.1f} ثانیه ({count} نماد)",
                        "اگر این کندی همیشگی است: " + IRANIAN_SITE_HINT.format(domain="*.tsetmc.com"))
@@ -176,6 +173,12 @@ def check_database(report: DoctorReport) -> None:
                        "برنامه را ببندید و آخرین نسخه پشتیبان از پوشه data/backups را جایگزین data/brs.db کنید.")
         latest = discover_migrations()[-1][0]
         version = db.schema_version()
+        violations = db.conn.execute("PRAGMA foreign_key_check").fetchall()
+        report.add("رابطه‌های دیتابیس", ERROR if violations else OK, f"{len(violations)} رابطه نامعتبر")
+        unverified = db.conn.execute("SELECT COUNT(*) FROM daily_prices WHERE raw_price_provenance='unverified'").fetchone()[0]
+        if unverified:
+            report.add("منشأ داده خام", WARN, f"{unverified} ردیف قدیمی با منشأ تأییدنشده",
+                       "برای ورود به پژوهش دوباره از منبع دریافت کنید: python brs.py update --full")
         counts = db.table_counts()
         universe = len(db.get_universe_symbols())
         status = OK if version == latest else ERROR
@@ -198,7 +201,7 @@ def check_database(report: DoctorReport) -> None:
         db.close()
 
 
-def run_doctor(include_network: bool = True) -> DoctorReport:
+def run_doctor(include_network: bool = True, market_only: bool = False) -> DoctorReport:
     report = DoctorReport()
     check_python(report)
     check_packages(report)
@@ -206,8 +209,12 @@ def run_doctor(include_network: bool = True) -> DoctorReport:
     if include_network:
         server_time = check_tsetmc(report)
         check_clock(report, server_time)
-        check_codal(report)
-        check_jev(report)
+        if not market_only:
+            check_codal(report)
+            check_jev(report)
+    else:
+        report.add("دسترسی به منابع بازار", WARN, "آزمایش نشده (اجرای آفلاین)",
+                   "برای بررسی فید، doctor --market-only را اجرا کنید؛ نصب محلی، دسترسی بازار را ثابت نمی‌کند.")
     return report
 
 
@@ -218,7 +225,7 @@ def format_report(report: DoctorReport) -> str:
         if c.hint and c.status != OK:
             lines.append(f"   💡 {c.hint}")
     lines.append("=" * 60)
-    summary = {OK: "همه چیز آماده است ✅", WARN: "سامانه کار می‌کند ولی چند هشدار دارد ⚠️",
+    summary = {OK: "بررسی‌های اجراشده موفق بودند ✅", WARN: "بررسی با هشدار یا بخش آزمایش‌نشده تمام شد ⚠️",
                ERROR: "مشکل جدی وجود دارد؛ راه‌حل‌های بالا را انجام دهید ❌"}
     lines.append(summary[report.worst])
     return "\n".join(lines)

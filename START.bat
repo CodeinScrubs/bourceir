@@ -7,6 +7,7 @@ title BRS - دستیار نوسان گیری بورس
 if not exist "venv\Scripts\python.exe" (
     echo برنامه هنوز نصب نشده؛ نصب خودکار شروع می شود...  ^(running setup^)
     call "%~dp0SETUP.bat"
+    if errorlevel 1 exit /b 1
     if not exist "venv\Scripts\python.exe" exit /b 1
 )
 

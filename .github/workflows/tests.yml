@@ -1,34 +1,45 @@
-name: BRS CI Tests
+name: BRS foundation checks
 
 on:
   push:
-    branches: [ master, develop, "feature/**" ]
+    branches: [master, develop, 'feature/**']
   pull_request:
-    branches: [ master, develop ]
+    branches: [master, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     env:
-      TZ: UTC  # تضمین می‌کند کد به منطقه زمانی تهران وابسته است، نه ساعت محلی سرور
+      PYTHONUTF8: '1'
+      TZ: UTC
+      BRS_DATA_DIR: ${{ runner.temp }}/brs-data
+      BRS_LOG_DIR: ${{ runner.temp }}/brs-logs
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: pip
-        cache-dependency-path: requirements.lock.txt
-
-    - name: Install locked dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.lock.txt
-
-    - name: Lint (ruff)
-      run: ruff check .
-
-    - name: Run Pytest test suite (offline)
-      run: python -m pytest tests/ -m "not network" -v
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.23'
+      - name: Install Python 3.11 and locked dependencies
+        run: |
+          uv venv --python 3.11 venv
+          uv pip sync --python venv requirements.lock.txt
+          uv pip check --python venv
+      - name: Lint
+        run: uv run --no-project --python venv ruff check .
+      - name: Offline regression tests
+        run: uv run --no-project --python venv python -m pytest -m "not network"
+      - name: Offline installation report
+        run: uv run --no-project --python venv python brs.py doctor --offline --json doctor-ci.json
+      - name: Windows setup entry point
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call SETUP.bat --ci
