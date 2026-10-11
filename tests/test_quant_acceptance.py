@@ -57,3 +57,22 @@ def test_acceptance_market_replay_engine(db, tmp_path):
     count = replay.run_replay(callback=lambda sym, snap: seen.append((sym, snap["last_price"])), date_str="2026-10-10")
     assert count == 3 and seen[0] == ("فولاد", 5000.0) and seen[-1] == ("فولاد", 5100.0)
     replay.db.close()
+
+
+def test_acceptance_buy_and_hold_reconciles_with_pit_total_return():
+    """
+    آزمون آشتی: بکتست «خرید و نگهداری» باید همان بازده کل PIT (که فیچرها و برچسب‌ها با آن ساخته می‌شوند)
+    را منهای هزینه خرید بدهد، حتی با روز اقدام شرکتی. نسخه قبل روی داده واقعی فولاد −۶۱٪ نشان می‌داد
+    در حالی که بازده واقعی +۳۱۶٪ بود.
+    """
+    from backtest.engine import BacktestEngine
+    from tests.test_features import synthetic_history
+
+    prices, _ = synthetic_history()
+    engine = BacktestEngine(initial_capital=10_000_000.0, default_slippage_bps=0.0)
+    metrics = engine.run_replay_simulation(
+        prices, "x", lambda row, eng: None if eng.positions.get("x") else "BUY", allocation_pct=1.0)
+    assert metrics.corporate_action_events == 1
+    pit_growth = (1 + market_rules.pit_daily_returns(prices).iloc[2:]).prod()   # از قیمت پایانی روز خرید تا آخر
+    ratio = (1 + metrics.total_return_pct / 100) / pit_growth
+    assert 0.99 < ratio < 1.0     # فقط کارمزد خرید و اثر حجم (کمتر از ۱٪)

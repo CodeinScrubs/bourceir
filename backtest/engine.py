@@ -9,9 +9,14 @@
 - خرید در روز «قفل صف خرید» و فروش در روز «قفل صف فروش» انجام نمی‌شود
   (سفارش فروش تا اولین روز قابل خروج منتظر می‌ماند)
 - سقف مشارکت: حجم سفارش حداکثر ۵٪ حجم معاملات روز
+- اقدام شرکتی (سود نقدی، افزایش سرمایه، حق تقدم) روی پوزیشن باز: افت قیمت مرجع زیان نیست. تعداد سهم با
+  ضریب «قیمت پایانی دیروز ÷ قیمت مرجع امروز» تعدیل می‌شود (ارزش پوزیشن ثابت می‌ماند) — همان قرارداد «بازده
+  کل» که فیچرها و برچسب‌ها با pit_daily_returns دارند. ساده‌سازی آگاهانه: تأخیر پرداخت سود نقدی و ثبت سهام
+  جایزه لحاظ نمی‌شود (در نوسان‌گیری چندروزه عبور از مجمع نادر است؛ تعداد آن در متریک‌ها گزارش می‌شود)
 """
 
 import logging
+import math
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -49,12 +54,22 @@ class BacktestEngine:
         self.default_slippage_bps = (
             default_slippage_bps if default_slippage_bps is not None else cfg["default_slippage_bps"]
         )
+        if not math.isfinite(self.initial_capital) or self.initial_capital <= 0:
+            raise ValueError("سرمایه اولیه باید عددی مثبت باشد")
+        if not 0 < self.max_volume_participation_pct <= 0.05:
+            raise ValueError("سقف مشارکت در حجم روز باید بین صفر و ۵٪ باشد (قانون ۸ AGENTS.md)")
+        if not 0 <= self.default_slippage_bps < 10_000:
+            raise ValueError("لغزش باید بین صفر و ۱۰۰٪ باشد")
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
         self.closed_trades: List[ClosedTrade] = []
         self.equity_curve: List[Dict[str, Any]] = []
         self.last_prices: Dict[str, float] = {}
         self.blocked_orders = 0
+        self.corporate_action_receivable = 0.0   # ارزش کسر سهم (کمتر از یک سهم) پس از تعدیل؛ نقد قابل خرج نیست
+        self.corporate_action_events = 0
+        # جمع خرید و فروش هر پوزیشن از باز شدن تا بسته شدن کامل (یک معامله رفت‌وبرگشت)
+        self._round_trips: Dict[str, Dict[str, float]] = {}
 
     # ═══════════════════════════════════════════════
     # اجرای سفارش
@@ -111,6 +126,12 @@ class BacktestEngine:
         pos = self.positions.setdefault(symbol_fa, Position(symbol_fa=symbol_fa))
         if pos.quantity == 0:
             pos.opened_at = date
+            self._round_trips[symbol_fa] = {"buy_gross": 0.0, "cost": 0.0, "sell_gross": 0.0, "proceeds": 0.0,
+                                            "bought": 0, "sold": 0}
+        trip = self._round_trips[symbol_fa]
+        trip["buy_gross"] += gross_value
+        trip["cost"] += total_required
+        trip["bought"] += quantity
         pos.quantity += quantity
         pos.total_cost += total_required
         pos.average_entry_price = pos.total_cost / pos.quantity
@@ -148,17 +169,27 @@ class BacktestEngine:
         self.trades.append(trade)
 
         cost_basis = pos.average_entry_price * sell_qty            # شامل کارمزد خرید
-        buy_gross = cost_basis / (1.0 + self.BUY_COMMISSION_RATE)  # ارزش خرید بدون کارمزد
         net_trade_pnl = net_received - cost_basis
-        self.closed_trades.append(ClosedTrade(
-            symbol_fa=symbol_fa, entry_date=pos.opened_at or date, exit_date=date, quantity=sell_qty,
-            entry_price=round(buy_gross / sell_qty, 2), exit_price=round(execution_price, 2),
-            gross_pnl=round(gross_value - buy_gross, 2),
-            commissions=round((cost_basis - buy_gross) + commission, 2),
-            net_pnl=round(net_trade_pnl, 2),
-            return_pct=round(net_trade_pnl / cost_basis * 100.0, 4) if cost_basis > 0 else 0.0,
-            is_winner=net_trade_pnl > 0,
-        ))
+        trip = self._round_trips.setdefault(symbol_fa, {"buy_gross": cost_basis / (1.0 + self.BUY_COMMISSION_RATE),
+                                                        "cost": cost_basis, "sell_gross": 0.0, "proceeds": 0.0,
+                                                        "bought": sell_qty, "sold": 0})
+        trip["sell_gross"] += gross_value
+        trip["proceeds"] += net_received
+        trip["sold"] += sell_qty
+        if sell_qty == pos.quantity:
+            # فروش چندمرحله‌ای (سقف نقدشوندگی یا صف) یک معامله است، نه چند معامله؛ نرخ برد دوبار شمرده نمی‌شود
+            pnl = trip["proceeds"] - trip["cost"]
+            self.closed_trades.append(ClosedTrade(
+                symbol_fa=symbol_fa, entry_date=pos.opened_at or date, exit_date=date, quantity=int(trip["sold"]),
+                entry_price=round(trip["buy_gross"] / trip["bought"], 2) if trip["bought"] else 0.0,
+                exit_price=round(trip["sell_gross"] / trip["sold"], 2),
+                gross_pnl=round(trip["sell_gross"] - trip["buy_gross"], 2),
+                commissions=round((trip["cost"] - trip["buy_gross"]) + (trip["sell_gross"] - trip["proceeds"]), 2),
+                net_pnl=round(pnl, 2),
+                return_pct=round(pnl / trip["cost"] * 100.0, 4) if trip["cost"] > 0 else 0.0,
+                is_winner=pnl > 0,
+            ))
+            self._round_trips.pop(symbol_fa, None)
 
         pos.realized_pnl += net_trade_pnl
         pos.quantity -= sell_qty
@@ -176,13 +207,41 @@ class BacktestEngine:
     # ارزش پرتفوی و متریک‌ها
     # ═══════════════════════════════════════════════
 
+    def apply_corporate_action(self, symbol_fa: str, ref_price: float, date: str) -> float:
+        """
+        روز اقدام شرکتی: قیمت مرجع امروز با قیمت پایانی دیروز فرق دارد. تعداد سهم پوزیشن باز با ضریب
+        «پایانی دیروز ÷ مرجع امروز» زیاد می‌شود تا ارزش پوزیشن ثابت بماند (بهای تمام‌شده تغییر نمی‌کند؛
+        سود/زیان معامله فقط از حرکت واقعی قیمت می‌آید). کسر کمتر از یک سهم به ارزش روز، طلب ثبت می‌شود.
+        خروجی: ضریب تعدیل تعداد سهم (۱ یعنی بدون اقدام شرکتی).
+        """
+        pos = self.positions.get(symbol_fa)
+        prev_close = self.last_prices.get(symbol_fa)
+        if not pos or pos.quantity <= 0 or not prev_close or not ref_price or ref_price <= 0:
+            return 1.0
+        ratio = prev_close / ref_price
+        if abs(ratio - 1.0) <= 1e-6:
+            return 1.0
+        if ratio < 1:
+            logger.warning("قیمت مرجع «%s» در %s بالاتر از پایانی قبل است (%s > %s).",
+                           symbol_fa, date, ref_price, prev_close)
+        exact = pos.quantity * ratio
+        new_quantity = int(exact)
+        self.corporate_action_receivable += (exact - new_quantity) * ref_price
+        self.corporate_action_events += 1
+        logger.info("اقدام شرکتی «%s» در %s: تعداد سهم %d → %d (ضریب %.4f).",
+                    symbol_fa, date, pos.quantity, new_quantity, ratio)
+        pos.quantity = new_quantity
+        pos.average_entry_price = pos.total_cost / new_quantity if new_quantity else 0.0
+        self.last_prices[symbol_fa] = ref_price
+        return ratio
+
     def mark_to_market(self) -> float:
-        """ارزش کل پرتفوی = نقد + ارزش روز سهام‌ها (با آخرین قیمت شناخته‌شده هر نماد)."""
+        """ارزش کل پرتفوی = نقد + ارزش روز سهام‌ها (با آخرین قیمت شناخته‌شده هر نماد) + طلب اقدام شرکتی."""
         holdings = sum(
             pos.quantity * self.last_prices.get(sym, pos.average_entry_price)
             for sym, pos in self.positions.items()
         )
-        return self.cash + holdings
+        return self.cash + holdings + self.corporate_action_receivable
 
     def record_equity(self, date: str) -> None:
         self.equity_curve.append({"date": date, "equity": round(self.mark_to_market(), 2)})
@@ -194,18 +253,22 @@ class BacktestEngine:
         if not self.trades:
             return PerformanceMetrics(initial_capital=self.initial_capital, final_equity=round(final_equity, 2),
                                       total_return_pct=round(total_return_pct, 2),
-                                      blocked_orders=self.blocked_orders, equity_curve=self.equity_curve)
+                                      blocked_orders=self.blocked_orders, equity_curve=self.equity_curve,
+                                      corporate_action_events=self.corporate_action_events,
+                                      corporate_action_receivable=round(self.corporate_action_receivable, 2))
 
         closed = self.closed_trades
         winners = [t for t in closed if t.is_winner]
         losers = [t for t in closed if not t.is_winner]
         gross_profit = sum(t.net_pnl for t in winners)
         gross_loss = sum(abs(t.net_pnl) for t in losers)
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
+        # بدون معامله زیان‌ده نسبت سود به زیان تعریف‌نشده است (عدد ساختگی ۹۹ گزارش نمی‌شود)
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
         expectancy = sum(t.return_pct for t in closed) / len(closed) if closed else 0.0
 
         max_dd_pct = 0.0
-        equities = [pt["equity"] for pt in self.equity_curve]
+        # افت سرمایه از سرمایه اولیه سنجیده می‌شود (ضرر روز اول هم افت است)
+        equities = [self.initial_capital] + [pt["equity"] for pt in self.equity_curve]
         if equities:
             peak = equities[0]
             for eq in equities:
@@ -214,8 +277,8 @@ class BacktestEngine:
                     max_dd_pct = max(max_dd_pct, (peak - eq) / peak * 100.0)
 
         sharpe = 0.0
-        if len(equities) > 2:
-            returns = pd.Series(equities).pct_change().dropna()
+        if len(self.equity_curve) > 2:
+            returns = pd.Series([pt["equity"] for pt in self.equity_curve]).pct_change().dropna()
             if len(returns) > 1 and returns.std() > 1e-9:
                 sharpe = float(returns.mean() / returns.std() * (TRADING_DAYS_PER_YEAR ** 0.5))
 
@@ -226,8 +289,8 @@ class BacktestEngine:
             win_rate=round(len(winners) / len(closed) * 100.0, 2) if closed else 0.0,
             gross_profit=round(gross_profit, 2),
             gross_loss=round(gross_loss, 2),
-            net_pnl=round(gross_profit - gross_loss, 2),
-            profit_factor=round(profit_factor, 2),
+            net_pnl=round(final_equity - self.initial_capital, 2),
+            profit_factor=round(profit_factor, 2) if profit_factor is not None else None,
             expectancy_pct=round(expectancy, 4),
             max_drawdown_pct=round(max_dd_pct, 2),
             total_commissions_paid=round(sum(t.commission for t in self.trades), 2),
@@ -236,6 +299,8 @@ class BacktestEngine:
             final_equity=round(final_equity, 2),
             total_return_pct=round(total_return_pct, 2),
             blocked_orders=self.blocked_orders,
+            corporate_action_events=self.corporate_action_events,
+            corporate_action_receivable=round(self.corporate_action_receivable, 2),
             equity_curve=self.equity_curve,
         )
 
@@ -246,6 +311,8 @@ class BacktestEngine:
     @staticmethod
     def _prepare(prices_df: pd.DataFrame) -> pd.DataFrame:
         """یکسان‌سازی ستون‌ها: داده دیتابیس (*_raw) یا دیتافریم ساده (date/close/volume)."""
+        if prices_df["date"].duplicated().any():
+            raise ValueError("تاریخ تکراری در ورودی بکتست")
         df = prices_df.sort_values("date").reset_index(drop=True).copy()
         for col in ("open", "high", "low", "close"):
             if f"{col}_raw" not in df.columns and col in df.columns:
@@ -274,9 +341,14 @@ class BacktestEngine:
         روز t: ابتدا سفارش ثبت‌شده در روز t-1 اجرا می‌شود ← سپس استراتژی با داده‌های تا پایان روز t
         تصمیم می‌گیرد ← سفارش جدید برای روز t+1 ثبت می‌شود ← ارزش پرتفوی با قیمت پایانی روز t ثبت می‌شود.
 
-        strategy_signal_fn(row, engine) باید 'BUY'، 'SELL' یا None برگرداند.
+        strategy_signal_fn(row, engine) باید 'BUY'، 'SELL' یا None برگرداند. ستون‌های تعدیل‌شده رو به عقب
+        (adj_close و adjustment_factor) به استراتژی داده نمی‌شوند چون از آینده خبر دارند (قانون ۱۰).
         """
+        if not 0 < allocation_pct <= 1:
+            raise ValueError("سهم تخصیص سرمایه باید بین صفر و یک باشد")
         df = self._prepare(prices_df)
+        hidden = [c for c in df.columns if c.startswith("_") or c in ("adj_close", "adjustment_factor")]
+        has_volume_column = prices_df.get("volume") is not None
         pending: Optional[str] = None
         prev_volume: Optional[float] = None
 
@@ -288,6 +360,14 @@ class BacktestEngine:
             cap_volume = min(v for v in (day_volume, prev_volume) if v) if (day_volume or prev_volume) else None
             low = row["low_raw"] if "low_raw" in row and pd.notna(row["low_raw"]) else None
             high = row["high_raw"] if "high_raw" in row and pd.notna(row["high_raw"]) else None
+
+            # ۰. اقدام شرکتی روی پوزیشن باز (قیمت مرجع امروز ≠ قیمت پایانی دیروز)
+            if "ref_price_raw" in row and pd.notna(row["ref_price_raw"]):
+                self.apply_corporate_action(symbol_fa, float(row["ref_price_raw"]), date_str)
+
+            # روز بدون معامله (یا حجم نامعلوم): کسی معامله نکرده، پس سفارش ما هم اجرا نمی‌شود
+            if has_volume_column and not (day_volume and day_volume > 0):
+                fill_price = None
 
             # ۱. اجرای سفارش روز قبل
             if pending == "BUY" and fill_price:
@@ -306,7 +386,7 @@ class BacktestEngine:
                     pending = None  # تا خروج کامل، سفارش فروش باقی می‌ماند
 
             # ۲. تصمیم استراتژی با داده‌های تا پایان امروز
-            signal = strategy_signal_fn(row.drop(labels=[c for c in row.index if c.startswith("_")]), self)
+            signal = strategy_signal_fn(row.drop(labels=hidden), self)
             if signal in ("BUY", "SELL"):
                 pending = signal
 

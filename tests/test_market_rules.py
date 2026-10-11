@@ -33,6 +33,21 @@ def test_lock_flags_detect_full_day_queues_only():
     assert flags["locked_down"].tolist() == [False, False, True, False]
 
 
+def test_lock_uses_traded_price_not_official_close():
+    """
+    باگ پیدا‌شده روی داده واقعی: وقتی حجم روز کمتر از حجم مبنا است، قیمت پایانی رسمی فقط بخشی از حرکت را
+    نشان می‌دهد. صف قفل کم‌حجم با قیمت پایانی دیده نمی‌شد (بیش از نیمی از روزهای قفل تاریخ بازار).
+    """
+    df = _frame([
+        ("2021-03-01", 3880, 3880, 3880, 3790, 3770, 5_000, 1),   # صف خرید قفل، پایانی فقط +۰.۵٪
+        ("2021-03-02", 3714, 3714, 3714, 3770, 3790, 9_000, 1),   # دامنه منفی ۲٪ (۱۳۹۹): صف فروش قفل
+        ("2021-03-03", 3725, 3725, 3725, 3725, 3714, 300, 1),     # یک معامله تک‌قیمتی +۰.۳٪ → قفل نیست
+    ])
+    flags = market_rules.lock_flags(df)
+    assert flags["locked_up"].tolist() == [True, False, False]
+    assert flags["locked_down"].tolist() == [False, True, False]
+
+
 def test_pit_returns_remove_corporate_action_gap():
     """در روز افزایش سرمایه، قیمت مرجع تعدیل می‌شود؛ بازده PIT نباید افت ۲۸٪ کاذب نشان دهد."""
     df = _frame([

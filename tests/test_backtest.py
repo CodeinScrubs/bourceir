@@ -140,3 +140,106 @@ def test_experiment_logging(db):
     assert exp_id is not None
     exp = db.get_experiments()[0]
     assert exp["experiment_id"] == "EXP-TEST-001" and exp["dataset_version"] == "v2.0"
+
+
+def _raw_frame(rows):
+    return pd.DataFrame(rows, columns=["date", "low_raw", "high_raw", "close_raw", "close_final_raw",
+                                       "ref_price_raw", "volume", "value"])
+
+
+def test_corporate_action_preserves_value_not_trading_loss():
+    """
+    پوزیشن باز در روز اقدام شرکتی: قیمت مرجع ۱۰۰۰ → ۸۰۰. نسخه قبل ۲۰٪ زیان کاذب ثبت می‌کرد (روی داده واقعی
+    خرید و نگهداری فولاد از ۱۴۰۰: −۶۱٪ به جای سود). حالا تعداد سهم ×۱.۲۵ می‌شود و ارزش پرتفوی پیوسته است.
+    """
+    df = _raw_frame([
+        ("2026-06-01", 990, 1010, 1000, 1000, 1000, 1_000_000, 1_000_000_000),
+        ("2026-06-02", 990, 1010, 1000, 1000, 1000, 1_000_000, 1_000_000_000),
+        ("2026-06-10", 790, 810, 800, 800, 800, 1_000_000, 800_000_000),     # روز بعد از مجمع
+        ("2026-06-11", 790, 810, 800, 800, 800, 1_000_000, 800_000_000),
+    ])
+    engine = BacktestEngine(initial_capital=1_000_000.0, default_slippage_bps=0.0)
+    signals = {"2026-06-01": "BUY", "2026-06-10": "SELL"}
+    metrics = engine.run_replay_simulation(df, "فولاد", lambda row, eng: signals.get(row["date"]))
+    bought, sold = engine.trades[0].quantity, engine.trades[1].quantity
+    assert metrics.corporate_action_events == 1
+    assert sold == int(bought * 1.25)                                       # همه سهم‌های تعدیل‌شده فروخته شد
+    assert metrics.corporate_action_receivable == pytest.approx((bought * 1.25 - sold) * 800)
+    eq = {pt["date"]: pt["equity"] for pt in metrics.equity_curve}
+    assert eq["2026-06-10"] == pytest.approx(eq["2026-06-02"], rel=1e-3)    # بدون افت کاذب ۲۰٪
+    trade = engine.closed_trades[0]
+    assert -0.02 < trade.return_pct / 100 < 0                             # فقط کارمزد و لغزش، نه −۲۰٪
+
+
+def test_strategy_never_sees_backward_adjusted_columns():
+    df = _raw_frame([("2026-06-01", 990, 1010, 1000, 1000, 1000, 1000, 1_000_000)]).assign(
+        adj_close=700.0, adjustment_factor=0.7)
+    seen = []
+    BacktestEngine().run_replay_simulation(df, "x", lambda row, eng: seen.append(set(row.index)))
+    assert seen and not seen[0] & {"adj_close", "adjustment_factor"}
+
+
+def test_invalid_inputs_are_rejected():
+    with pytest.raises(ValueError):
+        BacktestEngine(max_volume_participation_pct=0.2)        # قید نقدشوندگی ۵٪
+    with pytest.raises(ValueError):
+        BacktestEngine(initial_capital=0)
+    df = _raw_frame([("2026-06-01", 990, 1010, 1000, 1000, 1000, 1000, 1_000_000)] * 2)
+    with pytest.raises(ValueError):
+        BacktestEngine().run_replay_simulation(df, "x", lambda row, eng: None)   # تاریخ تکراری
+    with pytest.raises(ValueError):
+        BacktestEngine().run_replay_simulation(df.head(1), "x", lambda row, eng: None, allocation_pct=1.5)
+
+
+def test_undefined_profit_factor_and_drawdown_from_start():
+    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=0.0)
+    engine.execute_buy("فولاد", 10_000.0, 1000, "2026-10-01")
+    engine.execute_sell("فولاد", 12_000.0, 1000, "2026-10-02")
+    assert engine.calculate_metrics().profit_factor is None     # بدون معامله زیان‌ده (نه عدد ساختگی ۹۹)
+    engine = BacktestEngine(initial_capital=1_000_000.0, default_slippage_bps=0.0)
+    engine.execute_buy("فولاد", 1000.0, 10, "d1")
+    engine.equity_curve = [{"date": "d1", "equity": 900_000.0}, {"date": "d2", "equity": 950_000.0}]
+    assert engine.calculate_metrics().max_drawdown_pct == pytest.approx(10.0)   # افت از سرمایه اولیه
+
+
+def test_multi_day_exit_is_one_round_trip():
+    """خروج چندمرحله‌ای (به خاطر سقف ۵٪ حجم یا صف) یک معامله است؛ نسخه قبل هر بخش را معامله جدا می‌شمرد."""
+    engine = BacktestEngine(initial_capital=100_000_000.0, default_slippage_bps=0.0)
+    engine.execute_buy("فولاد", 10_000.0, 1000, "2026-10-01")
+    engine.execute_sell("فولاد", 9_000.0, 400, "2026-10-02")
+    assert engine.closed_trades == []                       # هنوز پوزیشن باز است
+    engine.execute_sell("فولاد", 12_000.0, 600, "2026-10-03")
+    (trip,) = engine.closed_trades
+    expected = (400 * 9_000 + 600 * 12_000) * (1 - 0.0088) - 10_000_000 * (1 + 0.003712)
+    assert trip.quantity == 1000 and trip.entry_date == "2026-10-01" and trip.exit_date == "2026-10-03"
+    assert trip.net_pnl == pytest.approx(expected, abs=2.0) and trip.is_winner
+    assert engine.calculate_metrics().win_rate == 100.0
+
+
+def test_no_fill_on_day_without_trades():
+    df = _raw_frame([
+        ("2026-06-01", 990, 1010, 1000, 1000, 1000, 1_000_000, 1_000_000_000),
+        ("2026-06-02", 1000, 1000, 1000, 1000, 1000, 0, 0),             # بدون معامله
+        ("2026-06-03", 990, 1010, 1000, 1000, 1000, 1_000_000, 1_000_000_000),
+    ])
+    engine = BacktestEngine(initial_capital=1_000_000.0, default_slippage_bps=0.0)
+    engine.run_replay_simulation(df, "x", lambda row, eng: "BUY" if row["date"] == "2026-06-01" else None)
+    assert [t.date for t in engine.trades] == ["2026-06-03"]   # سفارش منتظر ماند تا روز دارای معامله
+
+
+@pytest.mark.parametrize("name,prev_close,ref", [
+    ("سود نقدی ۲۰۰ ریال", 1000.0, 800.0),
+    ("افزایش سرمایه ۱۰۰٪ از اندوخته (سهام جایزه)", 1000.0, 500.0),
+    ("افزایش سرمایه ۵۰٪ از آورده (حق تقدم به ارزش اسمی ۱۰۰۰)", 3000.0, (3000.0 + 0.5 * 1000.0) / 1.5),
+    ("ادغام سهام (قیمت مرجع بالاتر)", 1000.0, 2000.0),
+])
+def test_corporate_action_is_wealth_neutral_for_every_type(name, prev_close, ref):
+    """در روز اقدام شرکتی ارزش پوزیشن (سهم × قیمت + کسر سهم) دقیقاً حفظ می‌شود، هر نوعی که باشد."""
+    engine = BacktestEngine(initial_capital=10_000_000.0, default_slippage_bps=0.0)
+    engine.execute_buy("x", prev_close, 1000, "d1")
+    engine.last_prices["x"] = prev_close
+    before = engine.mark_to_market()
+    ratio = engine.apply_corporate_action("x", ref, "d2")
+    assert ratio == pytest.approx(prev_close / ref), name
+    assert engine.mark_to_market() == pytest.approx(before, rel=1e-9), name
+    assert engine.corporate_action_events == 1

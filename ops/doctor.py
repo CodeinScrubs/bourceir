@@ -68,13 +68,14 @@ def check_python(report: DoctorReport) -> None:
     if (v.major, v.minor) == (3, 11):
         report.add("نسخه پایتون", OK, f"{v.major}.{v.minor}.{v.micro}")
     else:
-        report.add("نسخه پایتون", WARN, f"{v.major}.{v.minor}.{v.micro}",
+        report.add("نسخه پایتون", ERROR, f"{v.major}.{v.minor}.{v.micro}",
                    "نسخه استاندارد پروژه پایتون 3.11 است. SETUP.bat را دوباره اجرا کنید.")
 
 
 def check_packages(report: DoctorReport) -> None:
     missing = []
-    for module in ("pandas", "numpy", "requests", "streamlit", "yaml", "jdatetime", "dotenv", "typesafe_sdk"):
+    for module in ("pandas", "numpy", "requests", "streamlit", "yaml", "jdatetime", "dotenv", "typesafe_sdk",
+                   "psutil", "pyarrow"):
         try:
             importlib.import_module(module)
         except ImportError:
@@ -98,7 +99,10 @@ def check_tsetmc(report: DoctorReport) -> Optional[datetime]:
                 key=lambda item: item[1],
             )
         response.raise_for_status()
-        count = len(response.json().get("marketwatch", []))
+        rows = response.json().get("marketwatch")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("پاسخ دیده‌بان بازار خالی است")
+        count = len(rows)
         if elapsed > 5:
             report.add("اتصال به TSETMC", WARN, f"کند: {elapsed:.1f} ثانیه ({count} نماد)",
                        "اگر این کندی همیشگی است: " + IRANIAN_SITE_HINT.format(domain="*.tsetmc.com"))
@@ -173,6 +177,10 @@ def check_database(report: DoctorReport) -> None:
             report.add("سلامت فایل دیتابیس", OK, "بدون خرابی")
         else:
             report.add("سلامت فایل دیتابیس", ERROR, f"خرابی: {integrity}",
+                       "برنامه را ببندید و آخرین نسخه پشتیبان از پوشه data/backups را جایگزین data/brs.db کنید.")
+        violations = db.conn.execute("PRAGMA foreign_key_check;").fetchall()
+        if violations:
+            report.add("رابطه‌های دیتابیس", ERROR, f"{len(violations)} ردیف به رکورد ناموجود اشاره می‌کند",
                        "برنامه را ببندید و آخرین نسخه پشتیبان از پوشه data/backups را جایگزین data/brs.db کنید.")
         latest = discover_migrations()[-1][0]
         version = db.schema_version()

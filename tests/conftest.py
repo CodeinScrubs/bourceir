@@ -52,7 +52,7 @@ def market_watch_rows():
     def row(lva, ins, y_val, flow, board, **kw):
         base = {
             "lva": lva, "lvc": f"شركت {lva}", "insCode": ins, "insID": f"IRO1{ins[:4]}0001", "yVal": y_val,
-            "flow": flow, "cGrValCot": board, "csv": "27 ", "ztd": 1e9, "bv": 1.0, "hEven": 122959,
+            "flow": flow, "cGrValCot": board, "csv": "27 ", "ztd": 1e9, "bv": 1.0, "hEven": 122959, "dEven": 20261011,
             "pdv": 4220.0, "pcl": 4180.0, "pf": 4220.0, "pmx": 4220.0, "pmn": 4000.0, "py": 4100.0,
             "pMax": 4220.0, "pMin": 3980, "qtj": 8_380_424_275.0, "qtc": 35_038_504_504_210.0, "ztt": 79969.0,
             "blDs": [

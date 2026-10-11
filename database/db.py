@@ -474,8 +474,9 @@ class DatabaseManager:
         if not params:
             return 0
         with self.conn:
-            self.conn.executemany(self._snapshot_query(), params)
-        return len(params)
+            cursor = self.conn.executemany(self._snapshot_query(), params)
+        # INSERT OR IGNORE: تکراری‌ها درج نمی‌شوند؛ تعداد واقعی درج گزارش می‌شود، نه تعداد تلاش
+        return max(cursor.rowcount, 0)
 
     # ═══════════════════════════════════════════════
     # اطلاعیه‌های کدال و قضاوت‌های هوش مصنوعی
@@ -564,9 +565,9 @@ class DatabaseManager:
             logger.error("خطا در ثبت لاگ گردآوری: %s", e)
             return None
 
-    def insert_quality_metric(self, symbol_id: int, trade_date: str, completeness_score: float = 100.0,
+    def insert_quality_metric(self, symbol_id: int, trade_date: str, completeness_score: Optional[float] = None,
                               price_anomaly_flag: bool = False, volume_anomaly_flag: bool = False,
-                              quality_score: float = 100.0, notes: Optional[str] = None) -> bool:
+                              quality_score: Optional[float] = None, notes: Optional[str] = None) -> bool:
         try:
             with self.conn:
                 cur = self.conn.execute(
@@ -595,7 +596,8 @@ class DatabaseManager:
                 VALUES (:symbol_id, :trade_date, :completeness_score, :price_anomaly_flag,
                         :volume_anomaly_flag, :quality_score, :notes);
                 """,
-                [{"completeness_score": 100.0, "quality_score": 100.0, "notes": None, **r} for r in rows],
+                # امتیاز کیفیت تعریف‌شده‌ای نداریم؛ عدد ساختگی ذخیره نمی‌شود (فقط پرچم ناهنجاری و توضیح)
+                [{"completeness_score": None, "quality_score": None, "notes": None, **r} for r in rows],
             )
         return len(rows)
 
@@ -653,7 +655,7 @@ class DatabaseManager:
             with self.conn:
                 cur = self.conn.execute(
                     """
-                    INSERT OR REPLACE INTO experiments (experiment_id, created_at, strategy_name, symbols_tested,
+                    INSERT INTO experiments (experiment_id, created_at, strategy_name, symbols_tested,
                         start_date, end_date, dataset_version, features_version, model_version,
                         parameters_json, metrics_json, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

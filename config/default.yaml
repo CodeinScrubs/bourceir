@@ -4,7 +4,7 @@
 
 project:
   name: "BRS Quant Engine"
-  version: "0.5.0"
+  version: "0.5.1"
   environment: "development"
 
 market:
@@ -54,8 +54,9 @@ backtest:
   initial_capital: 100000000.0 # 100,000,000 Rial = 10,000,000 Toman
   # اجرای سفارش در روز بعد از سیگنال، به قیمت میانگین موزون روز (ارزش ÷ حجم)
   execution_price: "next_day_vwap"
-  # حداقل فاصله قیمت از قیمت مرجع برای تشخیص صف قفل (وقتی کل روز در یک قیمت معامله شده)
-  lock_min_move_pct: 0.015
+  # حداقل فاصله «قیمت معامله‌شده» از قیمت مرجع برای تشخیص صف قفل (وقتی کل روز در یک قیمت معامله شده).
+  # دامنه نوسان تاریخی بین ±۲٪ تا ±۷٪ بوده؛ ۰.۵٪ فقط معاملات تک‌قیمتی کم‌اهمیت نزدیک قیمت مرجع را حذف می‌کند.
+  lock_min_move_pct: 0.005
 
 governance:
   enforce_point_in_time: true

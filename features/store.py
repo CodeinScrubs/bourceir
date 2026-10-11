@@ -3,15 +3,20 @@
 انبار فیچر نسخه‌دار (Feature Store)
 
 فیچرها برای همه نمادها یک‌جا محاسبه و در data/features/<نسخه>/daily.parquet ذخیره می‌شوند، همراه با
-manifest.json (فهرست فیچرها، تعداد ردیف، بازه تاریخ، زمان ساخت). هر تغییر در منطق فیچرها باید
-FEATURE_SET_VERSION را بالا ببرد تا آزمایش‌های قبلی قابل بازتولید بمانند.
+manifest.json (فهرست فیچرها، تعداد ردیف، بازه تاریخ، زمان ساخت و «منشأ»: commit گیت، اثر انگشت کد و
+وابستگی‌ها، نسخه دیتابیس، کارمزدها و اثر انگشت خود فایل). هر تغییر در منطق فیچرها باید FEATURE_SET_VERSION
+را بالا ببرد تا آزمایش‌های قبلی قابل بازتولید بمانند. فایل‌ها اتمی نوشته می‌شوند (اول فایل موقت، سپس جایگزینی)
+تا قطع برق یا خطا در میانه ساخت، انبار نیمه‌کاره باقی نگذارد.
 
 چرا Parquet و نه جدول SQLite؟ تعداد فیچرها در پژوهش مدام تغییر می‌کند و ~۶۰۰ نماد × ~۴۰۰۰ روز × ده‌ها
 فیچر در قالب ستونی Parquet فشرده و سریع خوانده می‌شود؛ داده خام همچنان فقط در SQLite است.
 """
 
+import hashlib
 import json
 import logging
+import os
+import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -67,15 +72,72 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
     return panel.sort_values(["date", "symbol"]).reset_index(drop=True)[["date", "symbol"] + ALL_FEATURES]
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _code_fingerprint() -> str:
+    """اثر انگشت یکجای کدهایی که روی مقدار فیچرها اثر دارند (برای بازتولید دقیق یک آزمایش)."""
+    digest = hashlib.sha256()
+    for folder in ("core", "features", "database", "config"):
+        for path in sorted((settings.BASE_DIR / folder).rglob("*")):
+            if path.suffix in (".py", ".yaml", ".sql"):
+                digest.update(str(path.relative_to(settings.BASE_DIR).as_posix()).encode("utf-8"))
+                digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+    return digest.hexdigest()
+
+
+def _git_commit() -> Optional[str]:
+    """commit فعلی گیت؛ اگر تغییر ثبت‌نشده وجود داشته باشد با پسوند -dirty."""
+    try:
+        run = dict(cwd=settings.BASE_DIR, text=True, stderr=subprocess.DEVNULL, timeout=10)
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], **run).strip()
+        dirty = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], **run).strip()
+        return commit + ("-dirty" if dirty else "")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _provenance(db: DatabaseManager, parquet: Path) -> dict:
+    lock_file = settings.BASE_DIR / "requirements.lock.txt"
+    return {
+        "git_commit": _git_commit(),
+        "code_sha256": _code_fingerprint(),
+        "requirements_lock_sha256": _sha256(lock_file) if lock_file.exists() else None,
+        "database_schema_version": db.schema_version(),
+        "fees": dict(settings.FEES),
+        "lock_min_move_pct": settings.BACKTEST_CONFIG["lock_min_move_pct"],
+        "parquet_sha256": _sha256(parquet),
+        # محدودیت‌های شناخته‌شده که هر پژوهشی روی این داده باید در نظر بگیرد
+        "known_limitations": [
+            "universe = current active TSE/IFB equities (survivorship bias: delisted symbols missing)",
+            "history reconstructed from TSETMC's current archive, not as originally published in real time",
+        ],
+    }
+
+
 def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None, root: Optional[Path] = None,
                         progress: Optional[ProgressFn] = None) -> dict:
-    """ساخت انبار فیچر و ذخیره در Parquet + manifest. خروجی: manifest."""
-    panel = build_feature_panel(db, symbols=symbols, progress=progress)
+    """ساخت انبار فیچر و ذخیره اتمی در Parquet + manifest. خروجی: manifest."""
+    # همه خواندن‌ها از یک تصویر ثابت دیتابیس (اگر هم‌زمان پایش زنده یا به‌روزرسانی در حال نوشتن باشد)
+    own_snapshot = not db.conn.in_transaction
+    if own_snapshot:
+        db.conn.execute("BEGIN")
+    try:
+        panel = build_feature_panel(db, symbols=symbols, progress=progress)
+    finally:
+        if own_snapshot:
+            db.conn.rollback()
     target = store_dir(root=root)
     target.mkdir(parents=True, exist_ok=True)
     # float32 برای فیچرها کاملاً کافی است و حجم فایل را نصف می‌کند
     compact = panel.astype({f: "float32" for f in ALL_FEATURES})
-    compact.to_parquet(target / "daily.parquet", index=False, compression="zstd")
+    tmp_parquet = target / "daily.parquet.tmp"
+    compact.to_parquet(tmp_parquet, index=False, compression="zstd")
     manifest = {
         "version": FEATURE_SET_VERSION,
         "created_at": now_tehran_iso(),
@@ -85,8 +147,12 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "date_max": str(panel["date"].max()) if len(panel) else None,
         "features": ALL_FEATURES,
         "coverage": {f: round(float(panel[f].notna().mean()), 4) for f in ALL_FEATURES} if len(panel) else {},
+        "provenance": _provenance(db, tmp_parquet),
     }
-    (target / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_manifest = target / "manifest.json.tmp"
+    tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_parquet, target / "daily.parquet")
+    os.replace(tmp_manifest, target / "manifest.json")
     logger.info("انبار فیچر %s ساخته شد: %d ردیف، %d نماد.", FEATURE_SET_VERSION, manifest["rows"], manifest["symbols"])
     return manifest
 

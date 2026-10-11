@@ -58,6 +58,10 @@ def test_snapshot_from_market_watch(market_watch_rows, client_type_all):
     assert snap["sell_queue_volume"] == 0
     assert snap["real_buy_count"] == 11508 and snap["legal_sell_volume"] == 2_240_805_983.0
     assert snap["last_trade_time"] == "12:29:59"
+    # زمان سرور از تاریخ و ساعت خود TSETMC ساخته می‌شود، نه حدس «امروز یا دیروز»
+    assert snap["provider_timestamp"] == "2026-10-11T12:29:59+03:30"
+    no_date = dict(market_watch_rows[0], dEven=None)
+    assert TsetmcProvider.snapshot_from_market_watch(no_date, None, "2026-10-11T12:30:00+03:30")["provider_timestamp"] is None
 
 
 def test_market_snapshots_combine_watch_and_client_types(market_watch_rows, client_type_all):

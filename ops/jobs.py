@@ -35,11 +35,17 @@ def _read_state(name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _is_alive(pid: Optional[int]) -> bool:
+def _is_alive(pid: Optional[int], created_at: Optional[float] = None) -> bool:
+    """
+    آیا همان فرایندی که ما ساختیم هنوز زنده است؟ ویندوز شماره PID را بازیافت می‌کند؛ با «زمان ساخت فرایند»
+    مطمئن می‌شویم فرایند دیگری که بعداً همان PID را گرفته، کار ما حساب نشود (و هرگز متوقف نشود).
+    """
     if not pid or not psutil.pid_exists(pid):
         return False
     try:
         proc = psutil.Process(pid)
+        if created_at is not None and abs(proc.create_time() - created_at) > 1.0:
+            return False
         return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE and "brs.py" in " ".join(proc.cmdline())
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
@@ -50,11 +56,14 @@ def job_status(name: str, tail_lines: int = 15) -> Dict[str, Any]:
     log_path = Path(state["log"]) if state.get("log") else None
     tail: List[str] = []
     if log_path and log_path.exists():
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        # فقط ۶۴ کیلوبایت آخر فایل (لاگ به‌روزرسانی کامل چند مگابایت است و هر ۳ ثانیه خوانده می‌شود)
+        with log_path.open("rb") as stream:
+            stream.seek(max(0, log_path.stat().st_size - 65536))
+            lines = stream.read().decode("utf-8", errors="replace").splitlines()
         tail = lines[-tail_lines:]
     return {
         "name": name,
-        "running": _is_alive(state.get("pid")),
+        "running": _is_alive(state.get("pid"), state.get("created_at")),
         "started_at": state.get("started_at"),
         "args": state.get("args", []),
         "log_tail": tail,
@@ -76,8 +85,12 @@ def start_job(name: str, args: List[str]) -> bool:
             cwd=str(settings.BASE_DIR), stdout=log_file, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, creationflags=flags,
         )
+    try:
+        created_at = psutil.Process(proc.pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        created_at = None
     _state_file(name).write_text(json.dumps({
-        "pid": proc.pid, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
+        "pid": proc.pid, "created_at": created_at, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
     }, ensure_ascii=False), encoding="utf-8")
     return True
 
@@ -85,7 +98,7 @@ def start_job(name: str, args: List[str]) -> bool:
 def stop_job(name: str) -> bool:
     state = _read_state(name) or {}
     pid = state.get("pid")
-    if not _is_alive(pid):
+    if not _is_alive(pid, state.get("created_at")):
         return False
     proc = psutil.Process(pid)
     for child in proc.children(recursive=True):

@@ -13,7 +13,7 @@
 venv/Scripts/python.exe -m pytest -m "not network"   # آزمون‌های آفلاین (قبل از هر commit)
 venv/Scripts/python.exe -m pytest -m network         # آزمون با اینترنت واقعی
 venv/Scripts/ruff.exe check . --fix                  # کیفیت کد
-venv/Scripts/python.exe brs.py doctor                # عیب‌یابی محیط، شبکه، دیتابیس، Jev
+venv/Scripts/python.exe brs.py doctor                # عیب‌یابی محیط، شبکه، دیتابیس، Jev (--json logs/doctor.json برای گزارش ماشین‌خوان)
 venv/Scripts/python.exe brs.py update --symbols فولاد  # به‌روزرسانی داده (بدون --symbols: کل بازار، ~۴۵ دقیقه بار اول)
 venv/Scripts/python.exe brs.py backup                # پشتیبان دستی دیتابیس (۵ نسخه آخر)
 venv/Scripts/python.exe brs.py features              # ساخت انبار فیچر (بعد از هر update خودکار)

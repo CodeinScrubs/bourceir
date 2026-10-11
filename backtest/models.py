@@ -81,8 +81,8 @@ class PerformanceMetrics:
     win_rate: float = 0.0              # درصد معاملات برنده (۰ تا ۱۰۰)
     gross_profit: float = 0.0          # مجموع سود معاملات برنده (ریال، خالص از کارمزد)
     gross_loss: float = 0.0            # مجموع زیان معاملات بازنده (ریال، خالص از کارمزد)
-    net_pnl: float = 0.0               # سود یا زیان خالص معاملات بسته‌شده (ریال)
-    profit_factor: float = 0.0         # نسبت سود به زیان
+    net_pnl: float = 0.0               # تغییر ارزش کل پرتفوی = ارزش نهایی − سرمایه اولیه (ریال)
+    profit_factor: Optional[float] = None  # نسبت سود به زیان (بدون معامله زیان‌ده: تعریف‌نشده، None)
     expectancy_pct: float = 0.0        # امید ریاضی: میانگین بازده خالص هر معامله (درصد)
     max_drawdown_pct: float = 0.0      # حداکثر افت سرمایه (درصد)
     total_commissions_paid: float = 0.0
@@ -91,4 +91,6 @@ class PerformanceMetrics:
     final_equity: float = 0.0          # ارزش نهایی پرتفوی به قیمت روز (Mark-to-Market)
     total_return_pct: float = 0.0
     blocked_orders: int = 0            # سفارش‌هایی که به دلیل صف قفل اجرا نشدند
+    corporate_action_events: int = 0   # دفعاتی که پوزیشن باز از روز اقدام شرکتی عبور کرد
+    corporate_action_receivable: float = 0.0  # ارزش کسر سهم پس از تعدیل اقدام شرکتی (ریال، جزو ارزش نهایی)
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)

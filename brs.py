@@ -39,8 +39,19 @@ from config import settings  # noqa: E402
 logger = logging.getLogger("brs")
 
 
+class _TehranFormatter(logging.Formatter):
+    """زمان لاگ همیشه به وقت تهران (مستقل از منطقه زمانی ویندوز یا سرور CI)."""
+
+    def formatTime(self, record, datefmt=None):  # noqa: N802 (نام متد کتابخانه logging)
+        from datetime import datetime
+
+        from core.timeutils import TEHRAN_TZ
+
+        return datetime.fromtimestamp(record.created, TEHRAN_TZ).strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+
 def setup_logging(verbose: bool = False, command: str = "brs") -> None:
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fmt = _TehranFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     # حداکثر ۵ فایل ۵ مگابایتی؛ هر دستور فایل جدا دارد تا اجرای هم‌زمان (پایش زنده + به‌روزرسانی)
     # در ویندوز هنگام چرخش فایل لاگ تداخل نداشته باشد
     file_handler = RotatingFileHandler(settings.LOG_DIR / f"brs-{command}.log", maxBytes=5 * 1024 * 1024,
@@ -79,6 +90,21 @@ def cmd_doctor(args) -> int:
 
     report = run_doctor(include_network=not args.offline)
     print(format_report(report))
+    if args.json:
+        # گزارش ماشین‌خوان برای ارسال به پشتیبان/هوش مصنوعی (بدون کلیدها و رمزها)
+        import json
+        from dataclasses import asdict
+
+        from core.timeutils import now_tehran_iso
+
+        target = Path(args.json)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({
+            "checked_at": now_tehran_iso(), "version": settings.VERSION, "python": sys.version.split()[0],
+            "network_tested": not args.offline, "overall": report.worst,
+            "checks": [asdict(c) for c in report.checks],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"گزارش JSON: {target}")
     return 1 if report.worst == ERROR else 0
 
 
@@ -140,6 +166,7 @@ def cmd_live(args) -> int:
     print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
     try:
         while True:
+            started = time.monotonic()
             now = now_tehran().strftime("%H:%M:%S")
             if not args.force and not is_market_open():
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
@@ -150,7 +177,8 @@ def cmd_live(args) -> int:
                 cycles += 1
             if args.cycles and cycles >= args.cycles:
                 break
-            time.sleep(args.interval)
+            # فاصله واقعی بین دو دریافت = interval (زمان خود درخواست از انتظار کم می‌شود)
+            time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
     except KeyboardInterrupt:
         print("\n🛑 پایش زنده متوقف شد.")
     finally:
@@ -189,6 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="بررسی سلامت سامانه")
     p.add_argument("--offline", action="store_true", help="بدون آزمایش اتصال اینترنت")
+    p.add_argument("--json", default="", help="ذخیره گزارش ماشین‌خوان در این مسیر (مثلاً logs/doctor.json)")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("update", help="به‌روزرسانی همه داده‌ها")
