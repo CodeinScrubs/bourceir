@@ -18,7 +18,7 @@ import pandas as pd
 
 from core import market_rules
 
-FEATURE_SET_VERSION = "daily-v1"  # هر تغییر در منطق فیچرها → نسخه جدید
+FEATURE_SET_VERSION = "daily-v2"  # هر تغییر در منطق فیچرها → نسخه جدید (تاریخچه در docs/features.md)
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -51,6 +51,8 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     """
     محاسبه فیچرهای روزانه یک نماد. همه عملیات علّی (causal) هستند: rolling و ewm روی گذشته، shift مثبت.
     """
+    if prices["date"].duplicated().any():
+        raise ValueError("برای هر نماد و تاریخ فقط یک ردیف قیمت مجاز است")
     df = prices.sort_values("date").reset_index(drop=True)
     out = pd.DataFrame({"date": df["date"]})
     if df.empty:
@@ -76,7 +78,8 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
     out["rsi_14d"] = 100.0 - 100.0 / (1.0 + _safe_div(avg_gain, avg_loss))
-    out.loc[(avg_loss == 0) & avg_gain.notna(), "rsi_14d"] = 100.0
+    out.loc[(avg_loss == 0) & (avg_gain > 0), "rsi_14d"] = 100.0
+    out.loc[(avg_loss == 0) & (avg_gain == 0), "rsi_14d"] = 50.0   # قیمت ثابت: نه اشباع خرید، نه فروش
 
     # ─── موقعیت نسبت به میانگین و سقف/کف (روی شاخص بازده) ───
     out["dist_sma_20d"] = index / index.rolling(20, min_periods=15).mean() - 1.0
@@ -93,7 +96,8 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     out["close_position"] = _safe_div(df["close_raw"] - df["low_raw"], day_range)
     out["final_vs_last_pct"] = _safe_div(official, df["close_raw"]) - 1.0   # فشار خرید/فروش انتهای بازار
     out["value_ratio_20d"] = _safe_div(df["value"], df["value"].shift(1).rolling(20, min_periods=15).mean())
-    out["days_since_listing"] = np.arange(len(df))  # تعداد روزهای معاملاتی از اولین معامله ثبت‌شده
+    # تعداد روزهای معاملاتی از اولین ردیف آرشیو (آرشیو TSETMC از ۱۳۸۰ شروع می‌شود؛ برای سهم‌های قدیمی‌تر تاریخ عرضه نیست)
+    out["days_since_listing"] = np.arange(len(df))
 
     # ─── صف قفل ───
     locks = market_rules.lock_flags(df)

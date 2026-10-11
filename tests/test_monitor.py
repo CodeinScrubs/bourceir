@@ -59,3 +59,10 @@ def test_monitor_frozen_timestamp():
 
 def test_buyer_power_without_data_is_none():
     assert buyer_power({"real_buy_volume": 10}) is None
+
+
+def test_missing_server_time_is_unknown_not_fresh():
+    report = DataFreshnessMonitor().inspect_snapshot("فولاد", {"last_price": 3880.0})
+    assert report["status"] == "⚪ Unknown" and not report["is_healthy"]
+    assert report["delay_seconds"] is None and report["provider_time"] is None
+    assert report["buyer_power"] is None and report["warnings"]   # نسخه قبل: «تازه» و قدرت خریدار ساختگی ۱

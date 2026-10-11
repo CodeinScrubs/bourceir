@@ -69,3 +69,6 @@ htmlcov/
 
 # تنظیمات شخصی Claude Code (فایل‌های مشترک مثل launch.json ثبت می‌شوند)
 .claude/settings.local.json
+
+# گزارش عیب‌یاب CI
+doctor-ci.json

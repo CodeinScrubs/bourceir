@@ -33,6 +33,8 @@ INCREMENTAL_LOOKBACK_ROWS = 30
 # داده دیده‌بان بعد از این ساعت (به وقت تهران) برای کندل روز نهایی فرض می‌شود
 SESSION_FINAL_AFTER = "13:00"
 INCREMENTAL_MAX_GAP_DAYS = 25
+# سقف روزهای «حفره» (بین اولین و آخرین آمار ثبت‌شده) که در هر اجرا برای هر نماد دوباره درخواست می‌شود
+CLIENT_TYPE_HOLES_PER_RUN = 20
 
 ProgressFn = Callable[[int, int, str], None]
 
@@ -57,10 +59,8 @@ class DataCollector:
 
     @staticmethod
     def _fingerprint(snap: Dict[str, Any]) -> tuple:
-        return tuple(snap.get(k) for k in (
-            "trade_count", "last_price", "close_price", "bid_price_1", "bid_vol_1", "ask_price_1", "ask_vol_1",
-            "real_buy_volume", "real_sell_volume",
-        ))
+        """همه فیلدها به جز زمان ثبت؛ تغییر در سطوح ۲ تا ۵ عمق بازار هم «تغییر» حساب می‌شود."""
+        return tuple(sorted((k, v) for k, v in snap.items() if k != "captured_at"))
 
     # ═══════════════════════════════════════════════
     # کمکی‌ها
@@ -145,11 +145,22 @@ class DataCollector:
         last = row["d"]
         if (now_tehran().date() - date.fromisoformat(last)).days > INCREMENTAL_MAX_GAP_DAYS:
             return None
-        missing = self.db.conn.execute(
+        new_days = self.db.conn.execute(
             "SELECT date FROM daily_prices WHERE symbol_id = ? AND source = 'tsetmc' AND date > ? ORDER BY date;",
             (symbol_id, last),
         ).fetchall()
-        return [r["date"] for r in missing] or []
+        # حفره‌ها: سرویس «کل تاریخچه» TSETMC گاهی روزهایی را جا می‌اندازد که سرویس «روز به روز» دارد
+        # (روی داده واقعی: ~۳۶۰ روز در ۱۳۹۹ و ۱۴۰۰). فقط بین اولین و آخرین آمار ثبت‌شده جست‌وجو می‌شود؛
+        # پیش از آن (مثلاً قبل از ۱۳۹۴) TSETMC آماری ندارد و درخواست هر روزه‌اش بی‌فایده و سنگین است.
+        holes = self.db.conn.execute(
+            "SELECT dp.date FROM daily_prices dp LEFT JOIN client_types_daily ct "
+            "ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date "
+            "WHERE dp.symbol_id = ? AND dp.source = 'tsetmc' AND ct.id IS NULL "
+            "AND dp.date > (SELECT MIN(date) FROM client_types_daily WHERE symbol_id = ?) AND dp.date < ? "
+            "ORDER BY dp.date DESC LIMIT ?;",
+            (symbol_id, symbol_id, last, CLIENT_TYPE_HOLES_PER_RUN),
+        ).fetchall()
+        return sorted({r["date"] for r in holes} | {r["date"] for r in new_days})
 
     def collect_history(self, symbols: Optional[List[str]] = None, full: bool = False,
                         progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
@@ -178,7 +189,7 @@ class DataCollector:
                 flags = DataValidator.quant_anomaly_flags(df)
                 flagged = df.index[flags["price_anomaly"] | flags["volume_anomaly"]]
                 anomalies += self.db.insert_quality_metrics_bulk([{
-                    "symbol_id": meta["id"], "trade_date": df.at[idx, "date"], "quality_score": 70.0,
+                    "symbol_id": meta["id"], "trade_date": df.at[idx, "date"],
                     "price_anomaly_flag": int(flags.at[idx, "price_anomaly"]),
                     "volume_anomaly_flag": int(flags.at[idx, "volume_anomaly"]),
                     "notes": "ناهنجاری کمی در تاریخچه روزانه",
@@ -258,7 +269,7 @@ class DataCollector:
         """
         started_at = now_tehran_iso()
         snapshots = self.provider.get_market_snapshots()
-        if snapshots is None:
+        if not snapshots:  # پاسخ خالی هم خطاست، نه «موفق با صفر نماد»
             return self._finish("snapshot", started_at, 0, 0, 1, ["دیده‌بان بازار از TSETMC دریافت نشد"])
 
         wanted = set(symbols) if symbols else None
@@ -273,16 +284,18 @@ class DataCollector:
             if self._last_fingerprints.get(snap["ins_code"]) == fingerprint:
                 unchanged += 1
                 continue
-            self._last_fingerprints[snap["ins_code"]] = fingerprint
             is_valid, snap_errors = DataValidator.validate_snapshot(snap)
             if not is_valid:
                 rejected += 1
                 errors.append(f"{sym['symbol_fa']}: {'; '.join(snap_errors)}")
-                self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=50.0,
-                                              quality_score=40.0, notes="; ".join(snap_errors))
+                self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=None,
+                                              quality_score=None, notes="; ".join(snap_errors))
                 continue
             rows.append((sym["id"], snap))
         saved = self.db.insert_snapshots_bulk(rows)
+        # اثر انگشت فقط بعد از ذخیره موفق ثبت می‌شود تا خطای ذخیره، داده بعدی را «بدون تغییر» جا نزند
+        for _, snap in rows:
+            self._last_fingerprints[snap["ins_code"]] = self._fingerprint(snap)
         return self._finish("snapshot", started_at, saved + rejected, saved, rejected, errors,
                             {"market_rows": len(snapshots), "unchanged_skipped": unchanged,
                              "snapshots": [s for _, s in rows]})

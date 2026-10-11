@@ -6,7 +6,7 @@
 - mkt_breadth: نسبت نمادهای مثبت
 - mkt_ret_median: میانه بازده روز
 - mkt_locked_up_ratio / mkt_locked_down_ratio: سهم نمادهای صف خرید/فروش قفل
-- mkt_real_flow_ratio: ورود پول حقیقی کل بازار ÷ ارزش کل معاملات
+- mkt_real_flow_ratio: ورود پول حقیقی ÷ ارزش معاملات همان نمادهایی که آمار حقیقی/حقوقی دارند
 - mkt_breadth_5d: میانگین پهنای بازار ۵ روز اخیر
 و فیچرهای نسبی هر نماد نسبت به بازار:
 - rel_ret_5d: بازده ۵ روزه نماد منهای میانه بازده ۵ روزه بازار همان روز
@@ -35,7 +35,10 @@ def compute_market_features(panel: pd.DataFrame) -> pd.DataFrame:
         "mkt_symbols": grouped["symbol"].count(),
     })
     if {"real_net_value", "value"}.issubset(panel.columns):
-        flows = grouped[["real_net_value", "value"]].sum(min_count=1)
+        # صورت و مخرج از یک مجموعه نماد: نمادهای بدون آمار حقیقی/حقوقی نباید فقط مخرج را بزرگ کنند
+        matched = panel[panel["real_net_value"].notna() & panel["value"].notna()]
+        flows = matched.groupby("date")[["real_net_value", "value"]].sum()
+        flows["value"] = flows["value"].where(flows["value"] > 0)
         covered = grouped["real_net_value"].count()
         # روزهایی که داده حقیقی/حقوقی کمتر از نیمی از نمادها منتشر شده، نامعتبر حساب می‌شوند
         market["mkt_real_flow_ratio"] = (flows["real_net_value"] / flows["value"]).where(covered >= 0.5 * market["mkt_symbols"])

@@ -82,14 +82,20 @@ def lock_flags(df: pd.DataFrame, min_move: Optional[float] = None) -> pd.DataFra
     روز «قفل صف خرید» یعنی: کل معاملات روز در یک قیمت انجام شده (بیشترین = کمترین)
     و آن قیمت حداقل min_move بالاتر از قیمت مرجع است. در چنین روزی خریدار جدید در انتهای صف
     قرار می‌گیرد و عملاً سفارشش پر نمی‌شود. «قفل صف فروش» قرینه همین است.
+
+    مبنای مقایسه «قیمت معامله‌شده» است، نه قیمت پایانی رسمی: وقتی حجم روز کمتر از حجم مبنا باشد،
+    قیمت پایانی فقط بخشی از حرکت را نشان می‌دهد و صف قفلِ کم‌حجم دیده نمی‌شد (روی داده واقعی،
+    بیش از نیمی از روزهای قفل — مثلاً ۱۸ هزار روز صف فروش سال ۱۴۰۰ — از قلم می‌افتاد).
+    دامنه نوسان در تاریخ بازار از ±۲٪ تا ±۷٪ و گاهی نامتقارن (+۶٪/−۲٪) بوده است؛ آستانه پیش‌فرض ۰.۵٪
+    از کمترین دامنه مشاهده‌شده بسیار کمتر است و فقط معامله تک‌قیمتی نزدیک قیمت مرجع را کنار می‌گذارد.
     """
     min_move = settings.BACKTEST_CONFIG["lock_min_move_pct"] if min_move is None else min_move
     ref = reference_price(df)
     single_price = (df["high_raw"] == df["low_raw"]) & (df["volume"].fillna(0) > 0)
-    move = official_close(df) / ref - 1.0
+    traded_move = df["high_raw"] / ref - 1.0
     return pd.DataFrame({
-        "locked_up": (single_price & (move >= min_move)).fillna(False),
-        "locked_down": (single_price & (move <= -min_move)).fillna(False),
+        "locked_up": (single_price & (traded_move >= min_move)).fillna(False),
+        "locked_down": (single_price & (traded_move <= -min_move)).fillna(False),
     }, index=df.index)
 
 

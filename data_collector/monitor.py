@@ -55,23 +55,32 @@ class DataFreshnessMonitor:
         last_price = snapshot.get("last_price")
         provider_time_str = snapshot.get("provider_timestamp")
 
-        delay_seconds = 0
-        status_flag = "🟢 Fresh"
+        delay_seconds: Optional[int] = None
+        status_flag = "⚪ Unknown"
         warnings = []
 
         if provider_time_str:
             try:
-                delay_seconds = max(0, int((now - _to_tehran(provider_time_str)).total_seconds()))
-            except Exception:
-                delay_seconds = 0
+                delay_seconds = int((now - _to_tehran(provider_time_str)).total_seconds())
+                status_flag = "🟢 Fresh"
+                if delay_seconds < -5:
+                    warnings.append("زمان سرور از ساعت این رایانه جلوتر است؛ ساعت ویندوز را بررسی کنید.")
+                delay_seconds = max(0, delay_seconds)
+            except (TypeError, ValueError):
+                warnings.append("زمان سرور قابل خواندن نیست؛ تازگی داده نامعلوم است.")
 
             # فریز بودن سرور: تایم‌استمپ سرور با وجود گذشت زمان تغییر نکرده
             if self.last_seen_timestamps.get(symbol_fa) == provider_time_str:
                 warnings.append("⚠️ تایم‌استمپ سرور تغییر نکرده است (احتمال پاسخ کش‌شده سرور بورس).")
                 status_flag = "🟡 Delayed"
             self.last_seen_timestamps[symbol_fa] = provider_time_str
+        else:
+            # بدون تاریخ و ساعت سرور، داده «تازه» فرض نمی‌شود
+            warnings.append("زمان سرور برای این نماد موجود نیست؛ تازگی داده نامعلوم است.")
 
-        if delay_seconds > self.stale_threshold_seconds:
+        if delay_seconds is None:
+            pass
+        elif delay_seconds > self.stale_threshold_seconds:
             status_flag = "🔴 Stale / Frozen"
             warnings.append(f"تاخیر سرور ({delay_seconds} ثانیه) از آستانه مجاز بیشتر است.")
         elif delay_seconds > self.delayed_threshold_seconds:
@@ -91,11 +100,11 @@ class DataFreshnessMonitor:
         return {
             "symbol": symbol_fa,
             "checked_at": now.strftime("%H:%M:%S"),
-            "provider_time": provider_time_str or now.isoformat(),
+            "provider_time": provider_time_str,
             "delay_seconds": delay_seconds,
             "status": status_flag,
             "last_price": last_price,
-            "buyer_power": bp if bp is not None else 1.0,
+            "buyer_power": bp,   # None = نامعلوم (عدد ساختگی ۱ گزارش نمی‌شود)
             "warnings": warnings,
             "is_healthy": status_flag == "🟢 Fresh",
         }

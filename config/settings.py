@@ -11,6 +11,7 @@
 """
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -37,6 +38,8 @@ if load_dotenv is not None:
 
 # تعیین محیط اجرا (development یا production)
 ENV = os.getenv("BRS_ENV", "development").lower()
+if ENV not in ("development", "production"):
+    raise ValueError(f"BRS_ENV باید development یا production باشد، نه «{ENV}»")
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,19 +54,50 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
-    if yaml is None or not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        logger.warning("خطا در خواندن فایل تنظیمات %s: %s — از مقادیر پیش‌فرض استفاده می‌شود.", path, e)
-        return {}
+    """
+    خواندن فایل تنظیمات. خطا = توقف برنامه با پیام روشن: اجرای بی‌صدا با مقادیر پیش‌فرض (مثلاً کارمزد اشتباه)
+    خطرناک‌تر از اجرا نشدن است.
+    """
+    if yaml is None:
+        raise RuntimeError("کتابخانه PyYAML نصب نیست؛ فایل SETUP.bat را اجرا کنید.")
+    if not path.exists():
+        raise FileNotFoundError(f"فایل تنظیمات پیدا نشد: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        value = yaml.safe_load(f) or {}
+    if not isinstance(value, dict):
+        raise ValueError(f"ساختار فایل تنظیمات {path.name} نامعتبر است")
+    return value
+
+
+def _check_range(config: Dict[str, Any], section: str, key: str, low: float, high: float) -> None:
+    value = config.get(section, {}).get(key)
+    if value is None:
+        return  # مقدار پیش‌فرض کد استفاده می‌شود
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or not low <= value <= high:
+        raise ValueError(f"مقدار نامعتبر در تنظیمات: {section}.{key} = {value!r} (مجاز: {low} تا {high})")
+
+
+def validate_config(config: Dict[str, Any]) -> None:
+    """قیدهای حیاتی که اشتباه در آن‌ها نتایج بکتست و داده را بی‌صدا خراب می‌کند."""
+    market = config.get("market", {})
+    if market.get("timezone", "Asia/Tehran") != "Asia/Tehran" or market.get("price_unit", "Rial") != "Rial":
+        raise ValueError("منطقه زمانی باید Asia/Tehran و واحد قیمت Rial باشد (قانون ۵ AGENTS.md)")
+    for key in ("buy", "sell"):
+        _check_range(config, "fees", key, 0.0, 0.05)
+    _check_range(config, "backtest", "max_volume_participation_pct", 1e-6, 0.05)   # قانون ۸
+    _check_range(config, "backtest", "default_slippage_bps", 0, 1000)
+    _check_range(config, "backtest", "initial_capital", 1, 1e15)
+    _check_range(config, "backtest", "lock_min_move_pct", 0, 0.02)
+    _check_range(config, "data_collection", "request_timeout_seconds", 1, 300)
+    _check_range(config, "data_collection", "polling_interval_seconds", 5, 3600)
+    _check_range(config, "data_collection", "rate_limit_delay", 0, 10)
 
 
 CONFIG: Dict[str, Any] = _load_yaml(CONFIG_DIR / "default.yaml")
 if ENV == "production":
     CONFIG = _deep_merge(CONFIG, _load_yaml(CONFIG_DIR / "production.yaml"))
+validate_config(CONFIG)
 
 _project = CONFIG.get("project", {})
 _market = CONFIG.get("market", {})
@@ -75,9 +109,10 @@ _ai = CONFIG.get("ai", {})
 
 # ─── پروژه و مسیرها ───
 PROJECT_NAME = _project.get("name", "BRS Quant Engine")
-VERSION = str(_project.get("version", "0.5.0"))
-DATA_DIR = BASE_DIR / "data"
-LOG_DIR = BASE_DIR / "logs"
+VERSION = str(_project.get("version", "0.5.1"))
+# امکان تغییر مسیر داده و لاگ با متغیر محیطی (برای CI و نصب‌های جدا)
+DATA_DIR = Path(os.getenv("BRS_DATA_DIR", str(BASE_DIR / "data")))
+LOG_DIR = Path(os.getenv("BRS_LOG_DIR", str(BASE_DIR / "logs")))
 # امکان تغییر مسیر دیتابیس با متغیر محیطی (برای تست‌ها و محیط‌های جدا)
 DB_PATH = Path(os.getenv("BRS_DB_PATH", str(DATA_DIR / "brs.db")))
 
@@ -124,7 +159,7 @@ BACKTEST_CONFIG = {
     "max_volume_participation_pct": float(_bt.get("max_volume_participation_pct", 0.05)),
     "initial_capital": float(_bt.get("initial_capital", 100_000_000.0)),
     "execution_price": _bt.get("execution_price", "next_day_vwap"),
-    "lock_min_move_pct": float(_bt.get("lock_min_move_pct", 0.015)),
+    "lock_min_move_pct": float(_bt.get("lock_min_move_pct", 0.005)),
 }
 
 # ─── هوش مصنوعی (TypeSafe Jev) ───

@@ -138,3 +138,26 @@ def test_client_types_upsert(db):
     assert db.upsert_client_types_df(sym_id, df) == 1
     out = db.get_client_types_df("تست")
     assert len(out) == 1 and out.iloc[0]["buy_i_volume"] == 10
+
+
+def test_revision_log_keeps_replaced_values_only_when_they_change(db):
+    """مایگریشن 007: اگر TSETMC عدد گذشته را عوض کند، مقدار قبلی می‌ماند؛ به‌روزرسانی با همان اعداد ردیفی نمی‌سازد."""
+    import pandas as pd
+
+    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": "1"})
+    row = {"date": "2026-10-11", "open_raw": 3800.0, "high_raw": 3880.0, "low_raw": 3780.0, "close_raw": 3850.0,
+           "close_final_raw": 3840.0, "ref_price_raw": 3800.0, "volume": 1000, "value": 3.84e6, "trade_count": 10}
+    db.upsert_daily_prices_df(sym_id, pd.DataFrame([row]), recompute=False)
+    db.upsert_daily_prices_df(sym_id, pd.DataFrame([row]), recompute=False)            # همان اعداد
+    count = "SELECT COUNT(*) FROM daily_prices_revisions"
+    assert db.conn.execute(count).fetchone()[0] == 0
+    db.upsert_daily_prices_df(sym_id, pd.DataFrame([{**row, "close_final_raw": 3850.0}]), recompute=False)
+    rev = db.conn.execute("SELECT close_final_raw, revised_at FROM daily_prices_revisions").fetchone()
+    assert rev["close_final_raw"] == 3840.0 and rev["revised_at"]                        # مقدار قبلی حفظ شد
+    assert db.get_daily_prices_df("فولاد")["close_final_raw"].iloc[0] == 3850.0           # جدول اصلی = آخرین نسخه
+
+    ct = pd.DataFrame({"date": ["2026-10-11"], "buy_i_volume": [5.0]})
+    db.upsert_client_types_df(sym_id, ct)
+    db.upsert_client_types_df(sym_id, ct)
+    db.upsert_client_types_df(sym_id, ct.assign(buy_i_volume=6.0))
+    assert [r[0] for r in db.conn.execute("SELECT buy_i_volume FROM client_types_daily_revisions")] == [5.0]

@@ -3,6 +3,8 @@
 آزمون‌های یکپارچه گردآورنده داده (DataCollector) با منبع داده ساختگیِ آزمونی و دیتابیس موقت
 """
 
+import pandas as pd
+
 from data_collector.scheduler import DataCollector
 from data_collector.tsetmc import TsetmcProvider
 from tests.conftest import FOOLAD_INS, FakeSession
@@ -58,6 +60,11 @@ def test_market_snapshot_saves_valid_and_skips_unchanged(db, market_watch_rows, 
     second = collector.collect_market_snapshot()  # بدون تغییر در بازار → ذخیره تکراری نمی‌شود
     assert second["unchanged_skipped"] == 1 and second["symbols_succeeded"] == 0
 
+    # تغییر فقط در سطح دوم عمق بازار هم باید ذخیره شود (نسخه قبل فقط سطح اول را مقایسه می‌کرد)
+    market_watch_rows[0]["blDs"][1]["qmd"] += 1000
+    third = collector.collect_market_snapshot()
+    assert third["symbols_succeeded"] == 1
+
 
 def test_invalid_snapshot_is_quarantined(db, market_watch_rows):
     broken = dict(market_watch_rows[0], pdv=5000.0)  # آخرین معامله بالاتر از سقف دامنه
@@ -91,3 +98,30 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
     assert report["market_date"] == "2026-10-11" and report["symbols_succeeded"] == 2
     row = db.get_daily_prices_df("فولاد").set_index("date").loc["2026-10-11"]
     assert (row["close_final_raw"], row["ref_price_raw"], row["high_raw"]) == (4180.0, 4100.0, 4220.0)
+
+
+def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db):
+    """
+    سرویس «کل تاریخچه» TSETMC گاهی روزهایی را جا می‌اندازد (روی داده واقعی ~۳۶۰ روز در ۱۳۹۹ و ۱۴۰۰) که سرویس
+    روزبه‌روز دارد. حفره‌ها دوباره درخواست می‌شوند؛ روزهای قبل از اولین آمار (که TSETMC ندارد) هرگز.
+    """
+    from datetime import timedelta
+
+    from core.timeutils import now_tehran
+
+    days = [(now_tehran().date() - timedelta(days=n)).isoformat() for n in range(10, 0, -1)]
+    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": FOOLAD_INS, "instrument_type_code": 300})
+    for d in days:
+        db.insert_daily_price(sym_id, d, 100, 101, 99, 100, volume=10, value=1000.0,
+                              close_final_raw=100, ref_price_raw=100)
+    with_stats = [days[2], days[3], days[5], days[7]]   # روزهای ۰ و ۱ قبل از اولین آمار؛ ۴ و ۶ حفره؛ ۸ و ۹ جدید
+    db.upsert_client_types_df(sym_id, pd.DataFrame({"date": with_stats, "buy_i_volume": 1.0}))
+    missing = DataCollector(db=db, provider=TsetmcProvider(session=FakeSession({})))._missing_client_type_dates(sym_id)
+    assert missing == [days[4], days[6], days[8], days[9]]
+
+
+def test_snapshot_bulk_insert_reports_real_inserts(db, market_watch_rows, client_type_all):
+    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": FOOLAD_INS, "instrument_type_code": 300})
+    snap = TsetmcProvider.snapshot_from_market_watch(market_watch_rows[0], None, "2026-10-11T10:00:00+03:30")
+    assert db.insert_snapshots_bulk([(sym_id, snap)]) == 1
+    assert db.insert_snapshots_bulk([(sym_id, snap)]) == 0   # تکراری درج نشد؛ نسخه قبل «۱» گزارش می‌کرد

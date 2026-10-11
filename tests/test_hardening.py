@@ -4,7 +4,10 @@
 ایندکس‌ها، پشتیبان‌گیری و اجرای کارهای پس‌زمینه
 """
 
+import json
 import sqlite3
+import subprocess
+import sys
 import time
 
 import pytest
@@ -135,7 +138,8 @@ def test_background_job_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("BRS_DB_PATH", str(tmp_path / "job.db"))
     monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(jobs.settings, "LOG_DIR", tmp_path)
-    assert jobs.start_job("doctor", ["doctor", "--offline"]) is True
+    report_path = tmp_path / "doctor.json"
+    assert jobs.start_job("doctor", ["doctor", "--offline", "--json", str(report_path)]) is True
     deadline = time.time() + 90
     while jobs.job_status("doctor")["running"] and time.time() < deadline:
         time.sleep(0.5)
@@ -143,3 +147,64 @@ def test_background_job_lifecycle(tmp_path, monkeypatch):
     assert not status["running"]
     assert any("گزارش سلامت" in line for line in status["log_tail"])
     assert jobs.stop_job("doctor") is False  # کار تمام‌شده را نمی‌توان متوقف کرد
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["checks"] and report["overall"] in ("ok", "warn", "error") and not report["network_tested"]
+
+
+def test_recycled_pid_is_not_mistaken_for_our_job():
+    """ویندوز شماره PID را دوباره به فرایند دیگری می‌دهد؛ «زمان ساخت» فرایند باید یکی باشد."""
+    import psutil
+
+    from ops import jobs
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "brs.py"])
+    try:
+        created = psutil.Process(proc.pid).create_time()
+        assert jobs._is_alive(proc.pid, created)
+        assert not jobs._is_alive(proc.pid, created + 100)
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+@pytest.mark.parametrize("bad", [
+    {"fees": {"buy": 0.5}},                                  # کارمزد ۵۰٪
+    {"backtest": {"max_volume_participation_pct": 0.2}},     # نقض قید نقدشوندگی ۵٪
+    {"market": {"price_unit": "Toman"}},                     # قیمت‌ها فقط ریال
+    {"data_collection": {"request_timeout_seconds": "30"}},  # نوع اشتباه
+])
+def test_dangerous_config_values_stop_the_program(bad):
+    from config import settings
+
+    with pytest.raises(ValueError):
+        settings.validate_config(bad)
+    settings.validate_config(settings.CONFIG)   # تنظیمات فعلی پروژه معتبرند
+
+
+def test_failed_migration_leaves_no_trace_and_edited_migration_is_refused(tmp_path, monkeypatch):
+    import shutil
+
+    from database import migrator
+
+    folder = tmp_path / "migrations"
+    shutil.copytree(migrator.MIGRATIONS_DIR, folder, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(migrator, "MIGRATIONS_DIR", folder)
+    conn = sqlite3.connect(tmp_path / "m.db")
+    try:
+        migrator.apply_migrations(conn)
+        version = migrator.current_version(conn)
+        broken = folder / f"{version + 1:03d}_broken.sql"
+        broken.write_text("CREATE TABLE half_done (a INTEGER);\nINSERT INTO no_such_table VALUES (1);\n", encoding="utf-8")
+        with pytest.raises(sqlite3.OperationalError):
+            migrator.apply_migrations(conn)
+        # همه یا هیچ: نه جدول نیمه‌کاره، نه ثبت نسخه
+        assert migrator.current_version(conn) == version
+        assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'half_done';").fetchone()
+        broken.unlink()
+
+        applied = sorted(folder.glob("001_*"))[0]
+        applied.write_text(applied.read_text(encoding="utf-8") + "\n-- ویرایش بعد از اجرا\n", encoding="utf-8")
+        with pytest.raises(RuntimeError):
+            migrator.apply_migrations(conn)   # مایگریشن اجراشده نباید ویرایش شود
+    finally:
+        conn.close()

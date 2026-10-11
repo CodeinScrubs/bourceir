@@ -106,6 +106,16 @@ def test_features_without_client_types():
     assert f["buyer_power"].isna().all() and f["ret_5d"].notna().sum() > 100
 
 
+def test_rsi_of_flat_price_is_neutral_and_duplicate_dates_rejected():
+    prices, _ = synthetic_history()
+    flat = prices.head(30).copy()
+    flat[["low_raw", "high_raw", "open_raw", "close_raw", "close_final_raw", "ref_price_raw"]] = 5000.0
+    f = compute_daily_features(flat, None)
+    assert f["rsi_14d"].dropna().eq(50.0).all() and f["rsi_14d"].notna().any()   # نسخه ۱: عدد ۱۰۰ (اشباع خرید کاذب)
+    with pytest.raises(ValueError):
+        compute_daily_features(pd.concat([prices.head(5), prices.head(1)]), None)
+
+
 def test_market_and_relative_features():
     panel = pd.DataFrame({
         "date": ["d1", "d1", "d1", "d2", "d2", "d2"],
@@ -119,7 +129,8 @@ def test_market_and_relative_features():
     assert market.loc["d1", "mkt_breadth"] == pytest.approx(2 / 3)
     assert market.loc["d2", "mkt_breadth"] == 0.0
     assert market.loc["d1", "mkt_locked_up_ratio"] == pytest.approx(1 / 3)
-    assert market.loc["d1", "mkt_real_flow_ratio"] == pytest.approx(5 / 300)
+    # صورت و مخرج از نمادهای دارای آمار حقیقی/حقوقی (a و b)؛ نسخه ۱ ارزش نماد c را هم در مخرج می‌گذاشت (۵/۳۰۰)
+    assert market.loc["d1", "mkt_real_flow_ratio"] == pytest.approx(5 / 200)
     rel = add_relative_features(panel).set_index(["date", "symbol"])
     assert rel.loc[("d1", "a"), "rel_ret_5d"] == pytest.approx(0.05)
 
@@ -137,6 +148,11 @@ def test_feature_store_build_and_load(db, tmp_path):
     assert list(panel.columns) == ["date", "symbol"] + ALL_FEATURES
     assert panel.groupby("date")["mkt_symbols"].first().max() == 2
     assert load_manifest(root=tmp_path)["version"] == manifest["version"]
+    # منشأ قابل بازتولید: commit، اثر انگشت کد و فایل، نسخه دیتابیس و کارمزدهای استفاده‌شده
+    prov = manifest["provenance"]
+    assert prov["parquet_sha256"] and prov["code_sha256"] and prov["database_schema_version"] >= 6
+    assert prov["fees"] == {"buy": 0.003712, "sell": 0.0088}
+    assert not list(tmp_path.rglob("*.tmp"))   # نوشتن اتمی: فایل موقت باقی نمی‌ماند
 
 
 def test_ipo_day_return_is_not_computed():

@@ -8,6 +8,7 @@
 - همه مایگریشن‌ها باید «تکرارپذیر» (idempotent) نوشته شوند تا روی دیتابیس‌های قدیمی هم امن باشند.
 """
 
+import hashlib
 import importlib.util
 import logging
 import re
@@ -93,26 +94,83 @@ def _run_python_migration(conn: sqlite3.Connection, path: Path) -> None:
     spec.loader.exec_module(module)
     if not hasattr(module, "upgrade"):
         raise RuntimeError(f"مایگریشن {path.name} تابع upgrade(conn) ندارد")
+    module.upgrade(conn)
+
+
+def _run_sql_migration(conn: sqlite3.Connection, path: Path) -> None:
+    """
+    اجرای دستورهای SQL یکی‌یکی در تراکنش جاری. (executescript پیش از اجرا commit می‌کند و مایگریشن
+    نیمه‌کاره را قابل برگشت نمی‌گذارد.)
+    """
+    statement = ""
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            conn.execute(statement)
+            statement = ""
+    leftover = [ln for ln in statement.splitlines() if ln.strip() and not ln.strip().startswith("--")]
+    if leftover:
+        raise RuntimeError(f"دستور SQL ناتمام در انتهای {path.name}")
+
+
+def _file_sha256(path: Path) -> str:
+    # پایان خط ویندوز/لینوکس اثری ندارد
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _verify_checksums(conn: sqlite3.Connection, migrations: List[Tuple[int, str, Path]], version: int) -> None:
+    """
+    مایگریشنی که یک بار اجرا شده نباید ویرایش شود (دیتابیس‌های موجود تغییر را هرگز نمی‌بینند و ساختارها
+    بی‌صدا از هم جدا می‌شوند). تغییر لازم = فایل مایگریشن جدید با شماره بعدی.
+    """
     with conn:
-        module.upgrade(conn)
+        conn.execute("CREATE TABLE IF NOT EXISTS migration_checksums (version INTEGER PRIMARY KEY, sha256 TEXT NOT NULL);")
+    recorded = dict(conn.execute("SELECT version, sha256 FROM migration_checksums;").fetchall())
+    for number, name, path in migrations:
+        if number > version:
+            continue
+        digest = _file_sha256(path)
+        if number not in recorded:
+            # دیتابیس‌های قدیمی‌تر از این قابلیت: اثر انگشت فعلی مبنا قرار می‌گیرد
+            with conn:
+                conn.execute("INSERT INTO migration_checksums (version, sha256) VALUES (?, ?);", (number, digest))
+        elif recorded[number] != digest:
+            raise RuntimeError(
+                f"فایل مایگریشن اجراشده {name} ویرایش شده است. به جای ویرایش، مایگریشن جدید با شماره بعدی بسازید.")
 
 
 def apply_migrations(conn: sqlite3.Connection) -> List[str]:
-    """اعمال همه مایگریشن‌های اجرانشده به ترتیب. خروجی: نام مایگریشن‌های اعمال‌شده."""
+    """
+    اعمال همه مایگریشن‌های اجرانشده به ترتیب. هر مایگریشن «همه یا هیچ» است: خودش و ثبتش در
+    schema_migrations در یک تراکنش؛ اگر وسط کار خطا رخ دهد، هیچ تغییری باقی نمی‌ماند.
+    خروجی: نام مایگریشن‌های اعمال‌شده.
+    """
     applied_now = []
     version = current_version(conn)
-    for number, name, path in discover_migrations():
+    migrations = discover_migrations()
+    _verify_checksums(conn, migrations, version)
+    for number, name, path in migrations:
         if number <= version:
             continue
         logger.info("اعمال مایگریشن %s ...", name)
-        if path.suffix == ".sql":
-            conn.executescript(path.read_text(encoding="utf-8"))
-        else:
-            _run_python_migration(conn, path)
-        with conn:
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            if path.suffix == ".sql":
+                _run_sql_migration(conn, path)
+            else:
+                _run_python_migration(conn, path)
             conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);",
                 (number, name, now_tehran_iso()),
             )
+            conn.execute("INSERT OR REPLACE INTO migration_checksums (version, sha256) VALUES (?, ?);",
+                         (number, _file_sha256(path)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            logger.exception("مایگریشن %s ناموفق بود؛ هیچ تغییری اعمال نشد.", name)
+            raise
         applied_now.append(name)
     return applied_now
