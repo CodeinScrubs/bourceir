@@ -38,6 +38,11 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# فایل‌های فشرده و خروجی‌های موقت
+*.zip
+*.tar.gz
+*.rar
+
 # توزیع و پکیج
 dist/
 build/

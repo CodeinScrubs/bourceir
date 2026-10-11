@@ -12,13 +12,16 @@ from typing import Optional, List, Dict, Any
 import pandas as pd
 
 from config import settings
+from data_collector.base import BaseDataProvider
+from data_collector.validator import DataValidator
 
 logger = logging.getLogger(__name__)
 
 
-class TSEDataProvider:
+class TSEDataProvider(BaseDataProvider):
     """
-    تامین‌کننده داده‌های بازار بورس و فرابورس تهران با استفاده از pytse-client.
+    تامین‌کننده داده‌های بازار بورس و فرابورس تهران با استفاده از pytse-client
+    و پیاده‌سازی اینترفیس استاندارد BaseDataProvider.
     """
 
     def __init__(self):
@@ -96,6 +99,11 @@ class TSEDataProvider:
             # مرتب‌سازی صعودی بر اساس تاریخ معامله
             if 'date' in df.columns:
                 df = df.sort_values(by='date').reset_index(drop=True)
+
+            # اعتبارسنجی و پالایش رکوردهای نامعتبر توسط DataValidator
+            df, invalid_count = DataValidator.validate_daily_dataframe(df)
+            if invalid_count > 0:
+                logger.info("تعداد %d رکورد غیرمعتبر در فرآیند پالایش حذف گردید.", invalid_count)
 
             logger.info("تعداد %d رکورد سابقه برای نماد '%s' دریافت و استانداردسازی شد.", len(df), symbol_fa)
             return df
@@ -308,3 +316,22 @@ class TSEDataProvider:
         except Exception as e:
             logger.error("خطا در آزمایش اتصال به سرورهای بورس: %s", e)
             return False
+
+    def get_intraday_trades(self, symbol_fa: str, date: Optional[str] = None) -> Optional[pd.DataFrame]:
+        """
+        دریافت ریزمعاملات یا سوابق درون‌روزی برای نماد در یک روز معاملاتی خاص.
+        (خوراک اصلی سیستم‌های نوسان‌گیری روزانه و اسکالپ).
+        """
+        self._apply_rate_limit()
+        try:
+            ticker = self.tse.Ticker(symbol=symbol_fa)
+            # در pytse-client در صورت پشتیبانی سرور از سابقه ریزمعاملات
+            if hasattr(ticker, "get_trade_details"):
+                trades = ticker.get_trade_details()
+                if trades is not None and not trades.empty:
+                    return trades
+            logger.info("دریافت ریزمعاملات درون‌روزی برای نماد '%s' در حال حاضر از طریق اسنپ‌شات‌های دوره‌ای ثبت می‌شود.", symbol_fa)
+            return None
+        except Exception as e:
+            logger.warning("عدم امکان دریافت سابقه معاملات درون‌روزی برای '%s': %s", symbol_fa, e)
+            return None

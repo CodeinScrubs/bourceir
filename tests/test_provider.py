@@ -283,3 +283,54 @@ def test_db_insert_daily_price(temp_db):
     assert row[10] == 850, "تعداد معاملات مطابقت ندارد"
     assert row[11] == "Rial", "واحد قیمت مطابقت ندارد"
     assert row[12] == "pytse", "منبع داده مطابقت ندارد"
+
+
+def test_data_validator():
+    """
+    تست لایه اعتبارسنجی داده‌ها (DataValidator) برای تشخیص کندل‌های معتبر و نامعتبر
+    """
+    from data_collector.validator import DataValidator
+
+    # ۱. کندل سالم
+    valid_candle = {
+        "date": "2026-10-10",
+        "open": 5000.0,
+        "high": 5200.0,
+        "low": 4900.0,
+        "close": 5100.0,
+        "volume": 100000,
+        "value": 510000000.0
+    }
+    is_valid, errors = DataValidator.validate_daily_candle(valid_candle)
+    assert is_valid is True, f"کندل سالم نباید خطا داشته باشد: {errors}"
+
+    # ۲. کندل ناسالم (قیمت منفی و high < low)
+    invalid_candle = {
+        "date": "2026-10-10",
+        "open": 5000.0,
+        "high": 4800.0,
+        "low": 4900.0,
+        "close": -100.0,
+        "volume": -50,
+        "value": 0
+    }
+    is_valid, errors = DataValidator.validate_daily_candle(invalid_candle)
+    assert is_valid is False, "کندل با قیمت منفی و High < Low باید نامعتبر شناخته شود"
+    assert len(errors) >= 2
+
+
+def test_universe_manager_filter():
+    """
+    تست فیلتر جامعه سهام (UniverseManager) برای تفکیک سهام عادی از صندوق‌ها و حق‌تقدم‌ها
+    """
+    from data_collector.universe import UniverseManager
+
+    # سهام عادی باید تأیید شوند
+    assert UniverseManager.is_common_stock("فولاد", "IRO1FOLD0001") is True
+    assert UniverseManager.is_common_stock("خودرو", "IRO1IKCO0001") is True
+
+    # حق تقدم‌ها، صندوق‌ها و اوراق بدهی باید رد شوند
+    assert UniverseManager.is_common_stock("خزامیاح") is False  # حق تقدم
+    assert UniverseManager.is_common_stock("اخزا101") is False  # اسناد خزانه
+    assert UniverseManager.is_common_stock("اهرم") is False     # صندوق اهرمی
+    assert UniverseManager.is_common_stock("دارا یکم") is False  # صندوق دولتی
