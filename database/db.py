@@ -17,6 +17,12 @@ from database.models import (
     CREATE_DAILY_PRICES_TABLE,
     CREATE_SNAPSHOTS_TABLE,
     CREATE_COLLECTION_LOG_TABLE,
+    CREATE_DATA_SOURCES_TABLE,
+    CREATE_CORPORATE_ACTIONS_TABLE,
+    CREATE_MARKET_CALENDAR_TABLE,
+    CREATE_INTRADAY_TRADES_TABLE,
+    CREATE_DATA_QUALITY_TABLE,
+    CREATE_EXPERIMENTS_TABLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +94,13 @@ class DatabaseManager:
                 cursor.execute(CREATE_DAILY_PRICES_TABLE)
                 cursor.execute(CREATE_SNAPSHOTS_TABLE)
                 cursor.execute(CREATE_COLLECTION_LOG_TABLE)
-            logger.info("ساختار جداول پایگاه داده با موفقیت آماده‌سازی شد.")
+                cursor.execute(CREATE_DATA_SOURCES_TABLE)
+                cursor.execute(CREATE_CORPORATE_ACTIONS_TABLE)
+                cursor.execute(CREATE_MARKET_CALENDAR_TABLE)
+                cursor.execute(CREATE_INTRADAY_TRADES_TABLE)
+                cursor.execute(CREATE_DATA_QUALITY_TABLE)
+                cursor.execute(CREATE_EXPERIMENTS_TABLE)
+            logger.info("ساختار کلیه جداول پایگاه داده با موفقیت آماده‌سازی شد.")
         except Exception as e:
             logger.error("خطا در ایجاد جداول پایگاه داده: %s", e)
             raise
@@ -322,6 +334,57 @@ class DatabaseManager:
                 logger.info("اتصال به پایگاه داده بسته شد.")
             except Exception as e:
                 logger.error("خطا در بستن اتصال پایگاه داده: %s", e)
+
+    def log_experiment(
+        self,
+        experiment_id: str,
+        strategy_name: str,
+        symbols_tested: str,
+        parameters_json: str,
+        metrics_json: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        status: str = "completed"
+    ) -> Optional[int]:
+        """ثبت آزمایش یا بکتست جهت رهگیری علمی استراتژی‌ها."""
+        query = """
+        INSERT OR REPLACE INTO experiments (
+            experiment_id, created_at, strategy_name, symbols_tested,
+            start_date, end_date, parameters_json, metrics_json, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    query,
+                    (
+                        experiment_id,
+                        get_current_tehran_time(),
+                        strategy_name,
+                        symbols_tested,
+                        start_date,
+                        end_date,
+                        parameters_json,
+                        metrics_json,
+                        status
+                    )
+                )
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error("خطا در ثبت آزمایش: %s", e)
+            return None
+
+    def get_experiments(self) -> List[Dict[str, Any]]:
+        """دریافت سوابق کلیه آزمایش‌ها و نتایج بکتست‌ها."""
+        query = "SELECT * FROM experiments ORDER BY id DESC;"
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(query)
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error("خطا در خواندن آزمایش‌ها: %s", e)
+            return []
 
 # نام مستعار جهت سازگاری با داشبورد و سایر بخش‌ها
 BRSDatabase = DatabaseManager

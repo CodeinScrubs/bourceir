@@ -87,3 +87,92 @@ CREATE TABLE IF NOT EXISTS collection_log (
     status TEXT                        -- وضعیت نهایی: 'success', 'partial', 'failed'
 );
 """
+
+# جدول منابع داده: مدیریت و اولویت‌بندی منابع تأمین داده
+CREATE_DATA_SOURCES_TABLE = """
+CREATE TABLE IF NOT EXISTS data_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_code TEXT UNIQUE NOT NULL,  -- کد منبع (مانند pytse, finpy, tsetmc_direct, broker_api)
+    name_fa TEXT NOT NULL,             -- نام نمایشی منبع
+    priority INTEGER DEFAULT 1,        -- اولویت استفاده
+    is_active BOOLEAN DEFAULT 1,       -- فعال بودن منبع
+    created_at TIMESTAMP
+);
+"""
+
+# جدول اقدامات شرکتی: افزایش سرمایه، تقسیم سود نقدی (DPS) و ضرایب تعدیل قیمت
+CREATE_CORPORATE_ACTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,        -- شناسه نماد
+    event_date TEXT NOT NULL,          -- تاریخ مجمع یا اقدام شرکتی (YYYY-MM-DD)
+    event_type TEXT NOT NULL,          -- نوع: 'capital_increase', 'dividend', 'share_split'
+    adjustment_factor REAL DEFAULT 1.0,-- ضریب تعدیل قیمت
+    cash_dividend REAL DEFAULT 0.0,    -- سود نقدی تقسیمی (ریال)
+    capital_increase_pct REAL DEFAULT 0.0, -- درصد افزایش سرمایه
+    description TEXT,                  -- توضیحات
+    captured_at TIMESTAMP,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, event_date, event_type)
+);
+"""
+
+# جدول تقویم بازار بورس: تعیین روزهای کاری و تعطیلات رسمی
+CREATE_MARKET_CALENDAR_TABLE = """
+CREATE TABLE IF NOT EXISTS market_calendar (
+    calendar_date TEXT PRIMARY KEY,    -- تاریخ به فرمت YYYY-MM-DD
+    is_trading_day BOOLEAN NOT NULL,   -- آیا روز معاملاتی است؟
+    holiday_reason TEXT,               -- دلیل تعطیلی (در صورت عدم معامله)
+    market_phase TEXT DEFAULT 'regular'-- وضعیت روز: regular, half_day, special
+);
+"""
+
+# جدول ریزمعاملات درون‌روزی: ثبت تیک‌به‌تیک معاملات برای نوسان‌گیری درون‌روزی (اسکالپ)
+CREATE_INTRADAY_TRADES_TABLE = """
+CREATE TABLE IF NOT EXISTS intraday_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,        -- شناسه نماد
+    trade_time TEXT NOT NULL,          -- زمان معامله به فرمت HH:MM:SS
+    trade_date TEXT NOT NULL,          -- تاریخ معامله YYYY-MM-DD
+    price REAL NOT NULL,               -- قیمت معامله شده (ریال)
+    volume INTEGER NOT NULL,           -- حجم این معامله
+    buyer_type TEXT DEFAULT 'unknown', -- حقیقی/حقوقی
+    seller_type TEXT DEFAULT 'unknown',-- حقیقی/حقوقی
+    trade_number INTEGER,              -- شماره سریال معامله در سیستم بورس
+    captured_at TIMESTAMP,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, trade_date, trade_number)
+);
+"""
+
+# جدول ارزیابی کیفیت داده‌ها: رتبه سلامت و خطاهای آماری داده هر روز
+CREATE_DATA_QUALITY_TABLE = """
+CREATE TABLE IF NOT EXISTS data_quality_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,
+    trade_date TEXT NOT NULL,
+    completeness_score REAL DEFAULT 100.0, -- درصد کامل بودن داده
+    price_anomaly_flag BOOLEAN DEFAULT 0,  -- آیا جهش غیرعادی قیمت داشته؟
+    volume_anomaly_flag BOOLEAN DEFAULT 0, -- آیا حجم مشکوک/غیرعادی داشته؟
+    quality_score REAL DEFAULT 100.0,      -- نمره کیفیت داده (۰ تا ۱۰۰)
+    notes TEXT,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, trade_date)
+);
+"""
+
+# جدول آزمایش‌ها و بکتست‌ها: ثبت پارامترها و نتایج آزمایش‌های استراتژی و یادگیری ماشین
+CREATE_EXPERIMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS experiments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT UNIQUE NOT NULL, -- شناسه یکتا مانند EXP-001
+    created_at TIMESTAMP NOT NULL,
+    strategy_name TEXT NOT NULL,        -- نام استراتژی یا مدل
+    symbols_tested TEXT,                -- نمادهای مورد تست (کاماجدا شده)
+    start_date TEXT,                    -- تاریخ شروع بازه تست
+    end_date TEXT,                      -- تاریخ پایان بازه تست
+    parameters_json TEXT,               -- پارامترهای استراتژی به صورت JSON
+    metrics_json TEXT,                  -- نتایج عملکرد (Win Rate, Profit Factor, Max Drawdown)
+    status TEXT DEFAULT 'completed'     -- وضعیت: 'running', 'completed', 'failed'
+);
+"""
