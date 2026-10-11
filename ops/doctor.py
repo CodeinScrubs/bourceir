@@ -146,7 +146,7 @@ def check_jev(report: DoctorReport) -> None:
     jev = JevClient()
     if not jev.available:
         report.add("هوش مصنوعی Jev", WARN, "کلید API تنظیم نشده",
-                   "فایل .env.example را به .env کپی و کلید TYPESAFE_API_KEY را وارد کنید.")
+                   "فایل .env را در پوشه برنامه با Notepad باز کنید و کلید را جلوی TYPESAFE_API_KEY= بنویسید.")
         return
     model = jev.ping()
     jev.close()
