@@ -100,15 +100,11 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
     assert (row["close_final_raw"], row["ref_price_raw"], row["high_raw"]) == (4180.0, 4100.0, 4220.0)
 
 
-def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db, monkeypatch):
+def test_incremental_client_types_request_only_new_days(db):
     """
-    سرویس «کل تاریخچه» TSETMC گاهی روزهایی را جا می‌اندازد (روی داده واقعی ~۳۶۰ روز در ۱۳۹۹ و ۱۴۰۰) که سرویس
-    روزبه‌روز دارد. حفره‌ها دوباره درخواست می‌شوند؛ روزهای قبل از اولین آمار نماد هرگز، و روزهایی که هیچ نماد
-    دیگری هم آمار ندارد (جای خالی خود منبع، مثل ۱۳۸۸ که فقط خطای ۵۰۰ می‌دهد) هم هرگز.
+    فقط روزهای بعد از آخرین آمار درخواست می‌شوند. حفره‌های قدیمی TSETMC (۳۶۲ روز-نماد) در هیچ‌کدام از دو سرویس
+    موجود نیستند و درخواست روزانه‌شان در اجرای واقعی ۴۴ دقیقه خطای ۵۰۰ و ۴۰ «نماد ناموفق» کاذب ساخت.
     """
-    from data_collector import scheduler
-
-    monkeypatch.setattr(scheduler, "CLIENT_TYPE_MARKET_COVERAGE", 1)
     from datetime import timedelta
 
     from core.timeutils import now_tehran
@@ -118,12 +114,9 @@ def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db, mon
     for d in days:
         db.insert_daily_price(sym_id, d, 100, 101, 99, 100, volume=10, value=1000.0,
                               close_final_raw=100, ref_price_raw=100)
-    with_stats = [days[2], days[3], days[5], days[7]]   # روزهای ۰ و ۱ قبل از اولین آمار؛ ۴ و ۶ حفره؛ ۸ و ۹ جدید
-    db.upsert_client_types_df(sym_id, pd.DataFrame({"date": with_stats, "buy_i_volume": 1.0}))
-    other = db.upsert_symbol({"symbol_fa": "خودرو", "ins_code": "2", "instrument_type_code": 300})
-    db.upsert_client_types_df(other, pd.DataFrame({"date": [days[4]], "buy_i_volume": 1.0}))   # بازار روز ۴ آمار دارد، روز ۶ نه
+    db.upsert_client_types_df(sym_id, pd.DataFrame({"date": [days[2], days[3], days[5], days[7]], "buy_i_volume": 1.0}))
     missing = DataCollector(db=db, provider=TsetmcProvider(session=FakeSession({})))._missing_client_type_dates(sym_id)
-    assert missing == [days[4], days[8], days[9]]
+    assert missing == [days[8], days[9]]
 
 
 def test_one_failing_client_type_day_does_not_drop_the_others():

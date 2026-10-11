@@ -33,11 +33,6 @@ INCREMENTAL_LOOKBACK_ROWS = 30
 # داده دیده‌بان بعد از این ساعت (به وقت تهران) برای کندل روز نهایی فرض می‌شود
 SESSION_FINAL_AFTER = "13:00"
 INCREMENTAL_MAX_GAP_DAYS = 25
-# سقف روزهای «حفره» (بین اولین و آخرین آمار ثبت‌شده) که در هر اجرا برای هر نماد دوباره درخواست می‌شود
-CLIENT_TYPE_HOLES_PER_RUN = 20
-# حفره فقط روزی است که TSETMC برای دست‌کم این تعداد نماد دیگر آمار منتشر کرده باشد. روزهایی که کل بازار آمار
-# ندارد (مثلاً ~۸۸۰۰ روز-نماد در ۱۳۸۸) جای خالی خود منبع است و درخواستشان فقط خطای ۵۰۰ و کندی می‌آورد.
-CLIENT_TYPE_MARKET_COVERAGE = 20
 
 ProgressFn = Callable[[int, int, str], None]
 
@@ -59,7 +54,6 @@ class DataCollector:
         self.symbols = list(symbols) if symbols else None
         # اثر انگشت آخرین اسنپ‌شات هر نماد؛ اسنپ‌شات بدون تغییر دوباره ذخیره نمی‌شود
         self._last_fingerprints: Dict[str, tuple] = {}
-        self._covered_client_type_dates: Optional[set] = None
 
     @staticmethod
     def _fingerprint(snap: Dict[str, Any]) -> tuple:
@@ -149,27 +143,14 @@ class DataCollector:
         last = row["d"]
         if (now_tehran().date() - date.fromisoformat(last)).days > INCREMENTAL_MAX_GAP_DAYS:
             return None
+        # فقط روزهای بعد از آخرین آمار ثبت‌شده. «حفره»های قدیمی (۳۶۲ روز-نماد در ۱۳۹۳ تا ۱۴۰۰) در هر دو سرویس
+        # TSETMC (کل تاریخچه و روزبه‌روز با خطای ۵۰۰) موجود نیستند — بررسی ۲۰ مهر ۱۴۰۵ — و درخواست روزانه‌شان
+        # فقط ۴۰ دقیقه کندی می‌آورد. فیچرها این روزها را «نامعلوم» (NaN) می‌بینند.
         new_days = self.db.conn.execute(
             "SELECT date FROM daily_prices WHERE symbol_id = ? AND source = 'tsetmc' AND date > ? ORDER BY date;",
             (symbol_id, last),
         ).fetchall()
-        # حفره‌ها: سرویس «کل تاریخچه» TSETMC گاهی روزهایی را جا می‌اندازد که سرویس «روز به روز» دارد
-        # (روی داده واقعی: ~۳۶۰ روز در ۱۳۹۹ و ۱۴۰۰). فقط بین اولین و آخرین آمار ثبت‌شده جست‌وجو می‌شود؛
-        # پیش از آن (مثلاً قبل از ۱۳۹۴) TSETMC آماری ندارد و درخواست هر روزه‌اش بی‌فایده و سنگین است.
-        if self._covered_client_type_dates is None:
-            self._covered_client_type_dates = {r["date"] for r in self.db.conn.execute(
-                "SELECT date FROM client_types_daily GROUP BY date HAVING COUNT(*) >= ?;",
-                (CLIENT_TYPE_MARKET_COVERAGE,))}
-        candidates = self.db.conn.execute(
-            "SELECT dp.date FROM daily_prices dp LEFT JOIN client_types_daily ct "
-            "ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date "
-            "WHERE dp.symbol_id = ? AND dp.source = 'tsetmc' AND ct.id IS NULL "
-            "AND dp.date > (SELECT MIN(date) FROM client_types_daily WHERE symbol_id = ?) AND dp.date < ? "
-            "ORDER BY dp.date DESC;",
-            (symbol_id, symbol_id, last),
-        ).fetchall()
-        holes = [r["date"] for r in candidates if r["date"] in self._covered_client_type_dates]
-        return sorted(set(holes[:CLIENT_TYPE_HOLES_PER_RUN]) | {r["date"] for r in new_days})
+        return [r["date"] for r in new_days]
 
     def collect_history(self, symbols: Optional[List[str]] = None, full: bool = False,
                         progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
