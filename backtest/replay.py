@@ -9,10 +9,11 @@
 بدون نیاز به باز بودن فیزیکی بازار فراهم می‌سازد.
 """
 
-import time
 import logging
-from typing import List, Dict, Any, Optional, Callable, Iterator
+import time
 from datetime import datetime
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
 import pandas as pd
 
 from database.db import DatabaseManager
@@ -29,7 +30,7 @@ class MarketReplayEngine:
     def get_available_replay_dates(self) -> List[str]:
         """دریافت لیست تاریخ‌هایی که اسنپ‌شات برای بازپخش دارند."""
         query = """
-        SELECT DISTINCT DATE(captured_at) as replay_date
+        SELECT DISTINCT substr(captured_at, 1, 10) AS replay_date
         FROM snapshots
         ORDER BY replay_date DESC;
         """
@@ -59,7 +60,7 @@ class MarketReplayEngine:
         """
         params = []
         if date_str:
-            query += " AND DATE(sn.captured_at) = ?"
+            query += " AND substr(sn.captured_at, 1, 10) = ?"
             params.append(date_str)
         if symbols:
             placeholders = ",".join(["?"] * len(symbols))

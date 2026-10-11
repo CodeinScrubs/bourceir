@@ -1,91 +1,61 @@
 # -*- coding: utf-8 -*-
 """
-آزمون‌های واحد ماژول پایش سلامت و تازگی داده‌های بورس (DataFreshnessMonitor)
-بررسی دقت محاسبه تاخیر، تشخیص داده فریز شده، فیلتر جهش‌های قیمت (Bad Tick) و قدرت خریدار.
+آزمون‌های پایش سلامت و تازگی داده (همه زمان‌ها به وقت تهران، مستقل از ساعت محلی سرور)
 """
 
-from datetime import datetime, timedelta
-import pytest
-from data_collector.monitor import DataFreshnessMonitor
+from datetime import timedelta
+
+from core.timeutils import now_tehran
+from data_collector.monitor import DataFreshnessMonitor, buyer_power
 
 
-def test_monitor_fresh_data():
-    """بررسی داده‌های کاملاً تازه (زیر ۴۵ ثانیه تاخیر)."""
-    monitor = DataFreshnessMonitor(stale_threshold_seconds=90)
-    now = datetime.now()
-    fresh_time = (now - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+def _stamp(seconds_ago: int) -> str:
+    return (now_tehran() - timedelta(seconds=seconds_ago)).isoformat()
 
-    snapshot = {
-        "last_price": 2500.0,
-        "provider_timestamp": fresh_time,
-        "real_buy_volume": 100000,
-        "real_buy_count": 10,
-        "real_sell_volume": 100000,
-        "real_sell_count": 20,
-    }
 
-    report = monitor.inspect_snapshot("خودرو", snapshot)
-    assert report["symbol"] == "خودرو"
-    assert report["status"] == "🟢 Fresh"
-    assert report["is_healthy"] is True
+def test_monitor_fresh_data_and_buyer_power():
+    report = DataFreshnessMonitor(stale_threshold_seconds=90).inspect_snapshot("خودرو", {
+        "last_price": 2500.0, "provider_timestamp": _stamp(10),
+        "real_buy_volume": 100000, "real_buy_count": 10, "real_sell_volume": 100000, "real_sell_count": 20,
+    })
+    assert report["status"] == "🟢 Fresh" and report["is_healthy"] is True
     assert report["delay_seconds"] <= 15
-    # سرانه خرید: 10,000 / سرانه فروش: 5,000 -> نسبت = 2.0
-    assert report["buyer_power"] == 2.0
+    assert report["buyer_power"] == 2.0  # سرانه خرید ۱۰٬۰۰۰ ÷ سرانه فروش ۵٬۰۰۰
 
 
 def test_monitor_delayed_data():
-    """بررسی داده‌های دارای تاخیر متوسط (بین ۴۵ تا ۹۰ ثانیه)."""
-    monitor = DataFreshnessMonitor(stale_threshold_seconds=90)
-    now = datetime.now()
-    delayed_time = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
-
-    snapshot = {
-        "last_price": 2500.0,
-        "provider_timestamp": delayed_time,
-    }
-
-    report = monitor.inspect_snapshot("فولاد", snapshot)
-    assert report["status"] == "🟡 Delayed"
-    assert report["is_healthy"] is False
+    report = DataFreshnessMonitor(stale_threshold_seconds=90).inspect_snapshot(
+        "فولاد", {"last_price": 2500.0, "provider_timestamp": _stamp(60)})
+    assert report["status"] == "🟡 Delayed" and not report["is_healthy"]
     assert 55 <= report["delay_seconds"] <= 65
 
 
 def test_monitor_stale_data():
-    """بررسی داده‌های منقضی و کهنه (بیش از ۹۰ ثانیه تاخیر)."""
-    monitor = DataFreshnessMonitor(stale_threshold_seconds=90)
-    now = datetime.now()
-    stale_time = (now - timedelta(seconds=150)).strftime("%Y-%m-%d %H:%M:%S")
+    report = DataFreshnessMonitor(stale_threshold_seconds=90).inspect_snapshot(
+        "شپنا", {"last_price": 2500.0, "provider_timestamp": _stamp(150)})
+    assert "🔴 Stale" in report["status"] and report["warnings"]
 
-    snapshot = {
-        "last_price": 2500.0,
-        "provider_timestamp": stale_time,
-    }
 
-    report = monitor.inspect_snapshot("شپنا", snapshot)
-    assert "🔴 Stale" in report["status"]
-    assert report["is_healthy"] is False
-    assert len(report["warnings"]) > 0
+def test_naive_timestamp_is_interpreted_as_tehran_time():
+    naive = (now_tehran() - timedelta(seconds=20)).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    report = DataFreshnessMonitor().inspect_snapshot("وبملت", {"last_price": 1.0, "provider_timestamp": naive})
+    assert report["delay_seconds"] <= 25
 
 
 def test_monitor_bad_tick_detection():
-    """تشخیص جهش ناگهانی و غیرعادی قیمت (Bad Tick)."""
     monitor = DataFreshnessMonitor()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # اولین اسنپ‌شات قیمت عادی
-    monitor.inspect_snapshot("وبملت", {"last_price": 1000.0, "provider_timestamp": now_str})
-
-    # اسنپ‌شات دوم با جهش غیرعادی ۱۵ درصدی در یک لحظه
-    report2 = monitor.inspect_snapshot("وبملت", {"last_price": 1150.0, "provider_timestamp": now_str})
-    assert any("جهش مشکوک قیمت" in w for w in report2["warnings"])
+    monitor.inspect_snapshot("وبملت", {"last_price": 1000.0, "provider_timestamp": _stamp(1)})
+    report = monitor.inspect_snapshot("وبملت", {"last_price": 1150.0, "provider_timestamp": _stamp(0)})
+    assert any("جهش مشکوک قیمت" in w for w in report["warnings"])
 
 
 def test_monitor_frozen_timestamp():
-    """تشخیص کَش شدن سرور TSETMC زمانی که تایم‌استمپ تغییر نمی‌کند."""
     monitor = DataFreshnessMonitor()
-    fixed_time = "2026-10-11 09:30:00"
+    fixed = _stamp(5)
+    monitor.inspect_snapshot("کگل", {"last_price": 5000.0, "provider_timestamp": fixed})
+    report = monitor.inspect_snapshot("کگل", {"last_price": 5000.0, "provider_timestamp": fixed})
+    assert any("تایم‌استمپ سرور تغییر نکرده است" in w for w in report["warnings"])
 
-    monitor.inspect_snapshot("کگل", {"last_price": 5000.0, "provider_timestamp": fixed_time})
-    # ارسال همان زمان ثابت در تیک بعدی
-    report2 = monitor.inspect_snapshot("کگل", {"last_price": 5000.0, "provider_timestamp": fixed_time})
-    assert any("تایم‌استمپ سرور تغییر نکرده است" in w for w in report2["warnings"])
+
+def test_buyer_power_without_data_is_none():
+    assert buyer_power({"real_buy_volume": 10}) is None

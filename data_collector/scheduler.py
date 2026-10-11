@@ -1,327 +1,349 @@
 # -*- coding: utf-8 -*-
 """
-ماژول زمان‌بندی و هماهنگ‌کننده گردآوری داده‌ها (Data Collector & Scheduler)
-این ماژول وظیفه اجرای دوره‌ای دریافت داده‌های زنده و تاریخی، ذخیره‌سازی در پایگاه داده SQLite
-و بررسی ساعات رسمی معاملات بازار بورس تهران را بر عهده دارد.
+هماهنگ‌کننده گردآوری داده‌ها (Data Collector)
+
+وظایف:
+- همگام‌سازی جامعه سهام بورس و فرابورس
+- دریافت تاریخچه روزانه (کامل یا افزایشی) + علامت‌گذاری ناهنجاری‌های کمی
+- دریافت تاریخچه حقیقی/حقوقی
+- اسنپ‌شات لحظه‌ای کل بازار در ساعات معاملات (یک درخواست برای همه نمادها)
+- دریافت اطلاعیه‌های کدال
+هر اجرا در جدول collection_log ثبت می‌شود.
 """
 
 import logging
-from datetime import datetime, time as dtime
-from zoneinfo import ZoneInfo
-from typing import Optional, List, Dict, Any
+from datetime import date
+from typing import Any, Callable, Dict, List, Optional
+
 import pandas as pd
 
 from config import settings
-from database.db import DatabaseManager, get_current_tehran_time
-from data_collector.provider import TSEDataProvider
+from core.timeutils import is_market_open, now_tehran, now_tehran_iso
+from data_collector.base import DAILY_COLUMNS, BaseDataProvider
+from data_collector.codal import CodalProvider
+from data_collector.tsetmc import TsetmcProvider
+from data_collector.universe import UniverseManager
 from data_collector.validator import DataValidator
+from database.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+# اگر فاصله آخرین داده موجود بیشتر از این تعداد روز باشد، تاریخچه کامل دوباره دریافت می‌شود
+INCREMENTAL_LOOKBACK_ROWS = 30
+# داده دیده‌بان بعد از این ساعت (به وقت تهران) برای کندل روز نهایی فرض می‌شود
+SESSION_FINAL_AFTER = "13:00"
+INCREMENTAL_MAX_GAP_DAYS = 25
+
+ProgressFn = Callable[[int, int, str], None]
+
 
 def is_market_trading_time() -> bool:
-    """
-    بررسی اینکه آیا در زمان جاری بازار سهام تهران (شنبه تا چهارشنبه، ۹:۰۰ تا ۱۲:۳۰) باز است یا خیر.
-    """
-    try:
-        tz = ZoneInfo(settings.TIMEZONE)
-    except Exception:
-        from datetime import timezone, timedelta
-        tz = timezone(timedelta(hours=3, minutes=30), name="Asia/Tehran")
-
-    now = datetime.now(tz)
-    current_weekday = now.weekday()
-
-    # روزهای کاری بورس تهران (شنبه=5، یکشنبه=6، دوشنبه=0، سه‌شنبه=1، چهارشنبه=2)
-    trading_days = getattr(settings, 'TRADING_DAYS', [5, 6, 0, 1, 2])
-    if current_weekday not in trading_days:
-        return False
-
-    # ساعت شروع و پایان معاملات
-    hours_conf = getattr(settings, 'TRADING_HOURS', {'start': '09:00', 'end': '12:30'})
-    start_parts = [int(p) for p in hours_conf.get('start', '09:00').split(':')]
-    end_parts = [int(p) for p in hours_conf.get('end', '12:30').split(':')]
-
-    start_time = dtime(hour=start_parts[0], minute=start_parts[1])
-    end_time = dtime(hour=end_parts[0], minute=end_parts[1])
-
-    current_time = now.time()
-    return start_time <= current_time <= end_time
+    """سازگاری با نسخه قبلی: آیا بازار هم‌اکنون (به وقت تهران) باز است؟"""
+    return is_market_open()
 
 
 class DataCollector:
-    """
-    کلاس هماهنگ‌کننده گردآوری داده‌ها و ذخیره‌سازی در پایگاه داده.
-    """
+    """کلاس هماهنگ‌کننده گردآوری داده‌ها و ذخیره‌سازی در پایگاه داده."""
 
-    def __init__(self, symbols: Optional[List[str]] = None, db: Optional[DatabaseManager] = None):
-        """
-        مقداردهی اولیه جمع‌آورنده داده با تعیین لیست نمادها و اتصال به دیتابیس.
-        """
-        if symbols is None:
-            self.symbols = list(settings.TEST_SYMBOLS)
-        else:
-            self.symbols = list(symbols)
-
-        self.provider = TSEDataProvider()
+    def __init__(self, symbols: Optional[List[str]] = None, db: Optional[DatabaseManager] = None,
+                 provider: Optional[BaseDataProvider] = None, codal: Optional[CodalProvider] = None):
         self.db = db if db is not None else DatabaseManager()
-        self.db.init_db()
+        self.provider = provider or TsetmcProvider()
+        self.codal = codal or CodalProvider()
+        self.universe = UniverseManager(db=self.db, provider=self.provider)
+        self.symbols = list(symbols) if symbols else None
+        # اثر انگشت آخرین اسنپ‌شات هر نماد؛ اسنپ‌شات بدون تغییر دوباره ذخیره نمی‌شود
+        self._last_fingerprints: Dict[str, tuple] = {}
 
-        logger.info("جمع‌آورنده داده با %d نماد آغاز به کار کرد: %s", len(self.symbols), self.symbols)
+    @staticmethod
+    def _fingerprint(snap: Dict[str, Any]) -> tuple:
+        return tuple(snap.get(k) for k in (
+            "trade_count", "last_price", "close_price", "bid_price_1", "bid_vol_1", "ask_price_1", "ask_vol_1",
+            "real_buy_volume", "real_sell_volume",
+        ))
 
-    def _ensure_symbol_registered(self, symbol_fa: str) -> Optional[int]:
-        """
-        بررسی ثبت بودن نماد در جدول symbols و ثبت اولیه آن در صورت عدم وجود.
-        """
-        sym_id = self.db.get_symbol_id(symbol_fa)
-        if sym_id is not None:
-            return sym_id
+    # ═══════════════════════════════════════════════
+    # کمکی‌ها
+    # ═══════════════════════════════════════════════
 
-        # دریافت متادیتا جهت ثبت اولیه
-        meta = self.provider.get_symbol_metadata(symbol_fa)
-        new_id = self.db.insert_symbol(
-            tse_code=meta.get('tse_code', symbol_fa),
-            symbol_fa=symbol_fa,
-            name_fa=meta.get('name_fa', symbol_fa),
-            market=meta.get('market', 'bourse'),
-            instrument_type=meta.get('instrument_type', 'stock')
+    def target_symbols(self, symbols: Optional[List[str]] = None) -> List[str]:
+        """نمادهای هدف: ورودی صریح → نمادهای سازنده → کل جامعه سهام → نمادهای پیش‌فرض تنظیمات."""
+        if symbols:
+            return list(symbols)
+        if self.symbols:
+            return list(self.symbols)
+        universe = self.universe.get_tracked_symbols()
+        return universe or list(settings.TEST_SYMBOLS)
+
+    def _resolve(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        """یافتن نماد در دیتابیس با ins_code؛ در صورت نبود، جستجو در منبع داده و ثبت."""
+        sym = self.db.get_symbol(symbol_fa)
+        if sym and sym.get("ins_code"):
+            return sym
+        meta = self.provider.search_symbol(symbol_fa)
+        if not meta:
+            return None
+        if not TsetmcProvider.is_in_scope(meta["symbol_fa"], meta.get("instrument_type_code")):
+            logger.warning("نماد «%s» سهم عادی بورس/فرابورس نیست و خارج از دامنه پروژه است.", symbol_fa)
+            return None
+        self.db.upsert_symbol(meta)
+        return self.db.get_symbol(meta["symbol_fa"])
+
+    def _finish(self, collection_type: str, started_at: str, requested: int, succeeded: int,
+                failed: int, errors: List[str], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        status = "success" if failed == 0 else ("partial" if succeeded > 0 else "failed")
+        finished_at = now_tehran_iso()
+        self.db.log_collection(
+            started_at=started_at, finished_at=finished_at, collection_type=collection_type,
+            symbols_requested=requested, symbols_succeeded=succeeded, symbols_failed=failed,
+            errors="; ".join(errors[:50]) if errors else None, status=status,
         )
-        return new_id
+        report = {
+            "collection_type": collection_type, "started_at": started_at, "finished_at": finished_at,
+            "symbols_requested": requested, "symbols_succeeded": succeeded, "symbols_failed": failed,
+            "errors": errors, "status": status,
+        }
+        report.update(extra or {})
+        logger.info("گردآوری «%s» پایان یافت: %s (موفق %d، ناموفق %d)", collection_type, status, succeeded, failed)
+        return report
 
-    def collect_history(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    # ═══════════════════════════════════════════════
+    # جامعه سهام
+    # ═══════════════════════════════════════════════
+
+    def sync_universe(self) -> Dict[str, Any]:
+        started_at = now_tehran_iso()
+        result = self.universe.sync_universe()
+        errors = [] if result["received"] else ["فهرست نمادها از TSETMC دریافت نشد"]
+        return self._finish("universe", started_at, result["received"], result["saved"],
+                            result["failed"] + (0 if result["received"] else 1), errors, result)
+
+    # ═══════════════════════════════════════════════
+    # تاریخچه روزانه
+    # ═══════════════════════════════════════════════
+
+    def _history_window(self, symbol_id: int, full: bool) -> int:
+        """تعداد ردیف مورد نیاز: ۰ یعنی کل تاریخچه."""
+        if full:
+            return 0
+        last_date = self.db.get_last_daily_date(symbol_id)
+        if not last_date:
+            return 0
+        gap_days = (now_tehran().date() - date.fromisoformat(last_date)).days
+        return 0 if gap_days > INCREMENTAL_MAX_GAP_DAYS else INCREMENTAL_LOOKBACK_ROWS
+
+    def _missing_client_type_dates(self, symbol_id: int) -> Optional[List[str]]:
         """
-        دریافت و ذخیره تاریخچه روزانه نمادها در پایگاه داده.
-        از درج رکوردهای تکراری بر اساس شناسه نماد و تاریخ جلوگیری می‌شود.
+        روزهای معاملاتی که قیمت دارند ولی حقیقی/حقوقی ندارند (برای به‌روزرسانی سبک).
+        None یعنی کل تاریخچه دریافت شود (اولین بار یا فاصله زیاد).
         """
-        target_symbols = symbols if symbols is not None else self.symbols
-        started_at = get_current_tehran_time()
-        logger.info("آغاز فرآیند گردآوری تاریخچه قیمت برای %d نماد...", len(target_symbols))
+        row = self.db.conn.execute(
+            "SELECT MAX(date) AS d FROM client_types_daily WHERE symbol_id = ?;", (symbol_id,)
+        ).fetchone()
+        if not row or not row["d"]:
+            return None
+        last = row["d"]
+        if (now_tehran().date() - date.fromisoformat(last)).days > INCREMENTAL_MAX_GAP_DAYS:
+            return None
+        missing = self.db.conn.execute(
+            "SELECT date FROM daily_prices WHERE symbol_id = ? AND source = 'tsetmc' AND date > ? ORDER BY date;",
+            (symbol_id, last),
+        ).fetchall()
+        return [r["date"] for r in missing] or []
 
-        succeeded = 0
-        failed = 0
-        errors = []
-        total_rows_inserted = 0
+    def collect_history(self, symbols: Optional[List[str]] = None, full: bool = False,
+                        progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
+        """دریافت و ذخیره تاریخچه روزانه (افزایشی، مگر full=True)."""
+        targets = self.target_symbols(symbols)
+        started_at = now_tehran_iso()
+        succeeded = failed = rows_saved = anomalies = 0
+        errors: List[str] = []
 
-        for sym in target_symbols:
+        for i, sym in enumerate(targets, start=1):
+            if progress:
+                progress(i, len(targets), sym)
             try:
-                sym_id = self._ensure_symbol_registered(sym)
-                if not sym_id:
-                    err_msg = f"خطا در ثبت یا یافتن نماد '{sym}' در دیتابیس"
-                    logger.error(err_msg)
-                    errors.append(err_msg)
+                meta = self._resolve(sym)
+                if not meta:
+                    errors.append(f"نماد «{sym}» یافت نشد یا خارج از دامنه است")
                     failed += 1
                     continue
-
-                df = self.provider.get_symbol_history(sym)
-                if df is None or df.empty:
-                    err_msg = f"عدم دریافت سابقه قیمت برای نماد '{sym}'"
-                    logger.warning(err_msg)
-                    errors.append(err_msg)
+                df = self.provider.get_symbol_history(meta["ins_code"], last_n=self._history_window(meta["id"], full))
+                if df is None:
+                    errors.append(f"عدم دریافت تاریخچه «{sym}»")
                     failed += 1
                     continue
+                rows_saved += self.db.upsert_daily_prices_df(meta["id"], df)
 
-                inserted_for_sym = 0
-                for _, row in df.iterrows():
-                    date_val = str(row.get('date'))
-                    open_val = float(row['open']) if pd.notna(row.get('open')) else None
-                    high_val = float(row['high']) if pd.notna(row.get('high')) else None
-                    low_val = float(row['low']) if pd.notna(row.get('low')) else None
-                    close_val = float(row['close']) if pd.notna(row.get('close')) else None
-                    adj_close_val = float(row['adj_close']) if pd.notna(row.get('adj_close')) else None
-                    vol_val = int(row['volume']) if pd.notna(row.get('volume')) else None
-                    val_val = float(row['value']) if pd.notna(row.get('value')) else None
-                    count_val = int(row['trade_count']) if pd.notna(row.get('trade_count')) else None
-
-                    # اعتبارسنجی کندل پیش از درج در دیتابیس
-                    candle_dict = {
-                        'date': date_val, 'open': open_val, 'high': high_val,
-                        'low': low_val, 'close': close_val, 'volume': vol_val, 'value': val_val
-                    }
-                    is_valid, validation_errors = DataValidator.validate_daily_candle(candle_dict)
-                    if not is_valid:
-                        logger.warning("رد رکورد نامعتبر برای نماد %s در %s: %s", sym, date_val, "; ".join(validation_errors))
-                        continue
-
-                    # محاسبه ضریب تعدیل
-                    adj_fac = round(adj_close_val / close_val, 6) if (close_val and close_val > 0 and adj_close_val is not None) else 1.0
-
-                    success = self.db.insert_daily_price(
-                        symbol_id=sym_id,
-                        date=date_val,
-                        open=open_val,
-                        high=high_val,
-                        low=low_val,
-                        close=close_val,
-                        adj_close=adj_close_val,
-                        volume=vol_val,
-                        value=val_val,
-                        trade_count=count_val,
-                        source='pytse',
-                        price_unit=settings.PRICE_UNIT,
-                        open_raw=open_val,
-                        high_raw=high_val,
-                        low_raw=low_val,
-                        close_raw=close_val,
-                        adjustment_factor=adj_fac
-                    )
-                    if success:
-                        inserted_for_sym += 1
-
-                total_rows_inserted += inserted_for_sym
+                flags = DataValidator.quant_anomaly_flags(df)
+                flagged = df.index[flags["price_anomaly"] | flags["volume_anomaly"]]
+                anomalies += self.db.insert_quality_metrics_bulk([{
+                    "symbol_id": meta["id"], "trade_date": df.at[idx, "date"], "quality_score": 70.0,
+                    "price_anomaly_flag": int(flags.at[idx, "price_anomaly"]),
+                    "volume_anomaly_flag": int(flags.at[idx, "volume_anomaly"]),
+                    "notes": "ناهنجاری کمی در تاریخچه روزانه",
+                } for idx in flagged])
                 succeeded += 1
-                logger.info("نماد '%s': تعداد %d رکورد جدید تاریخچه با موفقیت ذخیره شد.", sym, inserted_for_sym)
-
             except Exception as e:
-                err_msg = f"خطای پیش‌بینی‌نشده در گردآوری تاریخچه '{sym}': {e}"
-                logger.error(err_msg)
-                errors.append(err_msg)
+                logger.exception("خطای پیش‌بینی‌نشده در گردآوری تاریخچه «%s»", sym)
+                errors.append(f"خطا در «{sym}»: {e}")
                 failed += 1
 
-        finished_at = get_current_tehran_time()
-        status = 'success' if failed == 0 else ('partial' if succeeded > 0 else 'failed')
+        return self._finish("history", started_at, len(targets), succeeded, failed, errors,
+                            {"rows_inserted": rows_saved, "anomalies_flagged": anomalies})
 
-        self.db.log_collection(
-            started_at=started_at,
-            finished_at=finished_at,
-            collection_type='history',
-            symbols_requested=len(target_symbols),
-            symbols_succeeded=succeeded,
-            symbols_failed=failed,
-            errors="; ".join(errors) if errors else None,
-            status=status
-        )
+    def collect_session_candles(self) -> Dict[str, Any]:
+        """
+        ثبت کندل امروز همه سهام با یک درخواست به دیده‌بان بازار (بعد از ساعت ۱۳).
+        سرویس تاریخچه روزانه TSETMC کندل امروز را تا عصر به‌تدریج منتشر می‌کند؛ این مرحله داده امروز را
+        بلافاصله کامل می‌کند و به‌روزرسانی بعدی تاریخچه، همان رکورد را با داده رسمی بازنویسی می‌کند.
+        """
+        started_at = now_tehran_iso()
+        result = self.provider.get_session_candles()
+        if not result:
+            return self._finish("session_candles", started_at, 0, 0, 1, ["دیده‌بان بازار یا تاریخ روز معاملاتی دریافت نشد"])
+        now = now_tehran()
+        if result["date"] == now.date().isoformat() and now.strftime("%H:%M") < SESSION_FINAL_AFTER:
+            return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
+                    "symbols_failed": 0, "errors": [], "message": "معاملات امروز هنوز نهایی نشده است (بعد از ساعت ۱۳)."}
 
-        report = {
-            'collection_type': 'history',
-            'started_at': started_at,
-            'finished_at': finished_at,
-            'symbols_requested': len(target_symbols),
-            'symbols_succeeded': succeeded,
-            'symbols_failed': failed,
-            'rows_inserted': total_rows_inserted,
-            'errors': errors,
-            'status': status
-        }
-        logger.info("فرآیند گردآوری تاریخچه به پایان رسید. وضعیت: %s (موفق: %d، ناموفق: %d)", status, succeeded, failed)
-        return report
+        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        saved = rejected = 0
+        for candle in result["candles"]:
+            sym = known.get(candle["ins_code"])
+            if not sym:
+                continue
+            df, _ = DataValidator.validate_daily_dataframe(pd.DataFrame([candle])[DAILY_COLUMNS])
+            if df.empty:
+                rejected += 1
+                continue
+            self.db.upsert_daily_prices_df(sym["id"], df, recompute=False)
+            prev_close = self.db.previous_close_final(sym["id"], candle["date"])
+            ref = candle.get("ref_price_raw")
+            if prev_close and ref and abs(ref / prev_close - 1.0) > 1e-6:
+                self.db.recompute_adjustments(sym["id"])  # روز اقدام شرکتی
+            saved += 1
+        return self._finish("session_candles", started_at, saved + rejected, saved, rejected, [],
+                            {"rows_inserted": saved, "market_date": result["date"]})
+
+    def collect_client_types(self, symbols: Optional[List[str]] = None,
+                             progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
+        """دریافت تاریخچه روزانه معاملات حقیقی/حقوقی."""
+        targets = self.target_symbols(symbols)
+        started_at = now_tehran_iso()
+        succeeded = failed = rows_saved = 0
+        errors: List[str] = []
+        for i, sym in enumerate(targets, start=1):
+            if progress:
+                progress(i, len(targets), sym)
+            meta = self._resolve(sym)
+            df = self.provider.get_client_types_history(meta["ins_code"], dates=self._missing_client_type_dates(meta["id"])) if meta else None
+            if df is None:
+                errors.append(f"عدم دریافت حقیقی/حقوقی «{sym}»")
+                failed += 1
+                continue
+            rows_saved += self.db.upsert_client_types_df(meta["id"], df)
+            succeeded += 1
+        return self._finish("client_types", started_at, len(targets), succeeded, failed, errors,
+                            {"rows_inserted": rows_saved})
+
+    # ═══════════════════════════════════════════════
+    # اسنپ‌شات لحظه‌ای
+    # ═══════════════════════════════════════════════
+
+    def collect_market_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        اسنپ‌شات لحظه‌ای کل سهام بازار با یک درخواست؛ فقط نمادهای ثبت‌شده در دیتابیس (یا لیست ورودی)
+        ذخیره می‌شوند. اسنپ‌شات نامعتبر ذخیره نمی‌شود و در جدول کیفیت داده ثبت می‌شود.
+        """
+        started_at = now_tehran_iso()
+        snapshots = self.provider.get_market_snapshots()
+        if snapshots is None:
+            return self._finish("snapshot", started_at, 0, 0, 1, ["دیده‌بان بازار از TSETMC دریافت نشد"])
+
+        wanted = set(symbols) if symbols else None
+        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        rows, errors = [], []
+        rejected = unchanged = 0
+        for snap in snapshots:
+            sym = known.get(snap["ins_code"])
+            if not sym or (wanted and sym["symbol_fa"] not in wanted):
+                continue
+            fingerprint = self._fingerprint(snap)
+            if self._last_fingerprints.get(snap["ins_code"]) == fingerprint:
+                unchanged += 1
+                continue
+            self._last_fingerprints[snap["ins_code"]] = fingerprint
+            is_valid, snap_errors = DataValidator.validate_snapshot(snap)
+            if not is_valid:
+                rejected += 1
+                errors.append(f"{sym['symbol_fa']}: {'; '.join(snap_errors)}")
+                self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=50.0,
+                                              quality_score=40.0, notes="; ".join(snap_errors))
+                continue
+            rows.append((sym["id"], snap))
+        saved = self.db.insert_snapshots_bulk(rows)
+        return self._finish("snapshot", started_at, saved + rejected, saved, rejected, errors,
+                            {"market_rows": len(snapshots), "unchanged_skipped": unchanged,
+                             "snapshots": [s for _, s in rows]})
 
     def collect_snapshots(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        دریافت اسنپ‌شات لحظه‌ای نمادها و ثبت در جدول snapshots پایگاه داده.
-        """
-        target_symbols = symbols if symbols is not None else self.symbols
-        started_at = get_current_tehran_time()
-        logger.info("آغاز دریافت اسنپ‌شات لحظه‌ای برای %d نماد...", len(target_symbols))
-
-        succeeded = 0
-        failed = 0
-        errors = []
-
-        for sym in target_symbols:
-            try:
-                sym_id = self._ensure_symbol_registered(sym)
-                if not sym_id:
-                    err_msg = f"خطا در ثبت یا یافتن نماد '{sym}' در دیتابیس"
-                    logger.error(err_msg)
-                    errors.append(err_msg)
-                    failed += 1
-                    continue
-
-                snapshot = self.provider.get_live_snapshot(sym)
-                if snapshot is None:
-                    err_msg = f"عدم دریافت اسنپ‌شات برای نماد '{sym}'"
-                    logger.warning(err_msg)
-                    errors.append(err_msg)
-                    failed += 1
-                    continue
-
-                # اعتبارسنجی اسنپ‌شات پیش از ثبت در پایگاه داده
-                is_valid, snap_errors = DataValidator.validate_snapshot(snapshot)
-                if not is_valid:
-                    err_msg = f"اسنپ‌شات نامعتبر برای نماد '{sym}': {'; '.join(snap_errors)}"
-                    logger.warning(err_msg)
-                    errors.append(err_msg)
-                    failed += 1
-                    continue
-
-                # ثبت اسنپ‌شات در دیتابیس
-                inserted = self.db.insert_snapshot(sym_id, snapshot)
-                if inserted:
-                    succeeded += 1
-                    logger.info("اسنپ‌شات لحظه‌ای نماد '%s' در دیتابیس ذخیره شد.", sym)
-                else:
-                    logger.warning("اسنپ‌شات نماد '%s' قبلاً ثبت شده یا تغییر نکرده است.", sym)
-                    succeeded += 1
-
-            except Exception as e:
-                err_msg = f"خطا در دریافت یا ثبت اسنپ‌شات نماد '{sym}': {e}"
-                logger.error(err_msg)
-                errors.append(err_msg)
-                failed += 1
-
-        finished_at = get_current_tehran_time()
-        status = 'success' if failed == 0 else ('partial' if succeeded > 0 else 'failed')
-
-        self.db.log_collection(
-            started_at=started_at,
-            finished_at=finished_at,
-            collection_type='snapshot',
-            symbols_requested=len(target_symbols),
-            symbols_succeeded=succeeded,
-            symbols_failed=failed,
-            errors="; ".join(errors) if errors else None,
-            status=status
-        )
-
-        report = {
-            'collection_type': 'snapshot',
-            'started_at': started_at,
-            'finished_at': finished_at,
-            'symbols_requested': len(target_symbols),
-            'symbols_succeeded': succeeded,
-            'symbols_failed': failed,
-            'errors': errors,
-            'status': status
-        }
-        logger.info("فرآیند اسنپ‌شات لحظه‌ای پایان یافت. وضعیت: %s (موفق: %d، ناموفق: %d)", status, succeeded, failed)
-        return report
+        """سازگاری با نسخه قبلی: اسنپ‌شات نمادهای مشخص (از طریق دیده‌بان کل بازار)."""
+        targets = self.target_symbols(symbols)
+        for sym in targets:
+            self._resolve(sym)
+        return self.collect_market_snapshot(symbols=targets)
 
     def run_collection_cycle(self) -> Dict[str, Any]:
-        """
-        اجرای یک چرخه پایش: بررسی باز بودن ساعات رسمی بازار بورس و در صورت باز بودن دریافت اسنپ‌شات‌ها.
-        """
-        is_open = is_market_trading_time()
-        current_time = get_current_tehran_time()
-
-        if not is_open:
-            logger.info("بازار سهام در زمان جاری (%s) بسته است. چرخه اسنپ‌شات نادیده گرفته شد.", current_time)
+        """یک چرخه پایش: فقط در ساعات رسمی بازار اسنپ‌شات گرفته می‌شود."""
+        if not is_market_open():
             return {
-                'status': 'skipped',
-                'message': 'بازار در خارج از ساعات معاملاتی قرار دارد (ساعات معاملات: شنبه تا چهارشنبه ۹:۰۰ الی ۱۲:۳۰).',
-                'timestamp': current_time,
-                'is_market_open': False
+                "status": "skipped", "is_market_open": False, "timestamp": now_tehran_iso(),
+                "message": "بازار خارج از ساعات معاملاتی است (شنبه تا چهارشنبه ۹:۰۰ تا ۱۲:۳۰).",
             }
-
-        logger.info("بازار سهام فعال است. اجرای دریافت اسنپ‌شات دوره‌ای...")
-        report = self.collect_snapshots()
-        report['is_market_open'] = True
+        report = self.collect_market_snapshot()
+        report["is_market_open"] = True
         return report
 
-    def get_collection_report(self) -> Dict[str, Any]:
-        """
-        ارائه آمار و آخرین وضعیت لاگ‌های گردآوری داده در سامانه.
-        """
-        logs = self.db.get_collection_stats()
-        total_runs = len(logs)
-        success_runs = sum(1 for log in logs if log.get('status') == 'success')
-        failed_runs = sum(1 for log in logs if log.get('status') == 'failed')
-        partial_runs = sum(1 for log in logs if log.get('status') == 'partial')
+    # ═══════════════════════════════════════════════
+    # کدال
+    # ═══════════════════════════════════════════════
 
+    def collect_announcements(self, pages: int = 3, symbol_fa: Optional[str] = None) -> Dict[str, Any]:
+        """دریافت جدیدترین اطلاعیه‌های کدال؛ فقط اطلاعیه‌های نمادهای داخل دامنه ذخیره می‌شوند."""
+        started_at = now_tehran_iso()
+        letters = self.codal.get_latest(pages=pages, symbol_fa=symbol_fa)
+        if not letters:
+            return self._finish("codal", started_at, 0, 0, 1, ["اطلاعیه‌ای از کدال دریافت نشد"])
+        tracked = {s["symbol_fa"] for s in self.db.get_all_symbols()}
+        in_scope = [letter for letter in letters if letter["symbol_fa"] in tracked]
+        inserted = self.db.upsert_announcements(in_scope)
+        return self._finish("codal", started_at, len(letters), len(in_scope), 0, [],
+                            {"new_announcements": inserted})
+
+    # ═══════════════════════════════════════════════
+    # به‌روزرسانی کامل روزانه
+    # ═══════════════════════════════════════════════
+
+    def update_all(self, symbols: Optional[List[str]] = None, full: bool = False,
+                   progress: Optional[ProgressFn] = None) -> Dict[str, Dict[str, Any]]:
+        """یک دکمه برای همه‌چیز: جامعه سهام ← تاریخچه قیمت ← حقیقی/حقوقی ← کدال."""
+        reports: Dict[str, Dict[str, Any]] = {}
+        if not symbols and not self.symbols:
+            reports["universe"] = self.sync_universe()
+            reports["session_candles"] = self.collect_session_candles()
+        reports["history"] = self.collect_history(symbols, full=full, progress=progress)
+        reports["client_types"] = self.collect_client_types(symbols, progress=progress)
+        reports["codal"] = self.collect_announcements(pages=3)
+        return reports
+
+    def get_collection_report(self) -> Dict[str, Any]:
+        logs = self.db.get_collection_stats()
         return {
-            'total_runs_logged': total_runs,
-            'success_runs': success_runs,
-            'failed_runs': failed_runs,
-            'partial_runs': partial_runs,
-            'recent_logs': logs[:5],
-            'monitored_symbols': self.symbols
+            "total_runs_logged": len(logs),
+            "success_runs": sum(1 for log in logs if log.get("status") == "success"),
+            "failed_runs": sum(1 for log in logs if log.get("status") == "failed"),
+            "partial_runs": sum(1 for log in logs if log.get("status") == "partial"),
+            "recent_logs": logs[:5],
+            "monitored_symbols": self.target_symbols(),
         }

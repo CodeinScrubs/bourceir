@@ -1,132 +1,113 @@
 # -*- coding: utf-8 -*-
 """
 ماژول مدیریت جامعه نمادها (Market Universe Manager)
-وظیفه شناسایی، پالایش و نگهداری فهرست تمام سهام عادی بازار بورس و فرابورس ایران
-با حذف صندوق‌ها (ETF)، اوراق بدهی (اخزا، سلف، گام)، حق‌تقدم‌ها و ابزارهای مشتقه.
+
+دامنه پروژه BRS: فقط سهام عادی بورس و فرابورس.
+تشخیص اصلی بر اساس کد نوع ابزار رسمی TSETMC (yVal) انجام می‌شود:
+    300 = سهام بورس، 303 = سهام فرابورس  (309 بازار پایه و 313 بازار SME به‌صورت اختیاری)
+بنابراین صندوق‌ها، اوراق بدهی، حق‌تقدم‌ها، اختیار معامله‌ها و تابلوهای بلوکی خودبه‌خود حذف می‌شوند.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-import pandas as pd
+from datetime import timedelta
+from typing import Dict, List, Optional
 
 from config import settings
+from core.text import normalize_symbol
+from core.timeutils import now_tehran
+from data_collector.base import BaseDataProvider
 from database.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+# فهرست دریافتی باید حداقل این نسبت از جامعه فعال فعلی باشد تا غیرفعال‌سازی انجام شود
+MIN_COMPLETE_RATIO = 0.9
+
 
 class UniverseManager:
-    """مدیریت دایره نمادهای تحت پوشش بازار سرمایه ایران."""
+    """مدیریت دایره نمادهای تحت پوشش (سهام بورس و فرابورس)."""
 
-    def __init__(self, db: Optional[DatabaseManager] = None):
+    def __init__(self, db: Optional[DatabaseManager] = None, provider: Optional[BaseDataProvider] = None):
         self.db = db or DatabaseManager()
+        self.provider = provider
 
     @staticmethod
     def is_common_stock(symbol_fa: str, isin_code: Optional[str] = None) -> bool:
         """
-        تشخیص اینکه آیا یک نماد، سهم عادی بورس یا فرابورس است یا خیر.
-        - حذف حق‌تقدم‌ها (حروف پایانی «ح»)
-        - حذف تسهیلات مسکن (تسه، تملی)
-        - حذف اوراق بدهی و اسناد خزانه (اخزا، اراد، گام، سلف)
-        - حذف صندوق‌های سرمایه‌گذاری (دارا، پالایش، اهرم، توان، فراز، کاریس، سرو، ...)
-        - حذف اختیار معامله‌ها (ض، ط)
+        تشخیص تقریبی سهم عادی فقط از روی نام/ISIN (برای وقتی که کد yVal در دسترس نیست).
+        روش اصلی و دقیق، فیلتر yVal در TsetmcProvider.is_in_scope است.
         """
-        sym = symbol_fa.strip()
-
-        # حق تقدم‌ها معمولاً به «ح» ختم می‌شوند (مانند خزامیاح، وبملتح)
-        if len(sym) > 3 and sym.endswith("ح"):
+        sym = normalize_symbol(symbol_fa)
+        if not sym:
             return False
-
-        # اوراق بدهی و دولتی
-        excluded_prefixes = ["اخزا", "اراد", "اشاد", "اجاد", "سلف", "گام", "تسه", "تملی", "صکوک"]
-        for prefix in excluded_prefixes:
-            if sym.startswith(prefix):
-                return False
-
-        # اختیار معامله (Options)
-        if sym.startswith("ض") or sym.startswith("ط"):
+        if sym[-1].isdigit():  # تابلوی بلوکی/عمده یا اوراق
             return False
-
-        # صندوق‌ها (برخی پیشوندها یا کلیدواژه‌ها)
-        excluded_symbols = [
-            "دارا یکم", "پالایش", "اهرم", "توان", "فراز", "کاریس", "سرو",
-            "جهش", "موج", "شتاب", "عیار", "طلا", "گوهر", "کهربا", "زرفام",
-            "تابان", "افق", "اعتماد", "امین", "یاقوت", "فیروزه"
-        ]
-        if sym in excluded_symbols:
+        if len(sym) > 3 and sym.endswith("ح"):  # حق تقدم
             return False
-
-        # فیلتر کد بین‌المللی ISIN در صورت وجود
-        if isin_code:
-            code = isin_code.strip()
-            # سهام عادی معمولاً با IRO1 (بورس) یا IRO3 / IRO4 (فرابورس) شروع می‌شوند
-            # اوراق مشتقه با IRO9 یا IRK هستند
-            if not code.startswith("IRO"):
-                return False
-
+        if sym.startswith(("اخزا", "اراد", "اشاد", "اجاد", "سلف", "گام", "تسه", "تملی", "صکوک")):
+            return False
+        if sym.startswith(("ض", "ط")) and any(ch.isdigit() for ch in sym):  # اختیار معامله
+            return False
+        funds = {
+            "دارا یکم", "پالایش", "اهرم", "توان", "فراز", "کاریس", "سرو", "جهش", "موج", "شتاب", "عیار",
+            "طلا", "گوهر", "کهربا", "زرفام", "تابان", "افق", "اعتماد", "امین", "یاقوت", "فیروزه",
+        }
+        if sym in {normalize_symbol(f) for f in funds}:
+            return False
+        if isin_code and not isin_code.strip().startswith("IRO"):
+            return False
         return True
 
-    def sync_universe_from_provider(self, symbols_data: List[Dict[str, Any]]) -> Dict[str, int]:
+    def sync_universe(self) -> Dict[str, int]:
         """
-        همگام‌سازی فهرست نمادهای بازار با پایگاه داده.
+        دریافت فهرست کامل سهام داخل دامنه از منبع داده و ثبت/به‌روزرسانی در دیتابیس.
+        نمادهایی که دیگر در بازار نیستند غیرفعال می‌شوند (داده‌شان حذف نمی‌شود — برای جلوگیری از سوگیری بقا)،
+        ولی فقط وقتی فهرست دریافتی کامل به نظر برسد (حداقل MIN_COMPLETE_RATIO از نمادهای فعال فعلی).
         """
-        added = 0
-        skipped = 0
+        if self.provider is None:
+            raise RuntimeError("برای همگام‌سازی جامعه نمادها، provider لازم است.")
+        known = {s["ins_code"]: s for s in self.db.get_all_symbols(include_inactive=True) if s.get("ins_code")}
+        universe = self.provider.get_stock_universe(known=known)
+        if not universe:
+            logger.error("فهرست نمادها از منبع داده دریافت نشد؛ دیتابیس دست‌نخورده باقی ماند.")
+            return {"received": 0, "saved": 0, "failed": 0, "deactivated": 0}
+        saved = failed = 0
+        for meta in universe:
+            if self.db.upsert_symbol(meta):
+                saved += 1
+            else:
+                failed += 1
 
-        for item in symbols_data:
-            symbol_fa = item.get("symbol_fa", "").strip()
-            tse_code = item.get("tse_code", "")
-            name_fa = item.get("name_fa", symbol_fa)
-            market = item.get("market", "bourse")
-
-            if not symbol_fa or not tse_code:
-                skipped += 1
-                continue
-
-            if not self.is_common_stock(symbol_fa, isin_code=tse_code):
-                skipped += 1
-                continue
-
-            sym_id = self.db.insert_symbol(
-                tse_code=tse_code,
-                symbol_fa=symbol_fa,
-                name_fa=name_fa,
-                market=market,
-                instrument_type="stock"
-            )
-            if sym_id:
-                added += 1
-
-        logger.info("همگام‌سازی نمادها انجام شد: %d نماد سهام عادی ثبت/به‌روز شد، %d نماد غیراستاندارد فیلتر شد.", added, skipped)
-        return {"added_or_updated": added, "skipped": skipped}
+        deactivated = 0
+        active_before = self.db.get_universe_symbols()
+        received_codes = {m["ins_code"] for m in universe}
+        if active_before and len(universe) >= MIN_COMPLETE_RATIO * len(active_before):
+            stale = [s["id"] for s in active_before if s.get("ins_code") and s["ins_code"] not in received_codes]
+            deactivated = self.db.set_symbols_active(stale, False)
+        elif active_before:
+            logger.warning("فهرست دریافتی (%d) خیلی کوچک‌تر از جامعه فعلی (%d) است؛ هیچ نمادی غیرفعال نشد.",
+                           len(universe), len(active_before))
+        logger.info("همگام‌سازی جامعه سهام: %d ثبت/به‌روز، %d ناموفق، %d غیرفعال.", saved, failed, deactivated)
+        return {"received": len(universe), "saved": saved, "failed": failed, "deactivated": deactivated}
 
     def get_tracked_symbols(self) -> List[str]:
-        """دریافت لیست نمادهای فعال سهام در دیتابیس."""
-        symbols = self.db.get_all_symbols()
-        return [s["symbol_fa"] for s in symbols]
+        """نمادهای داخل دامنه که در دیتابیس ثبت شده‌اند."""
+        return [s["symbol_fa"] for s in self.db.get_universe_symbols()]
 
     def get_top_liquid_symbols(self, limit: int = 30, lookback_days: int = 30) -> List[str]:
-        """
-        رتبه‌بندی نقدشوندگی نمادها بر اساس میانگین ارزش معاملات روزانه.
-        این تابع نمادهای کم‌معامله، پروژه‌ای یا دارای صف‌های غیرقابل خروج را حذف می‌کند.
-        """
-        query = """
-        SELECT s.symbol_fa, AVG(dp.value) as avg_value, COUNT(dp.id) as days_count
-        FROM daily_prices dp
-        JOIN symbols s ON dp.symbol_id = s.id
-        WHERE s.is_active = 1
-        GROUP BY s.id
-        HAVING days_count >= 1
-        ORDER BY avg_value DESC
-        LIMIT ?;
-        """
-        try:
-            cursor = self.db.conn.cursor()
-            cursor.execute(query, (limit,))
-            rows = cursor.fetchall()
-            if rows:
-                return [r["symbol_fa"] for r in rows]
-            return getattr(settings, "TEST_SYMBOLS", ["خودرو", "فولاد", "شپنا", "وبملت", "کگل"])
-        except Exception as e:
-            logger.error("خطا در محاسبه رتبه‌بندی نقدشوندگی: %s", e)
-            return getattr(settings, "TEST_SYMBOLS", ["خودرو", "فولاد"])
+        """رتبه‌بندی نقدشوندگی بر اساس میانگین ارزش معاملات روزانه در بازه اخیر."""
+        cutoff = (now_tehran() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        rows = self.db.conn.execute(
+            """
+            SELECT s.symbol_fa, AVG(dp.value) AS avg_value
+            FROM daily_prices dp JOIN symbols s ON dp.symbol_id = s.id
+            WHERE s.is_active = 1 AND dp.date >= ? AND dp.source = 'tsetmc'
+            GROUP BY s.id
+            ORDER BY avg_value DESC
+            LIMIT ?;
+            """, (cutoff, limit),
+        ).fetchall()
+        if rows:
+            return [r["symbol_fa"] for r in rows]
+        logger.info("داده کافی برای رتبه‌بندی نقدشوندگی نیست؛ نمادهای پیش‌فرض برگردانده شد.")
+        return list(settings.TEST_SYMBOLS)

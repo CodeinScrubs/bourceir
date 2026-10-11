@@ -1,118 +1,75 @@
-# BRS Quant Engine — بورس ایران (bourceir)
+# BRS — دستیار نوسان‌گیری هوشمند بورس و فرابورس
 
-> **سامانه مهندسی داده و نوسان‌گیری هوشمند در بازار بورس و فرابورس تهران (TSE & IFB)**
+[![BRS CI Tests](https://github.com/CodeinScrubs/bourceir/actions/workflows/tests.yml/badge.svg)](https://github.com/CodeinScrubs/bourceir/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 
-[![Python Version](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue.svg)](https://www.python.org/)
-[![Database](https://img.shields.io/badge/database-SQLite-green.svg)](https://www.sqlite.org/)
-[![Dashboard](https://img.shields.io/badge/dashboard-Streamlit-red.svg)](https://streamlit.io/)
-[![Tests](https://img.shields.io/badge/tests-pytest%20passing-brightgreen.svg)](https://pytest.org/)
+ابزاری برای پیدا کردن و **آزمودن** فرصت‌های نوسان‌گیری درون‌روزی و کوتاه‌مدت (۲ تا ۳ روزه) در **سهام بورس و
+فرابورس تهران**. داده‌ها از منابع رسمی (TSETMC و کدال) جمع می‌شوند، هوش مصنوعی اطلاعیه‌ها را تحلیل می‌کند و
+هر ایده معاملاتی قبل از استفاده روی گذشته با کسر کارمزد واقعی بکتست می‌شود.
 
----
-
-## 🎯 هدف پروژه
-پروژه **BRS** با هدف ایجاد یک پلتفرم جامع معاملات الگوریتمی (Quant Trading) و نوسان‌گیری با هوش مصنوعی برای بازار سرمایه ایران توسعه می‌یابد. این سیستم از دو موتور مجزا تشکیل می‌شود:
-1. **موتور نوسان‌گیری درون‌روزی (Intraday Scalp):** رصد مداوم صفوف خرید/فروش، قدرت خریدار به فروشنده، ورود پول هوشمند و شناسایی نقاط ورود/خروج روزانه.
-2. **موتور نوسان‌گیری کوتاه‌مدت (Swing ۲ تا ۱۰ روزه):** تحلیل رفتار قیمتی، شکست سطوح تکنیکال و رتبه‌بندی نمادهای مستعد رشد.
+> ⚠️ خروجی این برنامه توصیه سرمایه‌گذاری نیست. برنامه سفارش ثبت نمی‌کند؛ تصمیم و معامله با خود شماست.
 
 ---
 
-## 🏗️ معماری نرم‌افزار
+## 🚀 شروع کار (بدون نیاز به برنامه‌نویسی)
 
-```mermaid
-flowchart TD
-    subgraph Data Layer [لایه گردآوری داده]
-        TSE[TSETMC Data Source] --> BaseProvider[BaseDataProvider Interface]
-        BaseProvider --> PytseProv[TSEDataProvider Implementation]
-        PytseProv --> Validator[DataValidator Quality Gate]
-    end
+1. **نصب (فقط یک بار):** روی فایل `SETUP.bat` دوبار کلیک کنید.
+   اگر پایتون 3.11 نصب نباشد، صفحه دانلود آن باز می‌شود. موقع نصب تیک **Add python.exe to PATH** را بزنید و دوباره `SETUP.bat` را اجرا کنید.
+2. **اجرا:** روی `START.bat` دوبار کلیک کنید. داشبورد فارسی در مرورگر باز می‌شود.
+3. **اولین بار:** در صفحه «خانه» دکمه **«شروع به‌روزرسانی»** را بزنید. بار اول حدود ۴۵ دقیقه طول می‌کشد.
 
-    subgraph Storage [پایگاه داده SQLite]
-        Validator --> DB[(SQLite: data/brs.db)]
-        DB --> T1[symbols: مشخصات نمادها]
-        DB --> T2[daily_prices: کندل‌های OHLCV]
-        DB --> T3[snapshots: صفوف و داده‌های تابلو]
-        DB --> T4[collection_log: پایش سلامت سیستم]
-    end
+### کار روزانه
+| زمان | کار |
+| :--- | :--- |
+| قبل از ساعت ۹ | خانه ← «شروع پایش زنده» (تا پایان بازار، هر ۳۰ ثانیه کل بازار ثبت می‌شود) |
+| بعد از ساعت ۱۴ | خانه ← «شروع به‌روزرسانی» (قیمت‌های پایانی امروز همه سهام) |
+| عصر (اختیاری) | دوباره «شروع به‌روزرسانی» — TSETMC آمار حقیقی/حقوقی امروز را تا عصر کامل می‌کند |
+| هر زمان | «اطلاعیه‌های کدال» ← دریافت و تحلیل اطلاعیه‌های جدید با هوش مصنوعی |
 
-    subgraph UI & Analytics [لایه تحلیل و نمایش]
-        DB --> Dashboard[Streamlit Web Dashboard]
-        DB --> Backtest[Backtester Engine (آتی)]
-        DB --> ML[Feature & AI Engine (آتی)]
-    end
-```
+### اگر چیزی کار نکرد
+صفحه **«سلامت سامانه»** ← اجرای عیب‌یابی. برای هر مشکل، راه‌حل فارسی نمایش داده می‌شود.
+- سایت‌های ایرانی (`*.tsetmc.com`، `*.codal.ir`) را در **Proxifier** روی **Direct** بگذارید.
+- سرویس هوش مصنوعی (`api.typesafe.ai`) به **VPN** نیاز دارد. کلید آن در فایل `.env` است.
 
 ---
 
-## 📁 ساختار پوشه‌بندی پروژه
+## 🧭 وضعیت پروژه
 
-```
-bourse-prediction/
-├── config/
-│   ├── __init__.py
-│   └── settings.py          # تنظیمات متمرکز سیستم، ساعات بازار و نمادها
-├── data_collector/
-│   ├── __init__.py
-│   ├── base.py              # اینترفیس پایه (BaseDataProvider) جهت استقلال از پکیج‌های ثالث
-│   ├── validator.py         # لایه اعتبارسنجی کیفیت و سلامت داده‌ها (DataValidator)
-│   ├── universe.py          # فیلتر و مدیریت کل جامعه سهام عادی بازار (UniverseManager)
-│   ├── provider.py          # تامین‌کننده داده‌های TSETMC مبتنی بر BaseDataProvider
-│   └── scheduler.py         # زمان‌بندی و چرخه دریافت دوره‌ای داده‌ها
-├── database/
-│   ├── __init__.py
-│   ├── models.py            # اسکیما و جداول SQL با کلیدهای یکتا و شاخص‌ها
-│   └── db.py                 # کلاس DatabaseManager با مدیریت کانکشن و تراکنش
-├── dashboard/
-│   ├── __init__.py
-│   └── app.py               # داشبورد تحلیلی استریم‌لیت با نمایش گرافیکی و جداول
-├── tests/
-│   ├── __init__.py
-│   └── test_provider.py     # تست‌های جامع واحد (۷ تست موفق در pytest)
-├── run_collector.py         # نقطه ورود خط فرمان گردآوری داده‌ها
-├── app.py                  # نقطه ورود مستقیم داشبورد
-├── run_dashboard.bat       # اجرای داشبورد با دو کلیک در ویندوز
-├── run_collector.bat       # اجرای گردآوری داده با دو کلیک در ویندوز
-├── requirements.txt         # لیست وابستگی‌های پروژه
-└── README.md
-```
+فاز ۱-الف (پایه داده) تمام شده است. جزئیات، معماری و نقشه راه در [docs/phase1_design.md](docs/phase1_design.md) آمده‌اند.
+
+| | |
+| :--- | :--- |
+| جامعه نمادها | ۵۹۴ سهم بورس و فرابورس (بدون صندوق، اوراق، حق‌تقدم، اختیار معامله و تابلوی بلوکی) |
+| داده تاریخی | قیمت روزانه Point-in-Time از سال ۱۳۸۰ + حقیقی/حقوقی روزانه |
+| داده زنده | قیمت، دامنه نوسان، ۵ مظنه با تعداد سفارش، صف‌ها، حقیقی/حقوقی کل بازار |
+| رویدادها | اطلاعیه‌های کدال + تحلیل هوش مصنوعی Jev |
+| بکتست | اجرای روز بعد، میانگین موزون قیمت، صف قفل، کارمزد ۰.۳۷۱۲٪ + ۰.۸۸٪ |
 
 ---
 
-## 🚀 راهنمای راه‌اندازی و اجرا
+## 👩‍💻 برای توسعه (Vibe Coding با Claude Code)
 
-### ۱. فعال‌سازی محیط مجازی
-```powershell
-.\venv\Scripts\Activate.ps1
+قوانین پروژه برای همه هوش‌های مصنوعی در [AGENTS.md](AGENTS.md) و راهنمای Claude در [CLAUDE.md](CLAUDE.md) است.
+
+```bash
+venv/Scripts/python.exe -m pytest -m "not network"   # آزمون‌های خودکار
+venv/Scripts/ruff.exe check .                        # کیفیت کد
+venv/Scripts/python.exe brs.py doctor                # عیب‌یابی
+venv/Scripts/python.exe brs.py --help                # همه دستورات
 ```
 
-### ۲. اجرای تست‌های خودکار
-```powershell
-python -m pytest tests/ -v
+### ساختار پوشه‌ها
 ```
-
-### ۳. دریافت یا به‌روزرسانی داده‌های بورس
-```powershell
-# بررسی وضعیت ارتباط با سرور بورس
-python run_collector.py --mode test
-
-# دریافت تاریخچه روزانه نمادها
-python run_collector.py --mode history --symbols خودرو,فولاد,شپنا,وبملت,کگل
-
-# ثبت اسنپ‌شات لحظه‌ای تابلو
-python run_collector.py --mode snapshot
+core/            منطق بازار ایران: کارمزد، صف قفل، بازده بدون نگاه به آینده، تاریخ شمسی، حروف فارسی
+data_collector/  دریافت داده: TSETMC، کدال، اعتبارسنجی، جامعه سهام، هماهنگ‌کننده گردآوری
+database/        SQLite + مایگریشن‌ها (پشتیبان خودکار در data/backups)
+backtest/        موتور بکتست و بازپخش بازار
+ai/              هوش مصنوعی Jev (TypeSafe) برای اطلاعیه‌های کدال
+dashboard/       داشبورد فارسی Streamlit
+ops/             عیب‌یاب و اجرای کارهای پس‌زمینه
+config/          تنظیمات (default.yaml) — کارمزد، دامنه نمادها، ساعات بازار
+docs/            طراحی، معماری، ساختار دیتابیس، روش پژوهش کمی
+tests/           آزمون‌های خودکار
+brs.py           خط فرمان (update، live، codal، doctor)
+SETUP.bat        نصب      |  START.bat  اجرا
 ```
-
-### ۴. اجرای داشبورد تحت وب
-```powershell
-streamlit run app.py
-```
-سپس مرورگر خود را در آدرس `http://localhost:8501` باز کنید.
-
----
-
-## 🛡️ اصول بنیادین مهندسی داده در BRS
-
-1. **عدم جعل داده (Zero Mock in Production):** در صورت قطع ارتباط سرور، سیستم هرگز داده ساختگی ثبت نمی‌کند و خطا در لاگ مستند می‌شود.
-2. **استقلال لایه داده (Provider Abstraction):** با طراحی `BaseDataProvider`، تغییر یا افزودن منابع داده بدون دستکاری هسته انجام می‌شود.
-3. **لایه اعتبارسنجی (Data Validation):** هر کندل از نظر قوانین قیمت (High >= Low, Price > 0) و عدم منفی بودن حجم بررسی و پالایش می‌شود.
-4. **مدیریت جامعه سهام (Universe Screening):** تفکیک خودکار سهام عادی از صندوق‌ها، اوراق بدهی، حق‌تقدم و ابزارهای مشتقه.
-5. **جلوگیری از داده‌های تکراری:** محدودیت‌های `UNIQUE` در دیتابیس مانع از درج رکوردهای تکراری می‌شود.
