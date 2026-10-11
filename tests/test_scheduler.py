@@ -100,11 +100,15 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
     assert (row["close_final_raw"], row["ref_price_raw"], row["high_raw"]) == (4180.0, 4100.0, 4220.0)
 
 
-def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db):
+def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db, monkeypatch):
     """
     سرویس «کل تاریخچه» TSETMC گاهی روزهایی را جا می‌اندازد (روی داده واقعی ~۳۶۰ روز در ۱۳۹۹ و ۱۴۰۰) که سرویس
-    روزبه‌روز دارد. حفره‌ها دوباره درخواست می‌شوند؛ روزهای قبل از اولین آمار (که TSETMC ندارد) هرگز.
+    روزبه‌روز دارد. حفره‌ها دوباره درخواست می‌شوند؛ روزهای قبل از اولین آمار نماد هرگز، و روزهایی که هیچ نماد
+    دیگری هم آمار ندارد (جای خالی خود منبع، مثل ۱۳۸۸ که فقط خطای ۵۰۰ می‌دهد) هم هرگز.
     """
+    from data_collector import scheduler
+
+    monkeypatch.setattr(scheduler, "CLIENT_TYPE_MARKET_COVERAGE", 1)
     from datetime import timedelta
 
     from core.timeutils import now_tehran
@@ -116,8 +120,25 @@ def test_client_type_holes_are_repaired_but_pre_history_is_not_requested(db):
                               close_final_raw=100, ref_price_raw=100)
     with_stats = [days[2], days[3], days[5], days[7]]   # روزهای ۰ و ۱ قبل از اولین آمار؛ ۴ و ۶ حفره؛ ۸ و ۹ جدید
     db.upsert_client_types_df(sym_id, pd.DataFrame({"date": with_stats, "buy_i_volume": 1.0}))
+    other = db.upsert_symbol({"symbol_fa": "خودرو", "ins_code": "2", "instrument_type_code": 300})
+    db.upsert_client_types_df(other, pd.DataFrame({"date": [days[4]], "buy_i_volume": 1.0}))   # بازار روز ۴ آمار دارد، روز ۶ نه
     missing = DataCollector(db=db, provider=TsetmcProvider(session=FakeSession({})))._missing_client_type_dates(sym_id)
-    assert missing == [days[4], days[6], days[8], days[9]]
+    assert missing == [days[4], days[8], days[9]]
+
+
+def test_one_failing_client_type_day_does_not_drop_the_others():
+    class Flaky(FakeSession):
+        def get(self, url, timeout=None):
+            if url.endswith("/20091122"):
+                self.calls.append(url)
+                raise ConnectionError("500")
+            return super().get(url, timeout=timeout)
+
+    payload = {"clientType": {"recDate": 20261010, "buy_I_Volume": 1.0}}
+    provider = TsetmcProvider(session=Flaky({"GetClientTypeHistory": payload}))
+    df = provider.get_client_types_history(FOOLAD_INS, dates=["2009-11-22", "2026-10-10"])
+    assert list(df["date"]) == ["2026-10-10"]                       # نسخه قبل: کل نماد شکست می‌خورد
+    assert TsetmcProvider(session=Flaky({})).get_client_types_history(FOOLAD_INS, dates=["2009-11-22"]) is None
 
 
 def test_snapshot_bulk_insert_reports_real_inserts(db, market_watch_rows, client_type_all):

@@ -267,13 +267,16 @@ class TsetmcProvider(BaseDataProvider):
         تاریخچه حقیقی/حقوقی. بدون dates کل تاریخچه (~۱ مگابایت)؛ با dates فقط همان روزها (به‌روزرسانی سبک روزانه).
         """
         if dates is not None:
-            rows = []
+            rows, failed = [], 0
             for day in dates:
                 data = self._get_json(f"{BASE_URL}/ClientType/GetClientTypeHistory/{ins_code}/{day.replace('-', '')}")
                 if data is None:
-                    return None
+                    failed += 1   # یک روز خراب نباید آمار بقیه روزها را از بین ببرد؛ اجرای بعدی دوباره امتحان می‌شود
+                    continue
                 if (data.get("clientType") or {}).get("recDate"):
                     rows.append(data["clientType"])
+            if dates and failed == len(dates):
+                return None   # هیچ درخواستی موفق نشد (احتمالاً قطعی شبکه)
         else:
             data = self._get_json(f"{BASE_URL}/ClientType/GetClientTypeHistory/{ins_code}")
             rows = (data or {}).get("clientType")
