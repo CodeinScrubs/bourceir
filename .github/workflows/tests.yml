@@ -2,9 +2,9 @@ name: BRS CI Tests
 
 on:
   push:
-    branches: [ master, develop, "feature/**" ]
+    branches: [ master, "feature/**" ]
   pull_request:
-    branches: [ master, develop ]
+    branches: [ master ]
   workflow_dispatch:
 
 # مخزن عمومی است: CI فقط اجازه خواندن دارد
