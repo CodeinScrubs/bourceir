@@ -65,6 +65,20 @@ def newey_west_t(series: pd.Series, lag: int) -> float:
     return float(x.mean() / np.sqrt(var / n))
 
 
+UNKNOWN_DAYS_TOLERANCE = 0.05
+
+
+def tolerant_t(series: pd.Series, lag: int) -> float:
+    """
+    آماره t با چند روز نامعلوم: اگر حداکثر ۵٪ روزها نامعلوم باشند، روی روزهای معلوم محاسبه می‌شود (و تعداد نامعلوم
+    جدا گزارش می‌شود)؛ بیشتر از آن، آماره اعلام نمی‌شود. روی داده واقعی فقط ۷ تا ۳۱ روز از ~۳۰۰۰ روز نامعلوم‌اند و
+    نسخه سخت‌گیر قبلی آماره همه روش‌ها را خالی می‌کرد.
+    """
+    if len(series) == 0 or series.isna().mean() > UNKNOWN_DAYS_TOLERANCE:
+        return float("nan")
+    return newey_west_t(series.dropna().reset_index(drop=True), lag)
+
+
 def pick_top(panel: pd.DataFrame, score: pd.Series, k: int) -> pd.DataFrame:
     """K سهم برتر هر روز بر اساس امتیاز (فقط ردیف‌های دارای امتیاز)."""
     if isinstance(k, bool) or not isinstance(k, int) or k < 1:
@@ -128,9 +142,9 @@ def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: i
         "win_rate": float((trades > 0).mean()) if len(trades) else float("nan"),
         "profit_factor": float(gains / losses) if losses > 0 else float("nan"),
         "mean_excess_vs_market": float(excess.mean()) if len(excess) else float("nan"),
-        "t_excess": newey_west_t(excess, lag=horizon),
+        "t_excess": tolerant_t(excess, lag=horizon),
         "mean_cohort": float(cohort.mean()) if len(cohort) else float("nan"),
-        "t_cohort": newey_west_t(cohort, lag=horizon),
+        "t_cohort": tolerant_t(cohort, lag=horizon),
         "years_positive": int((by_year > 0).sum()),
         "years_total": int(len(by_year)),
         "by_year": {y: round(float(v), 5) for y, v in by_year.items()},
@@ -184,7 +198,7 @@ def run_baselines(panel: pd.DataFrame, horizons: List[int], k: int, random_trial
         entry = {
             "market": {"mean_trade": float(all_trades.mean()), "mean_cohort": float(market.mean()), "win_rate": float((all_trades > 0).mean()),
                        "fill_rate": float(panel[f"net_ret_{h}d"].notna().mean()),
-                       "t_cohort": newey_west_t(market, lag=h), "days": int(market.notna().sum())},
+                       "t_cohort": tolerant_t(market, lag=h), "days": int(market.notna().sum())},
             "random": random_benchmark(panel, h, k, random_trials),
             "strategies": {},
         }

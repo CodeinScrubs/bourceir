@@ -159,7 +159,8 @@ def latest_snapshots() -> pd.DataFrame:
 # اجزای مشترک
 # ═══════════════════════════════════════════════
 
-JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه"}
+JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه",
+              "research-dip": "آزمون روش خرید در اصلاح"}
 
 
 def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
@@ -414,13 +415,13 @@ def page_codal() -> None:
         column_config={"لینک": st.column_config.LinkColumn("لینک", display_text="مشاهده")})
 
 
-def latest_research_report() -> str:
-    """متن گزارش آخرین پژوهش استراتژی‌های پایه (data/research)، یا رشته خالی."""
+def latest_research_report(pointer: str = "latest.json") -> str:
+    """متن گزارش آخرین پژوهش (data/research)، یا رشته خالی."""
     import json
 
     folder = settings.DATA_DIR / "research"
     try:
-        experiment_id = json.loads((folder / "latest.json").read_text(encoding="utf-8"))["experiment_id"]
+        experiment_id = json.loads((folder / pointer).read_text(encoding="utf-8"))["experiment_id"]
         return (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
     except (OSError, ValueError, KeyError):
         return ""
@@ -434,11 +435,16 @@ def page_research() -> None:
     job_panel("research", ["research"], "اجرای دوباره پژوهش",
               "برچسب‌ها و ارزیابی همه روش‌ها را با آخرین داده دوباره می‌سازد (چند دقیقه). دوره بیرون از نمونه "
               "(از ۱۴۰۴) عمداً بسته می‌ماند تا فقط برای آزمون نهایی مدل استفاده شود.")
-    report = latest_research_report()
-    if not report:
-        st.info("هنوز پژوهشی اجرا نشده است. دکمه بالا را بزنید.")
-        return
-    st.markdown(report)
+    dip_tab, base_tab = st.tabs(["روش شما: خرید در اصلاح", "روش‌های پایه (خرید فردا، فروش چند روز بعد)"])
+    with dip_tab:
+        job_panel("research-dip", ["research-dip"], "اجرای دوباره آزمون خرید در اصلاح",
+                  "نامزدهای پایان روز ← فردا خرید فقط اگر سهم ۱ تا ۳٪ زیر قیمت مرجع آمد ← فروش با هدف ۲ تا ۴٪ سود "
+                  "تا فردا یا پس‌فردا (چند دقیقه).")
+        dip_report = latest_research_report("latest-dip.json")
+        st.markdown(dip_report) if dip_report else st.info("هنوز اجرا نشده است. دکمه بالا را بزنید.")
+    with base_tab:
+        report = latest_research_report()
+        st.markdown(report) if report else st.info("هنوز پژوهشی اجرا نشده است. دکمه بالای صفحه را بزنید.")
 
 
 def page_health() -> None:

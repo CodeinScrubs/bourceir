@@ -91,16 +91,24 @@ def test_backup_names_do_not_overwrite_within_one_second(db):
     assert a != b and a.exists() and b.exists()
 
 
-def test_partial_update_cannot_publish_new_features(monkeypatch):
+def test_update_feature_publication_policy(monkeypatch):
+    """
+    یک نماد ناموفق (قطعی لحظه‌ای) فیچر کل بازار را کهنه نمی‌گذارد ولی کد خروج هشدار (۱) می‌دهد؛
+    شکست کامل یک بخش اصلی (مثلاً تاریخچه) مانع ساخت فیچر است. شکست کدال به فیچر ربطی ندارد.
+    """
     import brs
     from data_collector import scheduler
-    called = []
-    collector = SimpleNamespace(db=SimpleNamespace(close=lambda: None),
-                                update_all=lambda **kw: {'history':{'status':'partial','symbols_failed':1}})
-    monkeypatch.setattr(scheduler, 'DataCollector', lambda **kw: collector)
-    monkeypatch.setattr(brs, '_build_features', lambda db: called.append(True))
-    assert brs.cmd_update(SimpleNamespace(symbols='', full=False, no_features=False)) == 1
-    assert not called
+    cases = [({'history': {'status': 'partial', 'symbols_failed': 1}}, True, 1),
+             ({'history': {'status': 'failed', 'symbols_failed': 594}}, False, 1),
+             ({'history': {'status': 'success'}, 'codal': {'status': 'failed'}}, True, 1),
+             ({'history': {'status': 'success'}}, True, 0)]
+    for reports, should_build, code in cases:
+        called = []
+        collector = SimpleNamespace(db=SimpleNamespace(close=lambda: None), update_all=lambda r=reports, **kw: r)
+        monkeypatch.setattr(scheduler, 'DataCollector', lambda c=collector, **kw: c)
+        monkeypatch.setattr(brs, '_build_features', lambda db, c=called: c.append(True))
+        assert brs.cmd_update(SimpleNamespace(symbols='', full=False, no_features=False)) == code
+        assert bool(called) is should_build, reports
 
 
 def _research_fixture(db, tmp_path, monkeypatch):

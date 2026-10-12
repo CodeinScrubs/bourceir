@@ -126,8 +126,12 @@ def cmd_update(args) -> int:
     for key, report in reports.items():
         _print_report(titles.get(key, key), report)
     complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
-    if complete and not args.symbols and not args.no_features:
+    # یک یا دو نماد ناموفق (قطعی لحظه‌ای شبکه) نباید فیچر کل بازار را کهنه بگذارد؛ فقط شکست کامل یک بخش مانع است
+    usable = not any(r.get("status") == "failed" for k, r in reports.items() if k != "codal")
+    if usable and not args.symbols and not args.no_features:
         _build_features(collector.db)
+    elif not usable:
+        print("⚠️ بخشی از به‌روزرسانی کاملاً ناموفق بود؛ انبار فیچر ساخته نشد.", flush=True)
     collector.db.close()
     return 0 if complete else 1
 
@@ -165,6 +169,20 @@ def cmd_research(args) -> int:
                            holdout_strategy=args.holdout_strategy, holdout_horizon=args.holdout_horizon)
         print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
+    finally:
+        db.close()
+    return 0
+
+
+def cmd_research_dip(args) -> int:
+    from database.db import DatabaseManager
+    from research.dip_run import run_dip_research
+
+    db = DatabaseManager()
+    try:
+        print("🔬 آزمون روش «خرید در اصلاح» روی ۱۳ سال (چند دقیقه)...", flush=True)
+        out = run_dip_research(db)
+        print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
     finally:
         db.close()
     return 0
@@ -269,6 +287,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--holdout-strategy", default=None, help="نام روش نهایی که پیش از باز کردن آزمون انتخاب شده")
     p.add_argument("--holdout-horizon", type=int, default=None, help="افق روش نهایی، پیش از باز کردن آزمون")
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser("research-dip", help="آزمون روش «خرید در اصلاح»: خرید در افت روز بعد، فروش با هدف سود")
+    p.set_defaults(func=cmd_research_dip)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)

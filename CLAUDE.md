@@ -18,6 +18,7 @@ venv/Scripts/python.exe brs.py update --symbols فولاد  # به‌روزرس�
 venv/Scripts/python.exe brs.py backup                # پشتیبان دستی دیتابیس (۵ نسخه آخر)
 venv/Scripts/python.exe brs.py features              # ساخت انبار فیچر (بعد از هر update خودکار)
 venv/Scripts/python.exe brs.py research              # برچسب‌های خالص + ارزیابی استراتژی‌های پایه (فاز ۱-ج، ~۶ دقیقه)
+venv/Scripts/python.exe brs.py research-dip          # آزمون روش کاربر: خرید در اصلاح روز بعد + فروش با هدف سود (~۱۵ دقیقه)
 ```
 - داشبورد: پیش‌نمایش `brs-dashboard` در `.claude/launch.json` (یا START.bat برای کاربر).
 - وابستگی جدید: به `requirements.txt` اضافه کن، سپس `uv pip compile requirements.txt --python-version 3.11 --universal -o requirements.lock.txt` و `uv pip sync --python venv/Scripts/python.exe requirements.lock.txt`.
@@ -31,7 +32,7 @@ venv/Scripts/python.exe brs.py research              # برچسب‌های خا�
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |
 | `backtest/engine.py` | بکتست: اجرای روز بعد، VWAP، صف قفل، کارمزد از config |
 | `features/` | موتور فیچر PIT (`daily`, `market`) و انبار فیچر Parquet نسخه‌دار (`store`)؛ نام فارسی فیچرها در `labels_fa` — هر تغییر منطق = `FEATURE_SET_VERSION` جدید + آزمون بریدن داده |
-| `research/` | گزارش 0.5.2: `docs/reviews/2026-10-12-regression-audit-fa.md`؛ برچسب labels-v2 و فیچر daily-v3. فاز ۱-ج: `labels` (بازده خالص قابل اجرا، نسخه‌دار)، `baselines` (استراتژی‌های پایه، معیار تصادفی، t نیوی-وست)، `run` (ثبت آزمایش و گزارش). دوره `holdout_start` مهر و موم است — نتایج: `docs/research/` |
+| `research/` | گزارش 0.5.2: `docs/reviews/2026-10-12-regression-audit-fa.md`؛ برچسب labels-v2 و فیچر daily-v3. فاز ۱-ج: `labels` (بازده خالص قابل اجرا، نسخه‌دار)، `baselines` (استراتژی‌های پایه، معیار تصادفی، t نیوی-وست)، `run` (ثبت آزمایش و گزارش)، `dip` + `dip_run` (روش کاربر: خرید در اصلاح با سفارش محدود و هدف سود؛ حالت محافظه‌کار/خوش‌بینانه). دوره `holdout_start` مهر و موم است — نتایج: `docs/research/` |
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |

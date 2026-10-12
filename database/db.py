@@ -244,8 +244,12 @@ class DatabaseManager:
             )
         return cur.rowcount
 
-    def get_universe_symbols(self) -> List[Dict[str, Any]]:
-        """نمادهای فعال داخل دامنه پروژه (سهام بورس و فرابورس طبق تنظیمات)."""
+    def get_universe_symbols(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """
+        نمادهای داخل دامنه پروژه (سهام بورس و فرابورس طبق تنظیمات). پیش‌فرض فقط فعال‌ها (گردآوری و نمایش).
+        include_inactive=True برای پژوهش: سهمی که امروز متوقف است (مثلاً شپنا از ۸ مهر ۱۴۰۵) نباید کل تاریخچه‌اش
+        از بکتست حذف شود — وگرنه نوعی سوگیری بقا ساخته می‌شود.
+        """
         allowed = list(settings.UNIVERSE["instrument_types"])
         if settings.UNIVERSE["include_base_market"]:
             allowed.append(309)
@@ -253,8 +257,8 @@ class DatabaseManager:
             allowed.append(313)
         placeholders = ",".join("?" * len(allowed))
         rows = self.conn.execute(
-            f"SELECT * FROM symbols WHERE is_active = 1 AND instrument_type_code IN ({placeholders}) "
-            "ORDER BY symbol_fa ASC;", allowed,
+            f"SELECT * FROM symbols WHERE (is_active = 1 OR ?) AND instrument_type_code IN ({placeholders}) "
+            "ORDER BY symbol_fa ASC;", [int(include_inactive)] + allowed,
         ).fetchall()
         return [dict(r) for r in rows if not settings.UNIVERSE["exclude_block_boards"]
                 or not r["symbol_fa"][-1:].isdigit()]

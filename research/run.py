@@ -61,7 +61,7 @@ def _deduplicate_input(path: Path, objects: Path) -> str:
 
 def load_raw_prices(db: DatabaseManager, end_date: Optional[str] = None) -> pd.DataFrame:
     """قیمت خام همه سهم‌های جامعه (فقط ستون‌های Point-in-Time)."""
-    ids = [s["id"] for s in db.get_universe_symbols()]
+    ids = [s["id"] for s in db.get_universe_symbols(include_inactive=True)]
     if not ids:
         return pd.DataFrame(columns=["symbol", "date"])
     placeholders = ",".join("?" * len(ids))

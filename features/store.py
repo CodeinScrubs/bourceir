@@ -44,7 +44,7 @@ def store_dir(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -
 def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None,
                         progress: Optional[ProgressFn] = None) -> pd.DataFrame:
     """محاسبه فیچرهای روزانه همه نمادهای داخل دامنه + فیچرهای بازار و نسبی."""
-    targets = symbols or [s["symbol_fa"] for s in db.get_universe_symbols()]
+    targets = symbols or [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
     frames = []
     for i, symbol in enumerate(targets, start=1):
         if progress:
