@@ -54,21 +54,27 @@ def official_close(df: pd.DataFrame) -> pd.Series:
 
 
 def reference_price(df: pd.DataFrame) -> pd.Series:
-    """قیمت مرجع روز؛ در نبود آن، قیمت پایانی روز معاملاتی قبل."""
-    prev_close = official_close(df).shift(1)
+    """مرجعِ ارائه‌شده اگر خراب/نامعلوم باشد همان NaN می‌ماند؛ از نماد دیگر حدس زده نمی‌شود."""
     if "ref_price_raw" in df.columns:
-        return df["ref_price_raw"].where(df["ref_price_raw"] > 0).fillna(prev_close)
-    return prev_close
+        ref = df["ref_price_raw"]
+        return ref.where(np.isfinite(ref) & (ref > 0))
+    close = official_close(df)
+    return close.groupby(df["symbol"]).shift(1) if "symbol" in df else close.shift(1)
 
 
 def daily_vwap(df: pd.DataFrame) -> pd.Series:
     """
     میانگین موزون قیمت روز = ارزش معاملات ÷ حجم (قیمت واقع‌بینانه برای کسی که در طول روز معامله می‌کند).
-    به بازه [کمترین، بیشترین] روز محدود می‌شود تا داده خراب قیمت غیرممکن تولید نکند.
+    داده خراب به قیمت دیگری تبدیل نمی‌شود؛ VWAP نامعتبر یا خارج بازه = NaN.
     """
     volume = df["volume"].astype(float)
     vwap = (df["value"].astype(float) / volume).where(volume > 0)
-    return vwap.clip(lower=df["low_raw"], upper=df["high_raw"])
+    low, high = df["low_raw"], df["high_raw"]
+    valid = np.isfinite(vwap) & np.isfinite(volume) & (volume > 0) & (volume % 1 == 0)
+    valid &= np.isfinite(low) & np.isfinite(high) & (low > 0) & (high >= low)
+    tolerance = 1e-6 * high.abs()
+    valid &= (vwap >= low - tolerance) & (vwap <= high + tolerance)
+    return vwap.where(valid).clip(lower=low, upper=high)
 
 
 # ═══════════════════════════════════════════════

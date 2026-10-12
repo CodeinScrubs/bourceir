@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -136,7 +137,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     target.mkdir(parents=True, exist_ok=True)
     # float32 برای فیچرها کاملاً کافی است و حجم فایل را نصف می‌کند
     compact = panel.astype({f: "float32" for f in ALL_FEATURES})
-    tmp_parquet = target / "daily.parquet.tmp"
+    tmp_parquet = target / f"daily-{uuid.uuid4().hex}.parquet.tmp"
     compact.to_parquet(tmp_parquet, index=False, compression="zstd")
     manifest = {
         "version": FEATURE_SET_VERSION,
@@ -149,7 +150,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "coverage": {f: round(float(panel[f].notna().mean()), 4) for f in ALL_FEATURES} if len(panel) else {},
         "provenance": _provenance(db, tmp_parquet),
     }
-    tmp_manifest = target / "manifest.json.tmp"
+    tmp_manifest = target / f"manifest-{uuid.uuid4().hex}.json.tmp"
     tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_parquet, target / "daily.parquet")
     os.replace(tmp_manifest, target / "manifest.json")
@@ -157,12 +158,23 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     return manifest
 
 
-def load_feature_store(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> pd.DataFrame:
-    """خواندن انبار فیچر؛ اگر ساخته نشده باشد، دیتافریم خالی."""
+def load_feature_snapshot(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> tuple:
+    """خروجی و manifest یکسان با کنترل hash؛ تغییر هم‌زمان فایل، نتیجه مخلوط تولید نمی‌کند."""
     path = store_dir(version, root) / "daily.parquet"
-    if not path.exists():
-        return pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES)
-    return pd.read_parquet(path)
+    manifest = load_manifest(version, root)
+    if not path.exists() or not manifest:
+        return pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES), {}
+    digest = (manifest.get("provenance") or {}).get("parquet_sha256")
+    if not digest or _sha256(path) != digest:
+        raise ValueError("اثر انگشت انبار فیچر با manifest یکسان نیست؛ ساخت فیچر را دوباره اجرا کنید")
+    frame = pd.read_parquet(path)
+    if _sha256(path) != digest or load_manifest(version, root) != manifest:
+        raise ValueError("انبار فیچر هنگام خواندن تغییر کرد؛ پژوهش را دوباره اجرا کنید")
+    return frame, manifest
+
+
+def load_feature_store(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> pd.DataFrame:
+    return load_feature_snapshot(version, root)[0]
 
 
 def load_manifest(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> Optional[dict]:

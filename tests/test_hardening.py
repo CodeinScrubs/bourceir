@@ -6,7 +6,6 @@
 
 import json
 import sqlite3
-import subprocess
 import sys
 import time
 
@@ -151,20 +150,27 @@ def test_background_job_lifecycle(tmp_path, monkeypatch):
     assert report["checks"] and report["overall"] in ("ok", "warn", "error") and not report["network_tested"]
 
 
-def test_recycled_pid_is_not_mistaken_for_our_job():
-    """ویندوز شماره PID را دوباره به فرایند دیگری می‌دهد؛ «زمان ساخت» فرایند باید یکی باشد."""
-    import psutil
-
+def test_recycled_pid_is_not_mistaken_for_our_job(monkeypatch):
+    """هویت واقعی job باید شامل مسیر اسکریپت و زمان ساخت باشد؛ متن آرگومان کافی نیست."""
     from ops import jobs
 
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "brs.py"])
-    try:
-        created = psutil.Process(proc.pid).create_time()
-        assert jobs._is_alive(proc.pid, created)
-        assert not jobs._is_alive(proc.pid, created + 100)
-    finally:
-        proc.kill()
-        proc.wait(timeout=10)
+    class Process:
+        def create_time(self):
+            return 100.0
+        def is_running(self):
+            return True
+        def status(self):
+            return "running"
+        def cmdline(self):
+            return [sys.executable, str(jobs.BRS_SCRIPT)]
+
+    monkeypatch.setattr(jobs.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(jobs.psutil, "Process", lambda pid: Process())
+    assert jobs._is_alive(12, 100.0)
+    assert not jobs._is_alive(12, 100.1)
+    assert not jobs._is_alive(12, None)
+    monkeypatch.setattr(Process, "cmdline", lambda self: [sys.executable, "-c", "pass", "brs.py"])
+    assert not jobs._is_alive(12, 100.0)
 
 
 @pytest.mark.parametrize("bad", [

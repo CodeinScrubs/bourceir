@@ -85,3 +85,26 @@ def test_root_app_renders_on_every_run(dashboard_db):
         at = AppTest.from_file(ROOT_APP, default_timeout=60).run()
         assert not at.exception
         assert any("BRS" in t.value for t in at.title)
+
+
+def test_research_page_while_job_is_running(dashboard_db, monkeypatch):
+    from ops import jobs
+    monkeypatch.setattr(jobs, 'job_status', lambda name: dict(running=name == 'research', started_at=None,
+                                                            log_tail=[], args=[]))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔬 پژوهش').run()
+    assert not at.exception
+    assert any('پژوهش' in i.value for i in at.info)
+
+
+def test_live_filter_without_matches_does_not_format_nat(dashboard_db):
+    with DatabaseManager(db_path=dashboard_db) as db:
+        sid = db.upsert_symbol({'symbol_fa':'فولاد', 'ins_code':'1', 'instrument_type_code':300})
+        db.insert_snapshot(sid, {'captured_at':'2026-10-12T10:00:00+03:30', 'last_price':100,
+                                'close_price':100, 'ref_price':100, 'volume':1000, 'value':100000,
+                                'buy_queue_volume':0, 'sell_queue_volume':0})
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('📡 دیده‌بان زنده').run()
+    at.radio[0].set_value('فقط صف خرید').run()
+    assert not at.exception
+    assert any('هیچ نمادی' in i.value for i in at.info)

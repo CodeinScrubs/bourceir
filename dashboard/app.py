@@ -21,6 +21,7 @@ from config import settings  # noqa: E402
 from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
+from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
 from features.labels_fa import FEATURE_LABELS_FA, format_feature  # noqa: E402
 from features.store import load_manifest, load_symbol_features  # noqa: E402
@@ -82,22 +83,28 @@ def billion_toman(rial_value) -> float:
 
 @st.cache_data(ttl=60)
 def symbol_list() -> list:
-    return query_df("SELECT symbol_fa FROM symbols WHERE is_active = 1 ORDER BY symbol_fa;")["symbol_fa"].tolist()
+    with ro_db() as db:
+        return [s["symbol_fa"] for s in db.get_universe_symbols()]
 
 
 @st.cache_data(ttl=60)
 def market_pulse() -> dict:
     """نبض بازار در آخرین روز معاملاتی ثبت‌شده (فقط سهام داخل دامنه پروژه)."""
-    last = query_df("SELECT MAX(date) AS d FROM daily_prices WHERE source = 'tsetmc';")["d"].iloc[0]
+    with ro_db() as db:
+        ids = [s["id"] for s in db.get_universe_symbols()]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    last = query_df(f"SELECT MAX(date) AS d FROM daily_prices WHERE source = 'tsetmc' AND symbol_id IN ({placeholders});", tuple(ids))["d"].iloc[0]
     if not last:
         return {}
     df = query_df(
-        """
+        f"""
         SELECT dp.*, ct.buy_i_value, ct.sell_i_value
         FROM daily_prices dp
         LEFT JOIN client_types_daily ct ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date
-        WHERE dp.date = ? AND dp.source = 'tsetmc';
-        """, (last,))
+        WHERE dp.date = ? AND dp.source = 'tsetmc' AND dp.symbol_id IN ({placeholders});
+        """, (last, *ids))
     flags = market_rules.lock_flags(df)
     ret = market_rules.pit_daily_returns(df)
     return {
@@ -130,24 +137,29 @@ def symbol_daily(symbol: str) -> pd.DataFrame:
 @st.cache_data(ttl=20)
 def latest_snapshots() -> pd.DataFrame:
     """آخرین اسنپ‌شات هر نماد در آخرین روزی که پایش زنده انجام شده."""
-    last = query_df("SELECT MAX(captured_at) AS m FROM snapshots;")["m"].iloc[0]
+    with ro_db() as db:
+        ids = [s["id"] for s in db.get_universe_symbols()]
+    if not ids:
+        return pd.DataFrame()
+    placeholders = ",".join("?" for _ in ids)
+    last = query_df(f"SELECT MAX(captured_at) AS m FROM snapshots WHERE symbol_id IN ({placeholders});", tuple(ids))["m"].iloc[0]
     if not last:
         return pd.DataFrame()
     day = last[:10]
     # بازه روی captured_at تا ایندکس استفاده شود ("~" بعد از همه ارقام و حرف T قرار می‌گیرد)
     return query_df(
-        """
+        f"""
         SELECT s.symbol_fa, s.name_fa, sn.*
         FROM snapshots sn JOIN symbols s ON s.id = sn.symbol_id
-        WHERE sn.id IN (SELECT MAX(id) FROM snapshots WHERE captured_at >= ? AND captured_at < ? GROUP BY symbol_id);
-        """, (day, day + "~"))
+        WHERE sn.id IN (SELECT MAX(id) FROM snapshots WHERE captured_at >= ? AND captured_at < ? AND symbol_id IN ({placeholders}) GROUP BY symbol_id);
+        """, (day, day + "~", *ids))
 
 
 # ═══════════════════════════════════════════════
 # اجزای مشترک
 # ═══════════════════════════════════════════════
 
-JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال"}
+JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه"}
 
 
 def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
@@ -179,7 +191,8 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
 def page_home() -> None:
     st.title("📈 دستیار نوسان‌گیری BRS")
     now = now_tehran()
-    open_now = is_market_open(now)
+    with ro_db() as db:
+        open_now = is_market_open(now) and db.is_trading_day(now.date().isoformat())
     st.markdown(
         f"<div class='brs-card'>🕐 امروز {to_jalali(now, with_time=True)} — بازار "
         f"<b>{'باز است 🟢' if open_now else 'بسته است 🔴'}</b> (شنبه تا چهارشنبه، ۹:۰۰ تا ۱۲:۳۰)</div>",
@@ -294,7 +307,7 @@ def page_symbol() -> None:
 
 
 @st.cache_data(ttl=300)
-def cached_symbol_features(symbol: str) -> pd.DataFrame:
+def cached_symbol_features(symbol: str, dataset_sha: str = "") -> pd.DataFrame:
     return load_symbol_features(symbol)
 
 
@@ -305,7 +318,7 @@ def feature_panel(symbol: str) -> None:
         if not manifest:
             st.info("انبار فیچر هنوز ساخته نشده است. «به‌روزرسانی داده‌ها» آن را در پایان می‌سازد.")
             return
-        feats = cached_symbol_features(symbol)
+        feats = cached_symbol_features(symbol, (manifest.get("provenance") or {}).get("parquet_sha256", ""))
         if feats.empty:
             st.info("برای این نماد فیچری ثبت نشده است.")
             return
@@ -331,10 +344,15 @@ def page_live() -> None:
             st.warning("هنوز اسنپ‌شاتی ثبت نشده است.")
             return
         snaps = snaps.copy()
-        snaps["change_pct"] = (snaps["close_price"] / snaps["ref_price"] - 1) * 100
+        snaps["change_pct"] = (snaps["close_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
         snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["close_price"] / 1e10
         snaps["buyer_power"] = (snaps["real_buy_volume"] / snaps["real_buy_count"]) / (
             snaps["real_sell_volume"] / snaps["real_sell_count"])
+        snaps["buyer_power"] = snaps["buyer_power"].replace([float("inf"), -float("inf")], float("nan"))
+        monitor = DataFreshnessMonitor()
+        health = [monitor.inspect_snapshot(row["symbol_fa"], row) for row in snaps.to_dict("records")]
+        snaps["freshness"] = [h["status"] for h in health]
+        snaps["source_delay"] = [h["delay_seconds"] for h in health]
         view_filter = st.radio("نمایش", ["همه", "فقط صف خرید", "فقط صف فروش", "قدرت خریدار > ۲"], horizontal=True)
         if view_filter == "فقط صف خرید":
             snaps = snaps[snaps["buy_queue_volume"] > 0]
@@ -342,10 +360,15 @@ def page_live() -> None:
             snaps = snaps[snaps["sell_queue_volume"] > 0]
         elif view_filter == "قدرت خریدار > ۲":
             snaps = snaps[snaps["buyer_power"] > 2]
+        if snaps.empty:
+            st.info("هیچ نمادی با این فیلتر وجود ندارد.")
+            return
         snaps = snaps.sort_values("value", ascending=False)
         st.caption(f"آخرین ثبت: {to_jalali(snaps['captured_at'].max(), with_time=True)} — {to_fa_digits(len(snaps))} نماد")
         st.dataframe(pd.DataFrame({
             "نماد": snaps["symbol_fa"],
+            "تازگی منبع": snaps["freshness"],
+            "تأخیر منبع (ثانیه)": snaps["source_delay"],
             "آخرین": snaps["last_price"],
             "پایانی": snaps["close_price"],
             "تغییر ٪": snaps["change_pct"].round(2),
@@ -405,7 +428,7 @@ def latest_research_report() -> str:
 
 def page_research() -> None:
     st.title("🔬 پژوهش: آیا این روش‌ها بعد از کارمزد سود می‌دهند؟")
-    st.info("این صفحه توصیه خرید یا فروش نیست. نتیجه آزمون علمی روش‌های ساده روی ۱۳ سال گذشته است: خرید فردا، "
+    st.info("این صفحه بررسی اولیه روش‌های ساده با داده موجود است؛ پرتفوی واقعی هنوز شبیه‌سازی نشده: خرید فردا، "
             "فروش چند جلسه بعد، با کارمزد واقعی و بدون فرض خرید در صف. هر مدل هوش مصنوعی بعدی باید از بهترین "
             "همین‌ها بهتر باشد.")
     job_panel("research", ["research"], "اجرای دوباره پژوهش",

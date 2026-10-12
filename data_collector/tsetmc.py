@@ -359,9 +359,9 @@ class TsetmcProvider(BaseDataProvider):
         # صف خرید/فروش فقط وقتی معنا دارد که بهترین مظنه روی سقف/کف دامنه نوسان باشد
         limit_up, limit_down = snap["price_limit_up"], snap["price_limit_down"]
         # بدون دامنه مجاز روز، وجود صف نامعلوم است (None)، نه صفر
-        snap["buy_queue_volume"] = (None if not limit_up else
+        snap["buy_queue_volume"] = (None if not limit_up or snap.get("bid_price_1") is None or snap.get("bid_vol_1") is None else
                                     snap.get("bid_vol_1") if snap.get("bid_price_1") == limit_up else 0)
-        snap["sell_queue_volume"] = (None if not limit_down else
+        snap["sell_queue_volume"] = (None if not limit_down or snap.get("ask_price_1") is None or snap.get("ask_vol_1") is None else
                                      snap.get("ask_vol_1") if snap.get("ask_price_1") == limit_down else 0)
         if client_type:
             snap.update({
@@ -392,9 +392,24 @@ class TsetmcProvider(BaseDataProvider):
         rows = [r for r in (data or {}).get("marketwatch", []) if (r.get("qtj") or 0) > 0]
         if not rows:
             return None
-        most_traded = max(rows, key=lambda r: r.get("qtc") or 0)
+        dated = []
+        for row in rows:
+            try:
+                trade_date = deven_to_iso(row["dEven"])
+                datetime.fromisoformat(trade_date)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if trade_date <= now_tehran().date().isoformat():
+                dated.append((trade_date, row))
+        if not dated:
+            logger.warning("تاریخ خود نمادها موجود نیست؛ کندل جلسه از دیده‌بان ساخته نشد.")
+            return None
+        most_traded = max(dated, key=lambda pair: (pair[0], pair[1].get("qtc") or 0))[1]
         market_date = self.get_market_date(str(most_traded["insCode"]))
         if not market_date:
+            return None
+        rows = [row for trade_date, row in dated if trade_date == market_date]
+        if not rows:
             return None
         candles = [{
             "ins_code": str(r["insCode"]), "date": market_date,

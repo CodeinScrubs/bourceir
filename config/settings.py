@@ -13,6 +13,7 @@
 import logging
 import math
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict
 
@@ -63,8 +64,8 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"فایل تنظیمات پیدا نشد: {path}")
     with open(path, "r", encoding="utf-8") as f:
-        value = yaml.safe_load(f) or {}
-    if not isinstance(value, dict):
+        value = yaml.safe_load(f)
+    if not isinstance(value, dict) or not value:
         raise ValueError(f"ساختار فایل تنظیمات {path.name} نامعتبر است")
     return value
 
@@ -83,6 +84,12 @@ def validate_config(config: Dict[str, Any]) -> None:
     market = config.get("market", {})
     if market.get("timezone", "Asia/Tehran") != "Asia/Tehran" or market.get("price_unit", "Rial") != "Rial":
         raise ValueError("منطقه زمانی باید Asia/Tehran و واحد قیمت Rial باشد (قانون ۵ AGENTS.md)")
+    universe = config.get("universe", {})
+    if universe.get("instrument_types", [300, 303]) != [300, 303]:
+        raise ValueError("دامنه پایه فقط سهام بورس و فرابورس است")
+    for key in ("include_base_market", "include_sme_market", "exclude_block_boards"):
+        if key in universe and not isinstance(universe[key], bool):
+            raise ValueError(f"universe.{key} باید true یا false باشد")
     for key in ("buy", "sell"):
         _check_range(config, "fees", key, 0.0, 0.05)
     _check_range(config, "backtest", "max_volume_participation_pct", 1e-6, 0.05)   # قانون ۸
@@ -95,8 +102,31 @@ def validate_config(config: Dict[str, Any]) -> None:
     _check_range(config, "research", "top_k", 1, 50)
     _check_range(config, "research", "min_daily_value_rial", 0, 1e15)
     research = config.get("research", {})
-    if research.get("dev_start", "") >= research.get("holdout_start", "9999"):
+    _check_range(config, "research", "random_trials", 1, 10000)
+    for key in ("top_k", "random_trials"):
+        if key in research and (isinstance(research[key], bool) or not isinstance(research[key], int)):
+            raise ValueError(f"research.{key} باید عدد صحیح باشد")
+    horizons = research.get("horizons", [1, 2, 3, 5])
+    if not isinstance(horizons, list) or not horizons or any(
+        isinstance(h, bool) or not isinstance(h, int) or not 1 <= h <= 20 for h in horizons
+    ) or len(set(horizons)) != len(horizons):
+        raise ValueError("افق‌های پژوهش باید اعداد صحیح مثبت و یکتا بین ۱ و ۲۰ باشند")
+    dates = {}
+    for key, default in (("dev_start", "2012-03-20"), ("holdout_start", "2025-03-21")):
+        value = str(research.get(key, default))
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"تاریخ research.{key} نامعتبر است") from exc
+        if parsed.isoformat() != value:
+            raise ValueError(f"قالب research.{key} باید YYYY-MM-DD باشد")
+        dates[key] = parsed
+    if dates["dev_start"] >= dates["holdout_start"]:
         raise ValueError("research.dev_start باید قبل از research.holdout_start باشد")
+    for key in ("enforce_point_in_time", "prevent_lookahead_bias"):
+        if config.get("governance", {}).get(key, True) is not True:
+            raise ValueError(f"حفاظت {key} باید فعال باشد")
+
 
 
 CONFIG: Dict[str, Any] = _load_yaml(CONFIG_DIR / "default.yaml")
@@ -114,7 +144,7 @@ _ai = CONFIG.get("ai", {})
 
 # ─── پروژه و مسیرها ───
 PROJECT_NAME = _project.get("name", "BRS Quant Engine")
-VERSION = str(_project.get("version", "0.5.1"))
+VERSION = str(_project.get("version", "0.5.2"))
 # امکان تغییر مسیر داده و لاگ با متغیر محیطی (برای CI و نصب‌های جدا)
 DATA_DIR = Path(os.getenv("BRS_DATA_DIR", str(BASE_DIR / "data")))
 LOG_DIR = Path(os.getenv("BRS_LOG_DIR", str(BASE_DIR / "logs")))

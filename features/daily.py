@@ -18,7 +18,7 @@ import pandas as pd
 
 from core import market_rules
 
-FEATURE_SET_VERSION = "daily-v2"  # هر تغییر در منطق فیچرها → نسخه جدید (تاریخچه در docs/features.md)
+FEATURE_SET_VERSION = "daily-v3"  # هر تغییر در منطق فیچرها → نسخه جدید (تاریخچه در docs/features.md)
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -65,7 +65,7 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     index = (1.0 + ret.fillna(0.0)).cumprod()
     out["ret_1d"] = ret
     for n in (3, 5, 20):
-        out[f"ret_{n}d"] = index / index.shift(n) - 1.0
+        out[f"ret_{n}d"] = (index / index.shift(n) - 1.0).where(ret.rolling(n).count() == n)
 
     # ─── نوسان و محدوده ───
     out["vol_20d"] = ret.rolling(20, min_periods=15).std()
@@ -75,8 +75,9 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     ], axis=1).max(axis=1)
     out["atr_14d_pct"] = _safe_div(true_range, ref).rolling(14, min_periods=10).mean()
     gain, loss = ret.clip(lower=0), (-ret).clip(lower=0)
-    avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    segments = ret.isna().cumsum()
+    avg_gain = gain.groupby(segments).transform(lambda x: x.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean())
+    avg_loss = loss.groupby(segments).transform(lambda x: x.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean())
     out["rsi_14d"] = 100.0 - 100.0 / (1.0 + _safe_div(avg_gain, avg_loss))
     out.loc[(avg_loss == 0) & (avg_gain > 0), "rsi_14d"] = 100.0
     out.loc[(avg_loss == 0) & (avg_gain == 0), "rsi_14d"] = 50.0   # قیمت ثابت: نه اشباع خرید، نه فروش
@@ -86,6 +87,11 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     out["dist_sma_50d"] = index / index.rolling(50, min_periods=40).mean() - 1.0
     out["dist_high_20d"] = index / index.rolling(20, min_periods=15).max() - 1.0
     out["dist_low_20d"] = index / index.rolling(20, min_periods=15).min() - 1.0
+    valid_path = ret.notna().astype(int)
+    valid_path.iloc[0] = int(pd.notna(market_rules.official_close(df).iloc[0]))
+    for length, columns in ((20, ["dist_sma_20d", "dist_high_20d", "dist_low_20d"]), (50, ["dist_sma_50d"])):
+        complete = valid_path.rolling(length, min_periods=1).min() == 1
+        out[columns] = out[columns].where(complete, axis=0)
 
     # ─── رفتار روز ───
     official = market_rules.official_close(df)

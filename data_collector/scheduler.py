@@ -77,6 +77,9 @@ class DataCollector:
         """یافتن نماد در دیتابیس با ins_code؛ در صورت نبود، جستجو در منبع داده و ثبت."""
         sym = self.db.get_symbol(symbol_fa)
         if sym and sym.get("ins_code"):
+            if not sym.get("is_active") or not TsetmcProvider.is_in_scope(sym["symbol_fa"], sym.get("instrument_type_code")):
+                logger.warning("نماد ذخیره‌شده «%s» خارج از جامعه فعال پروژه است.", symbol_fa)
+                return None
             return sym
         meta = self.provider.search_symbol(symbol_fa)
         if not meta:
@@ -208,7 +211,7 @@ class DataCollector:
             return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
                     "symbols_failed": 0, "errors": [], "message": "معاملات امروز هنوز نهایی نشده است (بعد از ساعت ۱۳)."}
 
-        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
         saved = rejected = 0
         for candle in result["candles"]:
             sym = known.get(candle["ins_code"])
@@ -263,7 +266,7 @@ class DataCollector:
             return self._finish("snapshot", started_at, 0, 0, 1, ["دیده‌بان بازار از TSETMC دریافت نشد"])
 
         wanted = set(symbols) if symbols else None
-        known = {s["ins_code"]: s for s in self.db.get_all_symbols() if s.get("ins_code")}
+        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
         rows, errors = [], []
         rejected = unchanged = 0
         for snap in snapshots:
@@ -318,7 +321,7 @@ class DataCollector:
         letters = self.codal.get_latest(pages=pages, symbol_fa=symbol_fa)
         if not letters:
             return self._finish("codal", started_at, 0, 0, 1, ["اطلاعیه‌ای از کدال دریافت نشد"])
-        tracked = {s["symbol_fa"] for s in self.db.get_all_symbols()}
+        tracked = {s["symbol_fa"] for s in self.db.get_universe_symbols()}
         in_scope = [letter for letter in letters if letter["symbol_fa"] in tracked]
         inserted = self.db.upsert_announcements(in_scope)
         return self._finish("codal", started_at, len(letters), len(in_scope), 0, [],

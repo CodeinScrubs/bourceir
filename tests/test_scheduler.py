@@ -69,7 +69,7 @@ def test_market_snapshot_saves_valid_and_skips_unchanged(db, market_watch_rows, 
 def test_invalid_snapshot_is_quarantined(db, market_watch_rows):
     broken = dict(market_watch_rows[0], pdv=5000.0)  # آخرین معامله بالاتر از سقف دامنه
     collector = _collector(db, {"GetMarketWatch": {"marketwatch": [broken]}, "GetClientTypeAll": {}})
-    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": FOOLAD_INS})
+    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": FOOLAD_INS, "instrument_type_code": 300})
     report = collector.collect_market_snapshot()
     assert report["symbols_failed"] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM snapshots;").fetchone()[0] == 0

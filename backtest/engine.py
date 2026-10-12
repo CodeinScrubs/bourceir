@@ -27,8 +27,6 @@ from core import market_rules
 
 logger = logging.getLogger(__name__)
 
-TRADING_DAYS_PER_YEAR = 240
-
 SignalFn = Callable[[pd.Series, "BacktestEngine"], Optional[str]]
 
 
@@ -43,6 +41,7 @@ class BacktestEngine:
         initial_capital: Optional[float] = None,
         max_volume_participation_pct: Optional[float] = None,
         default_slippage_bps: Optional[float] = None,
+        periods_per_year: Optional[float] = None,
     ):
         cfg = settings.BACKTEST_CONFIG
         self.initial_capital = float(initial_capital if initial_capital is not None else cfg["initial_capital"])
@@ -66,6 +65,10 @@ class BacktestEngine:
         self.equity_curve: List[Dict[str, Any]] = []
         self.last_prices: Dict[str, float] = {}
         self.blocked_orders = 0
+        if periods_per_year is not None and (not math.isfinite(periods_per_year) or periods_per_year <= 0):
+            raise ValueError("تناوب سالانه باید مثبت باشد")
+        self.periods_per_year = periods_per_year
+        self._daily_used: Dict[tuple, List[float]] = {}
         self.corporate_action_receivable = 0.0   # ارزش کسر سهم (کمتر از یک سهم) پس از تعدیل؛ نقد قابل خرج نیست
         self.corporate_action_events = 0
         # جمع خرید و فروش هر پوزیشن از باز شدن تا بسته شدن کامل (یک معامله رفت‌وبرگشت)
@@ -83,23 +86,65 @@ class BacktestEngine:
             slippage += min((quantity / daily_volume) * 0.1, 0.02)
         return base_price * (1.0 + slippage) if side == OrderSide.BUY else base_price * (1.0 - slippage)
 
-    def _participation_cap(self, quantity: int, daily_volume: Optional[int]) -> int:
-        if daily_volume and daily_volume > 0:
-            return min(quantity, int(daily_volume * self.max_volume_participation_pct))
-        return quantity
+    @staticmethod
+    def _valid_number(value, integer=False) -> bool:
+        if isinstance(value, (bool, str)):
+            return False
+        try:
+            return math.isfinite(float(value)) and value > 0 and (not integer or float(value).is_integer())
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def _quantity_for_order(self, symbol, date, price, quantity, side, volume, value, low, high):
+        if not self._valid_number(price) or not self._valid_number(quantity, integer=True):
+            return 0
+        if volume is not None and not self._valid_number(volume, integer=True):
+            return 0
+        if value is not None and not self._valid_number(value):
+            return 0
+        if low is not None and not self._valid_number(low):
+            return 0
+        if high is not None and not self._valid_number(high):
+            return 0
+        if low is not None and high is not None and low > high:
+            return 0
+        used_volume, used_value = self._daily_used.get((symbol, date), [0.0, 0.0])
+        cap = int(quantity)
+        if volume is not None:
+            cap = min(cap, max(0, int(volume * self.max_volume_participation_pct - used_volume)))
+        budget = float("inf") if value is None else max(0.0, value * self.max_volume_participation_pct - used_value)
+        left, right = 0, cap
+        while left < right:
+            candidate = (left + right + 1) // 2
+            fill = market_rules.apply_execution_bounds(
+                self.calculate_slippage_price(price, side, candidate, volume), low, high)
+            gross = fill * candidate
+            affordable = side != OrderSide.BUY or gross * (1 + self.BUY_COMMISSION_RATE) <= self.cash
+            if gross <= budget and affordable:
+                left = candidate
+            else:
+                right = candidate - 1
+        return left
+
+    def _record_participation(self, symbol, date, quantity, gross):
+        used = self._daily_used.setdefault((symbol, date), [0.0, 0.0])
+        used[0] += quantity
+        used[1] += gross
 
     def execute_buy(self, symbol_fa: str, price: float, quantity: int, date: str,
                     daily_volume: Optional[int] = None, is_locked_limit_up: bool = False,
-                    day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+                    day_low: Optional[float] = None, day_high: Optional[float] = None,
+                    daily_value: Optional[float] = None) -> Optional[Trade]:
         """اجرای سفارش خرید با بررسی قفل صف خرید، سقف نقدشوندگی، بازه قیمت روز و کارمزد."""
-        if quantity <= 0 or price <= 0:
+        if not self._valid_number(quantity, integer=True) or not self._valid_number(price):
             return None
         if is_locked_limit_up:
             self.blocked_orders += 1
             logger.info("خرید «%s» در %s اجرا نشد: صف خرید قفل.", symbol_fa, date)
             return None
 
-        quantity = self._participation_cap(quantity, daily_volume)
+        quantity = self._quantity_for_order(symbol_fa, date, price, quantity, OrderSide.BUY,
+                                            daily_volume, daily_value, day_low, day_high)
         if quantity <= 0:
             logger.info("حجم معاملات روز «%s» برای این سفارش کافی نیست.", symbol_fa)
             return None
@@ -117,6 +162,7 @@ class BacktestEngine:
         commission = gross_value * self.BUY_COMMISSION_RATE
         total_required = gross_value + commission
         self.cash -= total_required
+        self._record_participation(symbol_fa, date, quantity, gross_value)
 
         trade = Trade(symbol_fa=symbol_fa, side=OrderSide.BUY, quantity=quantity, price=round(execution_price, 2),
                       gross_value=round(gross_value, 2), commission=round(commission, 2),
@@ -141,8 +187,11 @@ class BacktestEngine:
 
     def execute_sell(self, symbol_fa: str, price: float, quantity: int, date: str,
                      daily_volume: Optional[int] = None, is_locked_limit_down: bool = False,
-                     day_low: Optional[float] = None, day_high: Optional[float] = None) -> Optional[Trade]:
+                     day_low: Optional[float] = None, day_high: Optional[float] = None,
+                    daily_value: Optional[float] = None) -> Optional[Trade]:
         """اجرای سفارش فروش با بررسی قفل صف فروش، سقف نقدشوندگی، بازه قیمت روز، مالیات و کارمزد."""
+        if not self._valid_number(quantity, integer=True) or not self._valid_number(price):
+            return None
         pos = self.positions.get(symbol_fa)
         if pos is None or pos.quantity <= 0:
             logger.warning("پوزیشن بازی برای فروش «%s» وجود ندارد.", symbol_fa)
@@ -152,7 +201,8 @@ class BacktestEngine:
             logger.info("فروش «%s» در %s اجرا نشد: صف فروش قفل.", symbol_fa, date)
             return None
 
-        sell_qty = self._participation_cap(min(quantity, pos.quantity), daily_volume)
+        sell_qty = self._quantity_for_order(symbol_fa, date, price, min(quantity, pos.quantity), OrderSide.SELL,
+                                           daily_volume, daily_value, day_low, day_high)
         if sell_qty <= 0:
             return None
 
@@ -162,6 +212,7 @@ class BacktestEngine:
         commission = gross_value * self.SELL_COMMISSION_RATE
         net_received = gross_value - commission
         self.cash += net_received
+        self._record_participation(symbol_fa, date, sell_qty, gross_value)
 
         trade = Trade(symbol_fa=symbol_fa, side=OrderSide.SELL, quantity=sell_qty, price=round(execution_price, 2),
                       gross_value=round(gross_value, 2), commission=round(commission, 2),
@@ -276,11 +327,11 @@ class BacktestEngine:
                 if peak > 0:
                     max_dd_pct = max(max_dd_pct, (peak - eq) / peak * 100.0)
 
-        sharpe = 0.0
-        if len(self.equity_curve) > 2:
-            returns = pd.Series([pt["equity"] for pt in self.equity_curve]).pct_change().dropna()
+        sharpe = None
+        if self.periods_per_year is not None and len(self.equity_curve) > 2:
+            returns = pd.Series([self.initial_capital] + [pt["equity"] for pt in self.equity_curve]).pct_change().dropna()
             if len(returns) > 1 and returns.std() > 1e-9:
-                sharpe = float(returns.mean() / returns.std() * (TRADING_DAYS_PER_YEAR ** 0.5))
+                sharpe = float(returns.mean() / returns.std() * (self.periods_per_year ** 0.5))
 
         return PerformanceMetrics(
             total_trades=len(self.trades),
@@ -294,7 +345,7 @@ class BacktestEngine:
             expectancy_pct=round(expectancy, 4),
             max_drawdown_pct=round(max_dd_pct, 2),
             total_commissions_paid=round(sum(t.commission for t in self.trades), 2),
-            sharpe_ratio=round(sharpe, 2),
+            sharpe_ratio=round(sharpe, 2) if sharpe is not None else None,
             initial_capital=round(self.initial_capital, 2),
             final_equity=round(final_equity, 2),
             total_return_pct=round(total_return_pct, 2),
@@ -322,7 +373,7 @@ class BacktestEngine:
         df["_mark"] = market_rules.official_close(df)
         has_range = {"high_raw", "low_raw"}.issubset(df.columns)
         if has_range and {"value", "volume"}.issubset(df.columns):
-            df["_fill"] = market_rules.daily_vwap(df).fillna(df["open_raw"] if "open_raw" in df.columns else df["_mark"])
+            df["_fill"] = market_rules.daily_vwap(df)
         else:
             df["_fill"] = df["open_raw"] if "open_raw" in df.columns else df["_mark"]
         if has_range and "volume" in df.columns:
@@ -355,7 +406,8 @@ class BacktestEngine:
         for _, row in df.iterrows():
             date_str = str(row["date"])
             fill_price = float(row["_fill"]) if pd.notna(row["_fill"]) else None
-            day_volume = int(row["volume"]) if pd.notna(row["volume"]) else None
+            day_volume = int(row["volume"]) if self._valid_number(row["volume"], integer=True) else None
+            day_value = row.get("value")
             # سقف مشارکت با کمترین حجم بین روز تصمیم و روز اجرا (محافظه‌کارانه)
             cap_volume = min(v for v in (day_volume, prev_volume) if v) if (day_volume or prev_volume) else None
             low = row["low_raw"] if "low_raw" in row and pd.notna(row["low_raw"]) else None
@@ -370,17 +422,17 @@ class BacktestEngine:
                 fill_price = None
 
             # ۱. اجرای سفارش روز قبل
-            if pending == "BUY" and fill_price:
-                qty = int(self.cash * allocation_pct / (fill_price * (1.0 + self.BUY_COMMISSION_RATE)))
+            if pending == "BUY":
+                qty = int(self.cash * allocation_pct / (fill_price * (1.0 + self.BUY_COMMISSION_RATE))) if fill_price else 0
                 if qty > 0:
                     self.execute_buy(symbol_fa, fill_price, qty, date_str, daily_volume=cap_volume,
-                                     is_locked_limit_up=bool(row["_locked_up"]), day_low=low, day_high=high)
+                                     is_locked_limit_up=bool(row["_locked_up"]), day_low=low, day_high=high, daily_value=day_value)
                 pending = None  # سیگنال خرید کهنه نمی‌ماند؛ استراتژی می‌تواند دوباره سیگنال بدهد
             elif pending == "SELL" and fill_price:
                 pos = self.positions.get(symbol_fa)
                 if pos and pos.quantity > 0:
                     self.execute_sell(symbol_fa, fill_price, pos.quantity, date_str, daily_volume=cap_volume,
-                                      is_locked_limit_down=bool(row["_locked_down"]), day_low=low, day_high=high)
+                                      is_locked_limit_down=bool(row["_locked_down"]), day_low=low, day_high=high, daily_value=day_value)
                 pos = self.positions.get(symbol_fa)
                 if not pos or pos.quantity == 0:
                     pending = None  # تا خروج کامل، سفارش فروش باقی می‌ماند

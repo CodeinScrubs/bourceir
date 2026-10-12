@@ -31,7 +31,7 @@ venv/Scripts/python.exe brs.py research              # برچسب‌های خا�
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |
 | `backtest/engine.py` | بکتست: اجرای روز بعد، VWAP، صف قفل، کارمزد از config |
 | `features/` | موتور فیچر PIT (`daily`, `market`) و انبار فیچر Parquet نسخه‌دار (`store`)؛ نام فارسی فیچرها در `labels_fa` — هر تغییر منطق = `FEATURE_SET_VERSION` جدید + آزمون بریدن داده |
-| `research/` | فاز ۱-ج: `labels` (بازده خالص قابل اجرا، نسخه‌دار)، `baselines` (استراتژی‌های پایه، معیار تصادفی، t نیوی-وست)، `run` (ثبت آزمایش و گزارش). دوره `holdout_start` مهر و موم است — نتایج: `docs/research/` |
+| `research/` | گزارش 0.5.2: `docs/reviews/2026-10-12-regression-audit-fa.md`؛ برچسب labels-v2 و فیچر daily-v3. فاز ۱-ج: `labels` (بازده خالص قابل اجرا، نسخه‌دار)، `baselines` (استراتژی‌های پایه، معیار تصادفی، t نیوی-وست)، `run` (ثبت آزمایش و گزارش). دوره `holdout_start` مهر و موم است — نتایج: `docs/research/` |
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |
