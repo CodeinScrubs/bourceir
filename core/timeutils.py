@@ -45,12 +45,13 @@ def is_trading_weekday(day: Union[date, datetime]) -> bool:
 
 def is_market_open(at: Optional[datetime] = None) -> bool:
     """آیا بازار در این لحظه (به وقت تهران) در ساعات معاملات است؟"""
-    at = (at or now_tehran()).astimezone(TEHRAN_TZ)
+    at = at or now_tehran()
+    at = at.replace(tzinfo=TEHRAN_TZ) if at.tzinfo is None else at.astimezone(TEHRAN_TZ)
     if not is_trading_weekday(at):
         return False
     start = _parse_hhmm(settings.TRADING_HOURS.get("start", "09:00"))
     end = _parse_hhmm(settings.TRADING_HOURS.get("end", "12:30"))
-    return start <= at.time() <= end
+    return start <= at.time() < end
 
 
 def deven_to_iso(deven: Union[int, str]) -> str:

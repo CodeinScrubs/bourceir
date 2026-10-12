@@ -19,6 +19,7 @@ from core.timeutils import now_tehran_iso
 
 JOBS_DIR = settings.DATA_DIR / "jobs"
 BRS_SCRIPT = settings.BASE_DIR / "brs.py"
+_OWNED_PROCESSES: Dict[str, subprocess.Popen] = {}
 
 
 def _state_file(name: str) -> Path:
@@ -36,17 +37,14 @@ def _read_state(name: str) -> Optional[Dict[str, Any]]:
 
 
 def _is_alive(pid: Optional[int], created_at: Optional[float] = None) -> bool:
-    """
-    آیا همان فرایندی که ما ساختیم هنوز زنده است؟ ویندوز شماره PID را بازیافت می‌کند؛ با «زمان ساخت فرایند»
-    مطمئن می‌شویم فرایند دیگری که بعداً همان PID را گرفته، کار ما حساب نشود (و هرگز متوقف نشود).
-    """
     if not pid or not psutil.pid_exists(pid):
         return False
     try:
         proc = psutil.Process(pid)
-        if created_at is not None and abs(proc.create_time() - created_at) > 1.0:
-            return False
-        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE and "brs.py" in " ".join(proc.cmdline())
+        command = proc.cmdline()
+        return (proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+                and len(command) > 1 and Path(command[1]).resolve() == BRS_SCRIPT.resolve()
+                and created_at is not None and abs(proc.create_time() - created_at) < 0.01)
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
 
@@ -56,14 +54,17 @@ def job_status(name: str, tail_lines: int = 15) -> Dict[str, Any]:
     log_path = Path(state["log"]) if state.get("log") else None
     tail: List[str] = []
     if log_path and log_path.exists():
-        # فقط ۶۴ کیلوبایت آخر فایل (لاگ به‌روزرسانی کامل چند مگابایت است و هر ۳ ثانیه خوانده می‌شود)
         with log_path.open("rb") as stream:
             stream.seek(max(0, log_path.stat().st_size - 65536))
             lines = stream.read().decode("utf-8", errors="replace").splitlines()
         tail = lines[-tail_lines:]
+    owned = _OWNED_PROCESSES.get(name)
+    # handle خود فرایند قابل اتکاتر از جستجوی مجدد PID است (به‌ویژه در محیط‌های دارای PID namespace).
+    running = owned.poll() is None if owned is not None else _is_alive(state.get("pid"), state.get("created_at"))
     return {
         "name": name,
-        "running": _is_alive(state.get("pid"), state.get("created_at")),
+        "running": running,
+        "returncode": owned.returncode if owned is not None else None,
         "started_at": state.get("started_at"),
         "args": state.get("args", []),
         "log_tail": tail,
@@ -85,12 +86,14 @@ def start_job(name: str, args: List[str]) -> bool:
             cwd=str(settings.BASE_DIR), stdout=log_file, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, creationflags=flags,
         )
+    _OWNED_PROCESSES[name] = proc
     try:
         created_at = psutil.Process(proc.pid).create_time()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         created_at = None
     _state_file(name).write_text(json.dumps({
-        "pid": proc.pid, "created_at": created_at, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
+        "pid": proc.pid, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
+        "created_at": created_at,
     }, ensure_ascii=False), encoding="utf-8")
     return True
 
@@ -98,6 +101,19 @@ def start_job(name: str, args: List[str]) -> bool:
 def stop_job(name: str) -> bool:
     state = _read_state(name) or {}
     pid = state.get("pid")
+    owned = _OWNED_PROCESSES.get(name)
+    if owned is not None:
+        if owned.poll() is not None:
+            return False
+        # در محیطی که psutil فضای PID دیگری می‌بیند، فقط handle متعلق به خودمان متوقف می‌شود.
+        if not _is_alive(pid, state.get("created_at")):
+            owned.terminate()
+            try:
+                owned.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                owned.kill()
+                owned.wait(timeout=5)
+            return True
     if not _is_alive(pid, state.get("created_at")):
         return False
     proc = psutil.Process(pid)

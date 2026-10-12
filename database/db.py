@@ -256,7 +256,8 @@ class DatabaseManager:
             f"SELECT * FROM symbols WHERE is_active = 1 AND instrument_type_code IN ({placeholders}) "
             "ORDER BY symbol_fa ASC;", allowed,
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in rows if not settings.UNIVERSE["exclude_block_boards"]
+                or not r["symbol_fa"][-1:].isdigit()]
 
     # ═══════════════════════════════════════════════
     # قیمت‌های روزانه
@@ -603,6 +604,8 @@ class DatabaseManager:
 
     def backup(self, keep: int = 5) -> Path:
         """نسخه پشتیبان کامل در data/backups (فقط keep نسخه آخر نگه داشته می‌شود)."""
+        if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+            raise ValueError("حداقل یک نسخه پشتیبان باید نگه داشته شود")
         target = backup_database(self.conn, self.db_path)
         backups = sorted((self.db_path.parent / "backups").glob(f"{self.db_path.stem}-*.db"))
         for old in backups[:-keep]:

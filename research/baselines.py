@@ -46,7 +46,12 @@ STRATEGIES: List[Strategy] = [
 
 def newey_west_t(series: pd.Series, lag: int) -> float:
     """آماره t میانگین با خطای استاندارد نیوی-وست (برای بازده‌های هم‌پوشان)."""
-    x = series.dropna().to_numpy(dtype=float)
+    if isinstance(lag, bool) or not isinstance(lag, int) or lag < 0:
+        raise ValueError("وقفه آماری باید عدد صحیح نامنفی باشد")
+    # حذف فاصله‌های مجهول تقویم، هم‌بستگی زمانی کاذب می‌سازد؛ آماره در این حالت اعلام نمی‌شود.
+    if series.isna().any() or not np.isfinite(series.to_numpy(dtype=float)).all():
+        return float("nan")
+    x = series.to_numpy(dtype=float)
     n = len(x)
     if n < max(10, lag + 2):
         return float("nan")
@@ -62,50 +67,60 @@ def newey_west_t(series: pd.Series, lag: int) -> float:
 
 def pick_top(panel: pd.DataFrame, score: pd.Series, k: int) -> pd.DataFrame:
     """K سهم برتر هر روز بر اساس امتیاز (فقط ردیف‌های دارای امتیاز)."""
+    if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+        raise ValueError("تعداد انتخاب باید عدد صحیح مثبت باشد")
     df = panel.assign(_score=score).dropna(subset=["_score"])
-    df = df.sort_values(["date", "_score", "value"], ascending=[True, False, False])
+    df = df.loc[np.isfinite(df["_score"])].copy()
+    columns = ["date", "_score", "value"] + (["symbol"] if "symbol" in df else [])
+    df = df.sort_values(columns, ascending=[True, False, False] + ([True] if "symbol" in df else []))
     return df[df.groupby("date").cumcount() < k]
 
 
-def _portfolio_stats(cohort: pd.Series, horizon: int) -> Dict[str, float]:
-    """
-    پرتفوی واقعی بدون هم‌پوشانی: هر h روز یک سبد K سهمی؛ برای حذف شانس روز شروع، همه h حالت شروع محاسبه و
-    میانه (CAGR) و بدترین افت سرمایه گزارش می‌شود.
-    """
-    periods_per_year = 240.0 / horizon
-    cagr, mdd, sharpe = [], [], []
-    for offset in range(horizon):
-        r = cohort.iloc[offset::horizon].fillna(0.0)
-        if len(r) < 10:
-            continue
-        equity = (1.0 + r).cumprod()
-        years = len(r) / periods_per_year
-        cagr.append(equity.iloc[-1] ** (1.0 / years) - 1.0 if equity.iloc[-1] > 0 else -1.0)
-        peak = np.maximum.accumulate(np.concatenate([[1.0], equity.to_numpy()]))
-        mdd.append(float(np.max(1.0 - np.concatenate([[1.0], equity.to_numpy()]) / peak)))
-        sharpe.append(float(r.mean() / r.std() * np.sqrt(periods_per_year)) if r.std() > 0 else float("nan"))
-    if not cagr:
-        return {"cagr": float("nan"), "max_drawdown": float("nan"), "sharpe": float("nan")}
-    return {"cagr": float(np.median(cagr)), "max_drawdown": float(np.max(mdd)), "sharpe": float(np.nanmedian(sharpe))}
+
+def _cohort_returns(picks: pd.DataFrame, calendar: pd.Index, horizon: int, k: int) -> pd.Series:
+    col = f"net_ret_{horizon}d"
+    executed = picks[col].notna() & np.isfinite(picks[col])
+    status = f"label_status_{horizon}d"
+    known = picks[status].isin(["complete", "entry_blocked"]) if status in picks else pd.Series(True, index=picks.index)
+    known &= executed | picks[col].isna()
+    allocated = picks[col].where(executed, 0.0).where(known)
+    grouped = allocated.groupby(picks["date"])
+    # روز بی‌انتخاب = نقد؛ خروج نامعلوم = NaN. کاهش گروهی برای بازار کامل سریع‌تر از apply است.
+    cohort = (grouped.sum() / k).where(grouped.count() == grouped.size())
+    return cohort.reindex(calendar, fill_value=0.0)
 
 
 def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: int) -> Dict[str, float]:
     """ارزیابی انتخاب‌های یک استراتژی در یک افق. market: میانگین روزانه «خرید همه سهم‌های نقدشونده»."""
+    if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+        raise ValueError("تعداد انتخاب باید عدد صحیح مثبت باشد")
     col = f"net_ret_{horizon}d"
-    executed = picks[col].notna()
+    executed = picks[col].notna() & np.isfinite(picks[col])
+    status_col = f"label_status_{horizon}d"
+    # سازگاری با پنل‌های آزمون قدیمی؛ خروجی labels-v2 همواره وضعیت صریح دارد.
+    known = picks[status_col].isin(["complete", "entry_blocked"]) if status_col in picks else pd.Series(True, index=picks.index)
+    known &= executed | picks[col].isna()
     trades = picks.loc[executed, col]
-    days = picks["date"].nunique()
-    # بازده سبد هر روز: جمع بازده سهم‌های خریداری‌شده ÷ K (سهم خریدنشده = سرمایه بیکار)
-    cohort = picks.groupby("date")[col].apply(lambda r: r.fillna(0.0).sum() / k)
-    per_day_mean = picks.groupby("date")[col].mean()
-    excess = (per_day_mean - market.reindex(per_day_mean.index)).dropna()
+    calendar = market.index.union(pd.Index(picks["date"].unique())).sort_values()
+    days = len(calendar)
+    cohort = _cohort_returns(picks, calendar, horizon, k)
+    excess = cohort - market.reindex(calendar)
     gains, losses = trades[trades > 0].sum(), -trades[trades < 0].sum()
     by_year = trades.groupby(picks.loc[executed, "date"].str[:4]).mean()
+    entry_known = known
+    entry_filled = executed
+    if {"entry_date", "entry_executable"}.issubset(picks.columns):
+        entry_known = picks["entry_date"] != ""
+        entry_filled = picks["entry_executable"] & entry_known
     stats = {
         "days": int(days),
         "picks": int(len(picks)),
         "trades": int(executed.sum()),
-        "fill_rate": float(executed.mean()) if len(picks) else float("nan"),
+        "fill_rate": float(entry_filled.sum() / entry_known.sum()) if entry_known.sum() else float("nan"),
+        "unknown_picks": int((~known).sum()),
+        "unknown_cohorts": int(cohort.isna().sum()),
+        "days_without_selection": int(days - picks["date"].nunique()),
+        "corporate_action_trades": int((picks.get(f"corporate_actions_{horizon}d", pd.Series(dtype=float)) > 0).sum()),
         "mean_trade": float(trades.mean()) if len(trades) else float("nan"),
         "mean_trade_worst": float(picks.loc[executed, f"{col}_worst"].mean())
         if f"{col}_worst" in picks and len(trades) else float("nan"),
@@ -120,26 +135,39 @@ def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: i
         "years_total": int(len(by_year)),
         "by_year": {y: round(float(v), 5) for y, v in by_year.items()},
     }
-    stats.update(_portfolio_stats(cohort, horizon))
+    # بدون پرتفوی چندنمادی، موجودی نقد و mark-to-market، این سه شاخص قابل استناد نیستند.
+    stats.update(cagr=float("nan"), max_drawdown=float("nan"), sharpe=float("nan"), portfolio_simulated=False)
     return stats
 
 
 def market_benchmark(panel: pd.DataFrame, horizon: int) -> pd.Series:
     """میانگین بازده خالص همه سهم‌های نقدشونده قابل خرید در هر روز («خرید همه بازار»)."""
-    return panel.groupby("date")[f"net_ret_{horizon}d"].mean()
+    col = f"net_ret_{horizon}d"
+    status = f"label_status_{horizon}d"
+    values = panel[col].copy()
+    if status in panel:
+        values = values.where(panel[status].isin(["complete", "entry_blocked"]))
+        values.loc[panel[status] == "entry_blocked"] = 0.0
+    grouped = values.groupby(panel["date"])
+    return grouped.mean().where(grouped.count() == grouped.size())
 
 
 def random_benchmark(panel: pd.DataFrame, horizon: int, k: int, trials: int, seed: int = 7) -> Dict[str, float]:
     """توزیع «میانگین هر معامله» برای K انتخاب تصادفی روزانه (همان جامعه و همان قواعد اجرا)."""
+    if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
+        raise ValueError("تعداد آزمون تصادفی باید عدد صحیح مثبت باشد")
     rng = np.random.default_rng(seed)
-    col = f"net_ret_{horizon}d"
+    market = market_benchmark(panel, horizon)
     means = []
     for _ in range(trials):
         picks = pick_top(panel, pd.Series(rng.random(len(panel)), index=panel.index), k)
-        means.append(picks[col].mean())
+        means.append(_cohort_returns(picks, market.index, horizon, k).mean())
     means = np.array(means)
-    return {"mean": float(means.mean()), "p05": float(np.percentile(means, 5)),
-            "p95": float(np.percentile(means, 95)), "trials": int(trials)}
+    finite = means[np.isfinite(means)]
+    return {"mean": float(finite.mean()) if len(finite) else float("nan"),
+            "p05": float(np.percentile(finite, 5)) if len(finite) else float("nan"),
+            "p95": float(np.percentile(finite, 95)) if len(finite) else float("nan"),
+            "trials": int(trials), "valid_trials": int(len(finite)), "basis":"mean_cohort"}
 
 
 def run_baselines(panel: pd.DataFrame, horizons: List[int], k: int, random_trials: int,
@@ -154,7 +182,7 @@ def run_baselines(panel: pd.DataFrame, horizons: List[int], k: int, random_trial
         market = market_benchmark(panel, h)
         all_trades = panel[f"net_ret_{h}d"].dropna()
         entry = {
-            "market": {"mean_trade": float(all_trades.mean()), "win_rate": float((all_trades > 0).mean()),
+            "market": {"mean_trade": float(all_trades.mean()), "mean_cohort": float(market.mean()), "win_rate": float((all_trades > 0).mean()),
                        "fill_rate": float(panel[f"net_ret_{h}d"].notna().mean()),
                        "t_cohort": newey_west_t(market, lag=h), "days": int(market.notna().sum())},
             "random": random_benchmark(panel, h, k, random_trials),

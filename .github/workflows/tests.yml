@@ -48,3 +48,21 @@ jobs:
 
     - name: Offline doctor report
       run: python brs.py doctor --offline --json doctor-ci.json
+
+    - name: Verify actual Windows setup entry point
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        python -m venv venv
+        call SETUP.bat --ci
+
+    - name: Windows setup must propagate a database failure
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $corruptDb = Join-Path $env:RUNNER_TEMP 'brs-setup-test-corrupt.db'
+        [System.IO.File]::WriteAllText($corruptDb, 'invalid SQLite test fixture')
+        $env:BRS_DB_PATH = $corruptDb
+        cmd /c "call SETUP.bat --ci"
+        if ($LASTEXITCODE -ne 1) { throw 'SETUP did not propagate the doctor failure' }
+        $global:LASTEXITCODE = 0

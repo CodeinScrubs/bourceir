@@ -108,6 +108,14 @@ def cmd_doctor(args) -> int:
     return 1 if report.worst == ERROR else 0
 
 
+def cmd_audit(args) -> int:
+    from ops.data_audit import run_audit
+
+    report = run_audit(args.json)
+    print(f"بازبینی آرشیو: {report['overall']}؛ گزارش: {args.json}")
+    return 1 if report["overall"] == "error" else 0
+
+
 def cmd_update(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -117,10 +125,11 @@ def cmd_update(args) -> int:
     titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
     for key, report in reports.items():
         _print_report(titles.get(key, key), report)
-    if not args.symbols and not args.no_features:
+    complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
+    if complete and not args.symbols and not args.no_features:
         _build_features(collector.db)
     collector.db.close()
-    return 0 if all(r.get("status") != "failed" for r in reports.values()) else 1
+    return 0 if complete else 1
 
 
 def _build_features(db) -> dict:
@@ -152,7 +161,8 @@ def cmd_research(args) -> int:
     db = DatabaseManager()
     try:
         print("🔬 پژوهش استراتژی‌های پایه (چند دقیقه)...", flush=True)
-        out = run_research(db, unseal_holdout=args.unseal_holdout, random_trials=args.trials)
+        out = run_research(db, unseal_holdout=args.unseal_holdout, random_trials=args.trials,
+                           holdout_strategy=args.holdout_strategy, holdout_horizon=args.holdout_horizon)
         print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
     finally:
@@ -177,19 +187,23 @@ def cmd_live(args) -> int:
     if not collector.db.get_universe_symbols() and not args.symbols:
         print("⚠️ جامعه سهام هنوز ثبت نشده؛ ابتدا همگام‌سازی انجام می‌شود...", flush=True)
         collector.sync_universe()
+    if args.interval <= 0 or args.cycles < 0:
+        collector.db.close()
+        raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
     cycles = 0
     print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
     try:
         while True:
             started = time.monotonic()
-            now = now_tehran().strftime("%H:%M:%S")
-            if not args.force and not is_market_open():
+            clock = now_tehran()
+            now = clock.strftime("%H:%M:%S")
+            if not args.force and (not is_market_open(clock) or not collector.db.is_trading_day(clock.date().isoformat())):
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
             else:
                 report = collector.collect_market_snapshot(symbols=_symbols(args.symbols))
                 print(f"[{now}] ✅ ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
                       f"{report.get('unchanged_skipped', 0)} | رد شده {report['symbols_failed']}", flush=True)
-                cycles += 1
+            cycles += 1
             if args.cycles and cycles >= args.cycles:
                 break
             # فاصله واقعی بین دو دریافت = interval (زمان خود درخواست از انتظار کم می‌شود)
@@ -235,6 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", default="", help="ذخیره گزارش ماشین‌خوان در این مسیر (مثلاً logs/doctor.json)")
     p.set_defaults(func=cmd_doctor)
 
+    p = sub.add_parser("audit", help="گزارش فقط‌خواندنی کیفیت آرشیو واقعی، بدون اتصال اینترنت")
+    p.add_argument("--json", default="logs/data-audit.json", help="مسیر گزارش کیفیت داده")
+    p.set_defaults(func=cmd_audit)
+
     p = sub.add_parser("update", help="به‌روزرسانی همه داده‌ها")
     p.add_argument("--symbols", default="", help="نمادها با کاما (پیش‌فرض: کل سهام بورس و فرابورس)")
     p.add_argument("--full", action="store_true", help="دریافت دوباره کل تاریخچه")
@@ -248,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--unseal-holdout", action="store_true",
                    help="ارزیابی دوره بیرون از نمونه (فقط برای مدل نهایی؛ نتیجه آن نباید در انتخاب مدل استفاده شود)")
     p.add_argument("--trials", type=int, default=None, help="تعداد تکرار انتخاب تصادفی")
+    p.add_argument("--holdout-strategy", default=None, help="نام روش نهایی که پیش از باز کردن آزمون انتخاب شده")
+    p.add_argument("--holdout-horizon", type=int, default=None, help="افق روش نهایی، پیش از باز کردن آزمون")
     p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")

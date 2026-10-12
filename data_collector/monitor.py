@@ -65,12 +65,15 @@ class DataFreshnessMonitor:
                 status_flag = "🟢 Fresh"
                 if delay_seconds < -5:
                     warnings.append("زمان سرور از ساعت این رایانه جلوتر است؛ ساعت ویندوز را بررسی کنید.")
-                delay_seconds = max(0, delay_seconds)
+                    status_flag = "⚪ Unknown"
+                    delay_seconds = None
+                else:
+                    delay_seconds = max(0, delay_seconds)
             except (TypeError, ValueError):
                 warnings.append("زمان سرور قابل خواندن نیست؛ تازگی داده نامعلوم است.")
 
             # فریز بودن سرور: تایم‌استمپ سرور با وجود گذشت زمان تغییر نکرده
-            if self.last_seen_timestamps.get(symbol_fa) == provider_time_str:
+            if delay_seconds is not None and self.last_seen_timestamps.get(symbol_fa) == provider_time_str:
                 warnings.append("⚠️ تایم‌استمپ سرور تغییر نکرده است (احتمال پاسخ کش‌شده سرور بورس).")
                 status_flag = "🟡 Delayed"
             self.last_seen_timestamps[symbol_fa] = provider_time_str
@@ -106,5 +109,5 @@ class DataFreshnessMonitor:
             "last_price": last_price,
             "buyer_power": bp,   # None = نامعلوم (عدد ساختگی ۱ گزارش نمی‌شود)
             "warnings": warnings,
-            "is_healthy": status_flag == "🟢 Fresh",
+            "is_healthy": status_flag == "🟢 Fresh" and not warnings,
         }

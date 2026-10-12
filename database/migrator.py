@@ -13,6 +13,7 @@ import importlib.util
 import logging
 import re
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -77,7 +78,8 @@ def backup_database(conn: sqlite3.Connection, db_path: Path) -> Optional[Path]:
     """تهیه نسخه پشتیبان کامل از دیتابیس (با API رسمی backup در SQLite) در data/backups."""
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = now_tehran_iso()[:19].replace(":", "").replace("-", "")
+    stamp = now_tehran_iso().replace(":", "").replace("-", "").replace("+", "p")
+    stamp += "-" + uuid.uuid4().hex[:8]
     target = backup_dir / f"{db_path.stem}-{stamp}-v{current_version(conn)}.db"
     dest = sqlite3.connect(target)
     try:

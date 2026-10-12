@@ -86,7 +86,7 @@ class PerformanceMetrics:
     expectancy_pct: float = 0.0        # امید ریاضی: میانگین بازده خالص هر معامله (درصد)
     max_drawdown_pct: float = 0.0      # حداکثر افت سرمایه (درصد)
     total_commissions_paid: float = 0.0
-    sharpe_ratio: float = 0.0          # نسبت شارپ سالانه (مبنای ۲۴۰ روز کاری)
+    sharpe_ratio: Optional[float] = None          # نسبت شارپ؛ فقط با تناوب سالانه صریح
     initial_capital: float = 0.0
     final_equity: float = 0.0          # ارزش نهایی پرتفوی به قیمت روز (Mark-to-Market)
     total_return_pct: float = 0.0
@@ -94,3 +94,5 @@ class PerformanceMetrics:
     corporate_action_events: int = 0   # دفعاتی که پوزیشن باز از روز اقدام شرکتی عبور کرد
     corporate_action_receivable: float = 0.0  # ارزش کسر سهم پس از تعدیل اقدام شرکتی (ریال، جزو ارزش نهایی)
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)
+    execution_model: str = "daily_aggregate_proxy"
+    corporate_action_assumption: str = "reference_ratio_share_multiplier"

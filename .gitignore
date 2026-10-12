@@ -72,3 +72,8 @@ htmlcov/
 
 # گزارش عیب‌یاب CI
 doctor-ci.json
+
+# فایل‌های همراه SQLite و کش lint
+*.db-wal
+*.db-shm
+.ruff_cache/

@@ -35,7 +35,7 @@ def test_label_buys_next_session_vwap_and_sells_h_sessions_later():
     assert lab.loc[CAL[0], "net_ret_1d"] == pytest.approx(_net(101, 102))     # ورود ۰۲ (۱۰۱)، خروج ۰۳ (۱۰۲)
     assert lab.loc[CAL[0], "net_ret_3d"] == pytest.approx(_net(101, 104))
     # بدترین اجرا: خرید در بیشترین قیمت روز ورود (۱۰۱+۱) و فروش در کمترین قیمت روز خروج (۹۹+۲)
-    assert lab.loc[CAL[0], "net_ret_1d_worst"] == pytest.approx(_net(102, 101))
+    assert lab.loc[CAL[0], "net_ret_1d_worst"] == pytest.approx(101 * (1 - SELL) / (102 * (1 + BUY)) - 1)
     assert lab.loc[CAL[0], "mfe_1d"] == pytest.approx(103 / (101 * (1 + SLIP)) - 1)
     assert pd.isna(lab.loc[CAL[-1], "net_ret_1d"]) and not lab.loc[CAL[-1], "entry_executable"]   # فردایی نیست
 
@@ -119,8 +119,7 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
         db.upsert_daily_prices_df(sym_id, prices)
         db.upsert_client_types_df(sym_id, ct)
     store.build_feature_store(db, root=tmp_path / "features")
-    monkeypatch.setattr(run_mod, "load_feature_store", lambda: store.load_feature_store(root=tmp_path / "features"))
-    monkeypatch.setattr(run_mod, "load_manifest", lambda: store.load_manifest(root=tmp_path / "features"))
+    monkeypatch.setattr(run_mod, "load_feature_snapshot", lambda: store.load_feature_snapshot(root=tmp_path / "features"))
     monkeypatch.setattr(run_mod, "LABELS_ROOT", tmp_path / "labels")
     monkeypatch.setattr(run_mod, "RESEARCH_ROOT", tmp_path / "research")
     monkeypatch.setattr(labels_mod, "CALENDAR_MIN_SYMBOLS", 2)
@@ -134,8 +133,8 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
     assert set(out["results"]) == {"development"}                        # مهر و موم: holdout گزارش نمی‌شود
     assert out["results"]["development"]["end"] == "2025-06-01"
     exp = db.get_experiments()[0]
-    assert exp["experiment_id"] == out["experiment_id"] and exp["dataset_version"].startswith("labels-v1:")
+    assert exp["experiment_id"] == out["experiment_id"] and exp["dataset_version"].startswith("labels-v2:")
     assert json.loads(exp["parameters_json"])["features"]["sha256"]       # بازتولیدپذیری: اثر انگشت داده‌ها
     report = (tmp_path / "research" / f"{out['experiment_id']}.md").read_text(encoding="utf-8")
     assert "نگهداری 3 جلسه" in report and "بیرون از نمونه" not in report.split("## محدودیت‌ها")[0]
-    assert run_mod.run_research(db, random_trials=3, unseal_holdout=True)["results"].keys() == {"development", "holdout"}
+    assert run_mod.run_research(db, random_trials=3, unseal_holdout=True, holdout_strategy="momentum_5d", holdout_horizon=1)["results"].keys() == {"development", "holdout"}

@@ -224,7 +224,7 @@ def test_no_fill_on_day_without_trades():
     ])
     engine = BacktestEngine(initial_capital=1_000_000.0, default_slippage_bps=0.0)
     engine.run_replay_simulation(df, "x", lambda row, eng: "BUY" if row["date"] == "2026-06-01" else None)
-    assert [t.date for t in engine.trades] == ["2026-06-03"]   # سفارش منتظر ماند تا روز دارای معامله
+    assert not engine.trades   # خرید روز بعد که اجرا نشد منقضی است؛ ورود چند روز بعد یک تصمیم تازه می‌خواهد
 
 
 @pytest.mark.parametrize("name,prev_close,ref", [
