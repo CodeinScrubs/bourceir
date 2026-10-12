@@ -391,6 +391,33 @@ def page_codal() -> None:
         column_config={"لینک": st.column_config.LinkColumn("لینک", display_text="مشاهده")})
 
 
+def latest_research_report() -> str:
+    """متن گزارش آخرین پژوهش استراتژی‌های پایه (data/research)، یا رشته خالی."""
+    import json
+
+    folder = settings.DATA_DIR / "research"
+    try:
+        experiment_id = json.loads((folder / "latest.json").read_text(encoding="utf-8"))["experiment_id"]
+        return (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
+    except (OSError, ValueError, KeyError):
+        return ""
+
+
+def page_research() -> None:
+    st.title("🔬 پژوهش: آیا این روش‌ها بعد از کارمزد سود می‌دهند؟")
+    st.info("این صفحه توصیه خرید یا فروش نیست. نتیجه آزمون علمی روش‌های ساده روی ۱۳ سال گذشته است: خرید فردا، "
+            "فروش چند جلسه بعد، با کارمزد واقعی و بدون فرض خرید در صف. هر مدل هوش مصنوعی بعدی باید از بهترین "
+            "همین‌ها بهتر باشد.")
+    job_panel("research", ["research"], "اجرای دوباره پژوهش",
+              "برچسب‌ها و ارزیابی همه روش‌ها را با آخرین داده دوباره می‌سازد (چند دقیقه). دوره بیرون از نمونه "
+              "(از ۱۴۰۴) عمداً بسته می‌ماند تا فقط برای آزمون نهایی مدل استفاده شود.")
+    report = latest_research_report()
+    if not report:
+        st.info("هنوز پژوهشی اجرا نشده است. دکمه بالا را بزنید.")
+        return
+    st.markdown(report)
+
+
 def page_health() -> None:
     st.title("🩺 سلامت سامانه")
     if st.button("اجرای عیب‌یابی کامل (اینترنت، پروکسی، دیتابیس، هوش مصنوعی)", type="primary"):
@@ -445,6 +472,7 @@ PAGES = {
     "📊 بررسی نماد": page_symbol,
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,
+    "🔬 پژوهش": page_research,
     "🩺 سلامت سامانه": page_health,
     "ℹ️ راهنما": page_guide,
 }

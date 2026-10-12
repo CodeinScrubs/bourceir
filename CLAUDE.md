@@ -17,6 +17,7 @@ venv/Scripts/python.exe brs.py doctor                # عیب‌یابی محی�
 venv/Scripts/python.exe brs.py update --symbols فولاد  # به‌روزرسانی داده (بدون --symbols: کل بازار، ~۴۵ دقیقه بار اول)
 venv/Scripts/python.exe brs.py backup                # پشتیبان دستی دیتابیس (۵ نسخه آخر)
 venv/Scripts/python.exe brs.py features              # ساخت انبار فیچر (بعد از هر update خودکار)
+venv/Scripts/python.exe brs.py research              # برچسب‌های خالص + ارزیابی استراتژی‌های پایه (فاز ۱-ج، ~۶ دقیقه)
 ```
 - داشبورد: پیش‌نمایش `brs-dashboard` در `.claude/launch.json` (یا START.bat برای کاربر).
 - وابستگی جدید: به `requirements.txt` اضافه کن، سپس `uv pip compile requirements.txt --python-version 3.11 --universal -o requirements.lock.txt` و `uv pip sync --python venv/Scripts/python.exe requirements.lock.txt`.
@@ -30,6 +31,7 @@ venv/Scripts/python.exe brs.py features              # ساخت انبار فی�
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |
 | `backtest/engine.py` | بکتست: اجرای روز بعد، VWAP، صف قفل، کارمزد از config |
 | `features/` | موتور فیچر PIT (`daily`, `market`) و انبار فیچر Parquet نسخه‌دار (`store`)؛ نام فارسی فیچرها در `labels_fa` — هر تغییر منطق = `FEATURE_SET_VERSION` جدید + آزمون بریدن داده |
+| `research/` | فاز ۱-ج: `labels` (بازده خالص قابل اجرا، نسخه‌دار)، `baselines` (استراتژی‌های پایه، معیار تصادفی، t نیوی-وست)، `run` (ثبت آزمایش و گزارش). دوره `holdout_start` مهر و موم است — نتایج: `docs/research/` |
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |

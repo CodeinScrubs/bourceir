@@ -92,6 +92,11 @@ def validate_config(config: Dict[str, Any]) -> None:
     _check_range(config, "data_collection", "request_timeout_seconds", 1, 300)
     _check_range(config, "data_collection", "polling_interval_seconds", 5, 3600)
     _check_range(config, "data_collection", "rate_limit_delay", 0, 10)
+    _check_range(config, "research", "top_k", 1, 50)
+    _check_range(config, "research", "min_daily_value_rial", 0, 1e15)
+    research = config.get("research", {})
+    if research.get("dev_start", "") >= research.get("holdout_start", "9999"):
+        raise ValueError("research.dev_start باید قبل از research.holdout_start باشد")
 
 
 CONFIG: Dict[str, Any] = _load_yaml(CONFIG_DIR / "default.yaml")
@@ -160,6 +165,17 @@ BACKTEST_CONFIG = {
     "initial_capital": float(_bt.get("initial_capital", 100_000_000.0)),
     "execution_price": _bt.get("execution_price", "next_day_vwap"),
     "lock_min_move_pct": float(_bt.get("lock_min_move_pct", 0.005)),
+}
+
+# ─── پژوهش (فاز ۱-ج) ───
+_rs = CONFIG.get("research", {})
+RESEARCH_CONFIG = {
+    "horizons": [int(h) for h in _rs.get("horizons", [1, 2, 3, 5])],
+    "top_k": int(_rs.get("top_k", 5)),
+    "min_daily_value_rial": float(_rs.get("min_daily_value_rial", 20_000_000_000)),
+    "dev_start": str(_rs.get("dev_start", "2012-03-20")),
+    "holdout_start": str(_rs.get("holdout_start", "2025-03-21")),
+    "random_trials": int(_rs.get("random_trials", 100)),
 }
 
 # ─── هوش مصنوعی (TypeSafe Jev) ───

@@ -145,6 +145,21 @@ def cmd_features(args) -> int:
     return 0
 
 
+def cmd_research(args) -> int:
+    from database.db import DatabaseManager
+    from research.run import run_research
+
+    db = DatabaseManager()
+    try:
+        print("🔬 پژوهش استراتژی‌های پایه (چند دقیقه)...", flush=True)
+        out = run_research(db, unseal_holdout=args.unseal_holdout, random_trials=args.trials)
+        print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
+        print(f"   • گزارش: {out['report_path']}")
+    finally:
+        db.close()
+    return 0
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -228,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("features", help="ساخت انبار فیچر (فیچرهای روزانه و بازار)")
     p.set_defaults(func=cmd_features)
+
+    p = sub.add_parser("research", help="برچسب‌های خالص و ارزیابی استراتژی‌های پایه (فاز ۱-ج)")
+    p.add_argument("--unseal-holdout", action="store_true",
+                   help="ارزیابی دوره بیرون از نمونه (فقط برای مدل نهایی؛ نتیجه آن نباید در انتخاب مدل استفاده شود)")
+    p.add_argument("--trials", type=int, default=None, help="تعداد تکرار انتخاب تصادفی")
+    p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)
