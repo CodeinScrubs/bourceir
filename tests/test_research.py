@@ -138,3 +138,25 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
     report = (tmp_path / "research" / f"{out['experiment_id']}.md").read_text(encoding="utf-8")
     assert "نگهداری 3 جلسه" in report and "بیرون از نمونه" not in report.split("## محدودیت‌ها")[0]
     assert run_mod.run_research(db, random_trials=3, unseal_holdout=True, holdout_strategy="momentum_5d", holdout_horizon=1)["results"].keys() == {"development", "holdout"}
+
+
+def test_t_statistic_survives_a_few_unknown_days():
+    """روی داده واقعی ۷ تا ۳۱ روز از ~۳۰۰۰ روز نامعلوم‌اند؛ آماره نباید برای همه روش‌ها خالی شود."""
+    from research.baselines import tolerant_t
+
+    x = pd.Series(np.random.default_rng(5).normal(0.002, 0.01, 1000))
+    with_gaps = x.copy()
+    with_gaps.iloc[[10, 500, 900]] = np.nan
+    assert np.isfinite(tolerant_t(with_gaps, lag=3))
+    mostly_unknown = x.copy()
+    mostly_unknown.iloc[:100] = np.nan                     # ۱۰٪ نامعلوم ← آماره اعلام نمی‌شود
+    assert np.isnan(tolerant_t(mostly_unknown, lag=3))
+
+
+def test_research_universe_keeps_halted_symbols(db):
+    """سهم متوقف امروز (غیرفعال موقت) از تاریخچه پژوهش حذف نمی‌شود (سوگیری بقا)."""
+    active = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": "1", "instrument_type_code": 300})
+    halted = db.upsert_symbol({"symbol_fa": "شپنا", "ins_code": "2", "instrument_type_code": 300})
+    db.set_symbols_active([halted], False)
+    assert [s["id"] for s in db.get_universe_symbols()] == [active]
+    assert {s["id"] for s in db.get_universe_symbols(include_inactive=True)} == {active, halted}

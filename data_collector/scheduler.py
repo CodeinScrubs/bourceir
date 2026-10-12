@@ -77,8 +77,9 @@ class DataCollector:
         """یافتن نماد در دیتابیس با ins_code؛ در صورت نبود، جستجو در منبع داده و ثبت."""
         sym = self.db.get_symbol(symbol_fa)
         if sym and sym.get("ins_code"):
-            if not sym.get("is_active") or not TsetmcProvider.is_in_scope(sym["symbol_fa"], sym.get("instrument_type_code")):
-                logger.warning("نماد ذخیره‌شده «%s» خارج از جامعه فعال پروژه است.", symbol_fa)
+            # نماد متوقف (مثلاً در مجمع) موقتاً غیرفعال است ولی هنوز داخل دامنه؛ با درخواست صریح به‌روز می‌شود
+            if not TsetmcProvider.is_in_scope(sym["symbol_fa"], sym.get("instrument_type_code")):
+                logger.warning("نماد ذخیره‌شده «%s» خارج از دامنه پروژه است.", symbol_fa)
                 return None
             return sym
         meta = self.provider.search_symbol(symbol_fa)
