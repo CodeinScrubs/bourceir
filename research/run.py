@@ -41,7 +41,7 @@ def _sha256(path: Path) -> str:
 def archive_research_code(target: Path) -> dict:
     """Keep the actual dirty-tree research source and locked dependencies, excluding runtime secrets/data."""
     files = [settings.BASE_DIR / "requirements.lock.txt"]
-    for folder in ("core", "features", "database", "config", "research"):
+    for folder in ("core", "features", "database", "config", "research", "backtest"):
         files.extend(p for p in sorted((settings.BASE_DIR / folder).rglob("*")) if p.suffix in (".py", ".yaml", ".sql"))
     hashes = {}
     for source in files:
@@ -55,7 +55,7 @@ def archive_research_code(target: Path) -> dict:
 
 
 def research_code_fingerprint() -> str:
-    return _code_fingerprint(("core", "features", "database", "config", "research"))
+    return _code_fingerprint(("core", "features", "database", "config", "research", "backtest"))
 
 
 def _deduplicate_input(path: Path, objects: Path) -> str:
