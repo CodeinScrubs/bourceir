@@ -252,6 +252,16 @@ def cmd_research_portfolio(args) -> int:
     return 0
 
 
+def cmd_research_flow(args) -> int:
+    from database.db import DatabaseManager
+    from research.flow_run import run_flow_research
+    with DatabaseManager() as db:
+        out = run_flow_research(db, source_id=args.source, initial_capital_rial=args.capital_rial)
+        print(f"   • آزمایش فیلترهای ثابت: {out['experiment_id']}")
+        print(f"   • گزارش: {out['report_path']}")
+    return 0
+
+
 def cmd_intraday_audit(args) -> int:
     import json
 
@@ -393,6 +403,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default=None, help="شناسه پژوهش پایه ثبت‌شده؛ پیش‌فرض آخرین اجرای موفق")
     p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی پژوهش به ریال؛ مستقل از گزارش حساب')
     p.set_defaults(func=cmd_research_portfolio)
+
+    p = sub.add_parser('research-flow', help='آزمون سه فیلتر ثابت با نقد مشترک و فشار اجرا؛ فقط دوره توسعه')
+    p.add_argument('--source', default=None, help='شناسه پژوهش پایه محفوظ و سازگار با داده خام')
+    p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی به ریال؛ پیش‌فرض تنظیمات بکتست')
+    p.set_defaults(func=cmd_research_flow)
 
     p = sub.add_parser('intraday-audit', help='بررسی محلی کیفیت ثبت داده درون‌روزی؛ بدون تحلیل سود')
     p.add_argument('--date', default=None, help='روز میلادی؛ پیش‌فرض آخرین روز ثبت اسنپ‌شات')
