@@ -290,6 +290,12 @@ def test_health_page_explains_polling_evidence_without_claiming_complete_session
     assert not app.exception
     assert any('ثبت مستقل دریافت: 1 شروع' in text.value for text in app.markdown)
     assert any('پوشش کل جلسه' in text.value for text in app.caption)
+    tables = [table.value for table in app.dataframe]
+    snapshots = next(table for table in tables if 'شروع مشاهده' in table)
+    assert '۲۰۲۶' not in snapshots['شروع مشاهده'][0] and '۱۴۰۵' in snapshots['شروع مشاهده'][0]
+    assert snapshots['بیشترین فاصله تغییر (ثانیه)'][0] == 'نامعلوم'
+    instruments = next(table for table in tables if 'زمان قیمت تازه' in table)
+    assert instruments['بیشترین فاصله دریافت معتبر (ثانیه)'][0] == 'نامعلوم'
 
 
 def test_no_request_is_sent_if_recording_the_start_fails(db, monkeypatch, clock):
