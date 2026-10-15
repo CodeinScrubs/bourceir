@@ -18,7 +18,7 @@ from tests.conftest import ROOT_DIR, FakeSession
 DASHBOARD = str(ROOT_DIR / "dashboard" / "app.py")
 ROOT_APP = str(ROOT_DIR / "app.py")
 
-PAGES = ["🏠 خانه", "🔎 فهرست بررسی", "🛡️ برنامه و دفتر معاملات", "🏦 حساب و تطبیق فارابی", "📊 بررسی نماد", "📡 دیده‌بان زنده",
+PAGES = ["🏠 خانه", "🔎 فهرست بررسی", '🧪 آزمایشگاه فیلترها', "🛡️ برنامه و دفتر معاملات", "🏦 حساب و تطبیق فارابی", "📊 بررسی نماد", "📡 دیده‌بان زنده",
          "📰 اطلاعیه‌های کدال", "🔬 پژوهش", "🩺 سلامت سامانه", "ℹ️ راهنما"]
 
 
@@ -88,6 +88,50 @@ def test_root_app_renders_on_every_run(dashboard_db):
         at = AppTest.from_file(ROOT_APP, default_timeout=60).run()
         assert not at.exception
         assert any("BRS" in t.value for t in at.title)
+
+
+def test_flow_lab_explains_incomplete_original_filter(dashboard_db, closing_price_daily):
+    db = DatabaseManager(db_path=dashboard_db)
+    provider = TsetmcProvider(session=FakeSession({'GetClosingPriceDailyList': {'closingPriceDaily': closing_price_daily}}))
+    sid = db.upsert_symbol(dict(symbol_fa='فولاد', ins_code='test', instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, provider.get_symbol_history('test'))
+    db.close()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🧪 آزمایشگاه فیلترها').run()
+    at.selectbox[0].set_value('special_original').run()
+    assert not at.exception
+    assert any('فیلتر ۹ شرطی کامل نیست' in w.value for w in at.warning)
+    checks = at.dataframe[1].value
+    assert len(checks) == 9 and (checks['وضعیت'] == 'نامعلوم').sum() >= 4
+
+
+def test_flow_report_has_readable_control_labels_and_action_counts(dashboard_db, tmp_path, monkeypatch):
+    import json
+
+    from backtest.portfolio import PORTFOLIO_VERSION
+    from core.flow_filters import FLOW_FILTER_VERSION
+    from research.flow_run import FLOW_RESEARCH_VERSION
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    root = tmp_path/'research'
+    root.mkdir()
+    mode = 'retail_acceleration-3d-random'
+    (root/'latest-flow.json').write_text(json.dumps(dict(experiment_id='flow-test')), encoding='utf-8')
+    payload = dict(protocol=dict(version=FLOW_RESEARCH_VERSION, filter_version=FLOW_FILTER_VERSION,
+        portfolio_version=PORTFOLIO_VERSION), summary={mode: {}}, results=[dict(modes={mode: dict(metrics=dict(
+        corporate_action_events=3, open_positions=1, stale_mark_days=4))})])
+    payload['summary']['past_baseline_stress'] = {}
+    payload['results'][0]['modes']['past_baseline_stress'] = dict(metrics=dict(corporate_action_events=0,
+        open_positions=0, stale_mark_days=0))
+    (root/'flow-test.json').write_text(json.dumps(payload), encoding='utf-8')
+    (root/'flow-test.md').write_text(f'| {mode} | synthetic test result |', encoding='utf-8')
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔬 پژوهش').run()
+    assert not at.exception
+    texts = '\n'.join(m.value for m in at.markdown)
+    assert 'تقویت سرانه / ۳ جلسه / کنترل تصادفی' in texts
+    assert 'گذر از رویداد مصنوعی' in texts and '| 3 | 1 | 4 |' in texts
+    assert 'پایه منتخب گذشته / فشار اجرا' in texts
+    assert mode not in texts
 
 
 def test_running_portfolio_job_has_a_label_and_does_not_crash(dashboard_db, monkeypatch):

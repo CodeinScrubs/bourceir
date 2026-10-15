@@ -22,6 +22,7 @@ from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from dashboard.broker import page_broker  # noqa: E402
+from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
@@ -49,11 +50,10 @@ st.markdown(
         [data-testid="stSidebar"][aria-expanded="true"] {
             position: fixed !important; right: 0 !important; left: auto !important;
             width: 18rem !important; min-width: 18rem !important; max-width: 18rem !important;
-            height: 100dvh !important; z-index: 100002; flex-shrink: 0 !important;
+            height: 100dvh !important; z-index: 1000002; flex-shrink: 0 !important;
         }
         [data-testid="stSidebar"][aria-expanded="false"] {
-            width: 0 !important; min-width: 0 !important; overflow: hidden !important;
-            visibility: hidden !important; pointer-events: none !important;
+            display: none !important;
         }
         [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; }
     }
@@ -176,7 +176,8 @@ def latest_snapshots() -> pd.DataFrame:
 # ═══════════════════════════════════════════════
 
 JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه",
-              "research-dip": "آزمون روش خرید در اصلاح", 'research-portfolio': 'پژوهش پرتفوی با نقد مشترک'}
+              "research-dip": "آزمون روش خرید در اصلاح", 'research-portfolio': 'پژوهش پرتفوی با نقد مشترک',
+              'research-flow': 'پژوهش فیلترهای ثابت جریان حقیقی'}
 
 
 def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
@@ -361,10 +362,10 @@ def page_live() -> None:
             st.warning("هنوز اسنپ‌شاتی ثبت نشده است.")
             return
         snaps = snaps.copy()
-        snaps["change_pct"] = (snaps["close_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
-        snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["close_price"] / 1e10
-        snaps["buyer_power"] = (snaps["real_buy_volume"] / snaps["real_buy_count"]) / (
-            snaps["real_sell_volume"] / snaps["real_sell_count"])
+        snaps["change_pct"] = (snaps["last_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
+        snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["last_price"] / 1e10
+        snaps["buyer_power"] = (snaps["real_buy_volume"] / snaps["real_buy_count"].where(snaps['real_buy_count'] > 0)) / (
+            snaps["real_sell_volume"].where(snaps['real_sell_volume'] > 0) / snaps["real_sell_count"].where(snaps['real_sell_count'] > 0))
         snaps["buyer_power"] = snaps["buyer_power"].replace([float("inf"), -float("inf")], float("nan"))
         monitor = DataFreshnessMonitor()
         health = [monitor.inspect_snapshot(row["symbol_fa"], row) for row in snaps.to_dict("records")]
@@ -388,13 +389,16 @@ def page_live() -> None:
             "تأخیر منبع (ثانیه)": snaps["source_delay"],
             "آخرین": snaps["last_price"],
             "پایانی": snaps["close_price"],
-            "تغییر ٪": snaps["change_pct"].round(2),
+            "تغییر آخرین ٪": snaps["change_pct"].round(2),
             "صف خرید (حجم)": snaps["buy_queue_volume"],
             "صف فروش (حجم)": snaps["sell_queue_volume"],
             "قدرت خریدار": snaps["buyer_power"].round(2),
-            "پول حقیقی (م.ت)": snaps["real_flow_bt"].round(1),
-            "ارزش (م.ت)": (snaps["value"] / 1e10).round(1),
+            "برآورد پول حقیقی (میلیارد تومان)": snaps["real_flow_bt"].round(1),
+            "ارزش (میلیارد تومان)": (snaps["value"] / 1e10).round(1),
         }), hide_index=True, width="stretch", height=600)
+        st.caption('قدرت خریدار این جدول حجمی است. برآورد پول حقیقی از تفاضل حجم حقیقی × آخرین قیمت است؛ '
+                   'ارزش واقعی معاملات حقیقی را فقط با آمار ارزشی روزانه می‌توان تطبیق داد.')
+        interval_panel(snaps['symbol_fa'].tolist())
 
     live_table()
 
@@ -442,7 +446,34 @@ def latest_research_report(pointer: str = "latest.json") -> str:
         report = (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
         params = payload.get('params') or {}
         from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS
-        if pointer == 'latest-dip.json':
+        if pointer == 'latest-flow.json':
+            from backtest.portfolio import PORTFOLIO_VERSION
+            from core.flow_filters import FLOW_FILTER_VERSION
+            from research.flow_run import FLOW_RESEARCH_VERSION
+            protocol = payload.get('protocol') or {}
+            current = (protocol.get('version') == FLOW_RESEARCH_VERSION
+                       and protocol.get('filter_version') == FLOW_FILTER_VERSION
+                       and protocol.get('portfolio_version') == PORTFOLIO_VERSION)
+            if current:
+                names = {'retail_acceleration': 'تقویت سرانه', 'volume_breakout': 'شکست سقف', 'daily_pressure': 'فشار خرید'}
+                def mode_label(mode):
+                    if mode.startswith('past_baseline'):
+                        return 'پایه منتخب گذشته' + (' / فشار اجرا' if mode.endswith(('_stress', '-stress')) else '')
+                    for key, label in names.items():
+                        if mode.startswith(key+'-'):
+                            rest = mode[len(key)+1:].replace('d', ' جلسه', 1)
+                            return to_fa_digits(label+' / '+rest.replace('-stress', ' / فشار اجرا').replace('-random', ' / کنترل تصادفی'))
+                    return mode
+                details = ['\n\n| حالت | گذر از رویداد مصنوعی | برش با پوزیشن باز | روز با علامت قدیمی |',
+                           '| --- | ---: | ---: | ---: |']
+                for mode in payload['summary']:
+                    values = [row['modes'][mode]['metrics'] for row in payload['results']]
+                    details.append(f"| {mode} | {sum(v['corporate_action_events'] for v in values)} | "
+                                   f"{sum(v['open_positions'] > 0 for v in values)} | {sum(v['stale_mark_days'] for v in values)} |")
+                report += '\n'.join(details)
+                for mode in sorted(payload['summary'], key=len, reverse=True):
+                    report = report.replace(f'| {mode} |', f'| {mode_label(mode)} |')
+        elif pointer == 'latest-dip.json':
             current = params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
         elif pointer in {'latest-portfolio.json', 'latest-portfolio-buy_queue.json', 'latest-portfolio-buyer_power.json'}:
             from backtest.portfolio import PORTFOLIO_VERSION
@@ -472,8 +503,8 @@ def page_research() -> None:
     job_panel("research", ["research"], "اجرای دوباره پژوهش",
               "برچسب‌ها و ارزیابی همه روش‌ها را با آخرین داده دوباره می‌سازد (چند دقیقه). دوره بیرون از نمونه "
               "(از ۱۴۰۴) عمداً بسته می‌ماند تا فقط برای آزمون نهایی مدل استفاده شود.")
-    dip_tab, base_tab, portfolio_tab = st.tabs(["روش شما: خرید در اصلاح", "روش‌های پایه (خرید فردا، فروش چند روز بعد)",
-                                               "سرمایه مشترک و ارزیابی زمانی"])
+    dip_tab, base_tab, portfolio_tab, flow_tab = st.tabs(["روش شما: خرید در اصلاح", "روش‌های پایه (خرید فردا، فروش چند روز بعد)",
+                                               "سرمایه مشترک و ارزیابی زمانی", 'فیلترهای جریان حقیقی'])
     with dip_tab:
         job_panel("research-dip", ["research-dip"], "اجرای دوباره آزمون خرید در اصلاح",
                   "نامزدهای پایان روز ← فردا خرید فقط اگر سهم ۱ تا ۳٪ زیر قیمت مرجع آمد ← فروش با هدف ۲ تا ۴٪ سود "
@@ -492,6 +523,12 @@ def page_research() -> None:
                   "قاعده ثابت اصلاح ۲٪ با هدف ۳٪ هم با نقد مشترک و فشار اجرا مقایسه می‌شود. دوره نهایی بسته می‌ماند.")
         report = latest_research_report(f"latest-portfolio-{selectors[selector]}.json")
         st.markdown(report) if report else st.info("برای این فرضیه گزارشی ثبت نشده است؛ ابتدا پژوهش پایه و سپس پژوهش همین فرضیه را اجرا کنید.")
+    with flow_tab:
+        job_panel('research-flow', ['research-flow'], 'آزمون فیلترهای ثابت روزانه',
+                  'سه تعریف از پیش ثابت، افق ۲ و ۳ جلسه، نقد مشترک، کارمزد، صف و فشار اجرا. '
+                  'این آزمون الگوی درون‌روزی یا فیلتر ۹ شرطی ناقص را تأیید نمی‌کند؛ دوره نهایی بسته می‌ماند.')
+        report = latest_research_report('latest-flow.json')
+        st.markdown(report) if report else st.info('هنوز پژوهش فیلترهای جریان حقیقی اجرا نشده است.')
 
 
 def page_health() -> None:
@@ -559,6 +596,7 @@ ensure_database()
 PAGES = {
     "🏠 خانه": page_home,
     "🔎 فهرست بررسی": page_shortlist,
+    '🧪 آزمایشگاه فیلترها': page_flow_lab,
     "🛡️ برنامه و دفتر معاملات": page_workbench,
     "🏦 حساب و تطبیق فارابی": page_broker,
     "📊 بررسی نماد": page_symbol,

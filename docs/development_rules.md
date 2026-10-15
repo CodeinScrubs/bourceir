@@ -15,6 +15,7 @@
 - `BRS-004`: Backtesting Engine & Risk Model ← موتور ✅، برچسب و استراتژی پایه در فاز ۱-ج
 - `BRS-005`: Feature Engineering Framework ← فاز ۱-ب
 - `BRS-006`: ML Model Training & Evaluation Pipeline ← فاز ۱-د
+- `BRS-009` ([Issue #24](https://github.com/CodeinScrubs/bourceir/issues/24)): تعریف و ممیزی فیلترهای جریان حقیقی، پژوهش سرمایه مشترک و نمایش شروط نامعلوم؛ پذیرش سیگنال همچنان غیرفعال است.
 
 ## ۳. چرخه کار با هوش مصنوعی (Vibe Coding)
 1. درخواست را به فارسی و با یک هدف مشخص بنویسید.
