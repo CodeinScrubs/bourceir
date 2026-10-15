@@ -119,10 +119,14 @@ def corporate_action_factors(df: pd.DataFrame, tolerance: float = 1e-6) -> pd.Se
     ضریب اقدام شرکتی هر روز = قیمت مرجع امروز ÷ قیمت پایانی روز معاملاتی قبل.
     در روزهای عادی دقیقاً ۱ است؛ در روز افزایش سرمایه یا تقسیم سود کمتر از ۱ می‌شود.
     """
-    prev_close = official_close(df).shift(1)
+    close = official_close(df)
+    prev_close = close.groupby(df["symbol"]).shift(1) if "symbol" in df else close.shift(1)
+    first = df.groupby("symbol").cumcount() == 0 if "symbol" in df else pd.Series(np.arange(len(df)) == 0, index=df.index)
     ref = df["ref_price_raw"] if "ref_price_raw" in df.columns else prev_close
-    factor = (ref / prev_close).where((ref > 0) & (prev_close > 0), 1.0).fillna(1.0)
-    return factor.where((factor - 1.0).abs() > tolerance, 1.0)
+    factor = (ref / prev_close).where(np.isfinite(ref) & np.isfinite(prev_close) & (ref > 0) & (prev_close > 0))
+    # Only the first archive row has no preceding holding interval. Later unknowns stay unknown.
+    factor = factor.mask(first, 1.0)
+    return factor.mask(factor.notna() & ((factor - 1.0).abs() <= tolerance), 1.0)
 
 
 def backward_adjusted_close(df: pd.DataFrame) -> pd.Series:
@@ -132,7 +136,13 @@ def backward_adjusted_close(df: pd.DataFrame) -> pd.Series:
     """
     factors = corporate_action_factors(df)
     # حاصل‌ضرب ضرایب همه روزهای «بعد» از هر روز
-    future_product = factors[::-1].cumprod()[::-1].shift(-1).fillna(1.0)
+    def future_factors(series):
+        result = series.iloc[::-1].cumprod(skipna=False).iloc[::-1].shift(-1)
+        if len(result):
+            result.iloc[-1] = 1.0
+        return result
+
+    future_product = factors.groupby(df["symbol"]).transform(future_factors) if "symbol" in df else future_factors(factors)
     return official_close(df) * future_product
 
 

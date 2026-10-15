@@ -119,7 +119,7 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
         db.upsert_daily_prices_df(sym_id, prices)
         db.upsert_client_types_df(sym_id, ct)
     store.build_feature_store(db, root=tmp_path / "features")
-    monkeypatch.setattr(run_mod, "load_feature_snapshot", lambda: store.load_feature_snapshot(root=tmp_path / "features"))
+    monkeypatch.setattr(run_mod, "load_feature_snapshot", lambda **kwargs: store.load_feature_snapshot(root=tmp_path / "features", **kwargs))
     monkeypatch.setattr(run_mod, "LABELS_ROOT", tmp_path / "labels")
     monkeypatch.setattr(run_mod, "RESEARCH_ROOT", tmp_path / "research")
     monkeypatch.setattr(labels_mod, "CALENDAR_MIN_SYMBOLS", 2)
@@ -133,7 +133,7 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
     assert set(out["results"]) == {"development"}                        # مهر و موم: holdout گزارش نمی‌شود
     assert out["results"]["development"]["end"] == "2025-06-01"
     exp = db.get_experiments()[0]
-    assert exp["experiment_id"] == out["experiment_id"] and exp["dataset_version"].startswith("labels-v2:")
+    assert exp["experiment_id"] == out["experiment_id"] and exp["dataset_version"].startswith(f"{labels_mod.LABEL_SET_VERSION}:")
     assert json.loads(exp["parameters_json"])["features"]["sha256"]       # بازتولیدپذیری: اثر انگشت داده‌ها
     report = (tmp_path / "research" / f"{out['experiment_id']}.md").read_text(encoding="utf-8")
     assert "نگهداری 3 جلسه" in report and "بیرون از نمونه" not in report.split("## محدودیت‌ها")[0]

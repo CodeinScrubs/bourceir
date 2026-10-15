@@ -18,7 +18,7 @@ import pandas as pd
 
 from core import market_rules
 
-FEATURE_SET_VERSION = "daily-v3"  # هر تغییر در منطق فیچرها → نسخه جدید (تاریخچه در docs/features.md)
+FEATURE_SET_VERSION = "daily-v4"  # paired observations; see docs/features.md
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -117,15 +117,20 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
         ct = df[["date", "value", "volume"]].merge(client_types, on="date", how="left")
         net_real = ct["buy_i_value"] - ct["sell_i_value"]
         out["real_flow_ratio"] = _safe_div(net_real, ct["value"])
-        out["real_flow_ratio_5d"] = _safe_div(net_real.rolling(5, min_periods=3).sum(),
-                                              ct["value"].rolling(5, min_periods=3).sum())
+        flow_known = np.isfinite(net_real) & np.isfinite(ct["value"]) & (ct["value"] > 0)
+        out["real_flow_ratio_5d"] = _safe_div(net_real.where(flow_known).rolling(5, min_periods=3).sum(),
+                                              ct["value"].where(flow_known).rolling(5, min_periods=3).sum())
         per_cap_buy = _safe_div(ct["buy_i_value"], ct["buy_i_count"])
         per_cap_sell = _safe_div(ct["sell_i_value"], ct["sell_i_count"])
         out["buyer_power"] = _safe_div(per_cap_buy, per_cap_sell)
-        out["buyer_power_5d"] = _safe_div(
-            _safe_div(ct["buy_i_value"].rolling(5, min_periods=3).sum(), ct["buy_i_count"].rolling(5, min_periods=3).sum()),
-            _safe_div(ct["sell_i_value"].rolling(5, min_periods=3).sum(), ct["sell_i_count"].rolling(5, min_periods=3).sum()),
-        )
+        power_columns = ["buy_i_value", "buy_i_count", "sell_i_value", "sell_i_count"]
+        power_known = np.isfinite(ct[power_columns]).all(axis=1) & (ct[power_columns] >= 0).all(axis=1)
+        # An observed zero-count/zero-value day is known and belongs to aggregate totals.
+        power_known &= (ct["buy_i_count"] > 0) == (ct["buy_i_value"] > 0)
+        power_known &= (ct["sell_i_count"] > 0) == (ct["sell_i_value"] > 0)
+        totals = ct[power_columns].where(power_known, axis=0).rolling(5, min_periods=3).sum()
+        out["buyer_power_5d"] = _safe_div(_safe_div(totals["buy_i_value"], totals["buy_i_count"]),
+                                            _safe_div(totals["sell_i_value"], totals["sell_i_count"]))
         out["per_capita_buy_ratio_20d"] = _safe_div(per_cap_buy, per_cap_buy.shift(1).rolling(20, min_periods=15).mean())
         # مثبت یعنی حقوقی‌ها به حقیقی‌ها فروخته‌اند (تغییر مالکیت حقوقی به حقیقی)
         out["legal_to_real_ratio"] = _safe_div(ct["sell_n_volume"] - ct["buy_n_volume"], ct["volume"])

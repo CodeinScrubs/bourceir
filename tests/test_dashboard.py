@@ -17,7 +17,8 @@ from tests.conftest import ROOT_DIR, FakeSession
 DASHBOARD = str(ROOT_DIR / "dashboard" / "app.py")
 ROOT_APP = str(ROOT_DIR / "app.py")
 
-PAGES = ["🏠 خانه", "📊 بررسی نماد", "📡 دیده‌بان زنده", "📰 اطلاعیه‌های کدال", "🔬 پژوهش", "🩺 سلامت سامانه", "ℹ️ راهنما"]
+PAGES = ["🏠 خانه", "🔎 فهرست بررسی", "🛡️ برنامه و دفتر معاملات", "📊 بررسی نماد", "📡 دیده‌بان زنده",
+         "📰 اطلاعیه‌های کدال", "🔬 پژوهش", "🩺 سلامت سامانه", "ℹ️ راهنما"]
 
 
 @pytest.fixture
