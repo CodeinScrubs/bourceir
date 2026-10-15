@@ -37,7 +37,7 @@ class RiskProfile:
         return self.capital_rial - self.max_loss_rial
 
 
-def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=None):
+def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=None, calendar=None):
     """A fresh visible ask is necessary, never proof of a fill or a future exit.
 
     Provider time is the quote/trade time supplied by TSETMC; no independent book clock,
@@ -47,7 +47,7 @@ def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=
     blockers, caps = [], {}
     if at.tzinfo is None:
         raise ValueError('زمان باید دارای منطقه زمانی باشد')
-    if not is_market_open(at):
+    if not is_market_open(at, calendar=calendar):
         blockers.append('بازار خارج از ساعات معاملات است')
     if not snapshot:
         return ['اسنپ‌شات تازه عمق بازار موجود نیست'] + blockers, caps
@@ -84,7 +84,7 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
                requested_quantity: Optional[int] = None, data_current: bool = False,
                account_complete: bool = False, slippage_bps: Optional[float] = None,
                locked_up: bool = False, locked_down: bool = False,
-               intraday: bool = False, intraday_snapshot: Optional[dict] = None, at=None) -> dict:
+               intraday: bool = False, intraday_snapshot: Optional[dict] = None, at=None, calendar=None) -> dict:
     """Size an explicitly user-specified plan under cash, total-loss and participation constraints.
 
     Stop execution is a scenario, not a bound on real losses. Unknown liquidity/freshness/account
@@ -129,7 +129,8 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
     caps = {"cash": math.floor(cash / cost), "loss_budget": math.floor(min(budget, remaining) / loss),
             "liquidity": math.floor(daily_value * participation / buy_price) if daily_value else 0}
     if intraday:
-        live_blockers, live_caps = intraday_entry_constraints(intraday_snapshot, entry, at=at, buy_price_rial=buy_price)
+        live_blockers, live_caps = intraday_entry_constraints(intraday_snapshot, entry, at=at, buy_price_rial=buy_price,
+                                                            calendar=calendar)
         blockers.extend(live_blockers)
         caps.update(live_caps)
         if intraday_snapshot:
@@ -155,5 +156,6 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
             "fee_only_breakeven_pct": breakeven_move(), "participation_cap": participation,
             "fees": {"buy": buy, "sell": sell}, "slippage_bps": slip * 10000,
             "equity_floor_rial": profile.equity_floor_rial, "capital_at_risk_rial": quantity * cost,
-            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v3",
+            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v4",
+            "calendar_exceptions": dict(calendar or {}),
             "intraday_evidence": dict(intraday_snapshot) if intraday and intraday_snapshot else None}

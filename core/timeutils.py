@@ -43,11 +43,22 @@ def is_trading_weekday(day: Union[date, datetime]) -> bool:
     return day.weekday() in settings.TRADING_DAYS
 
 
-def is_market_open(at: Optional[datetime] = None) -> bool:
-    """آیا بازار در این لحظه (به وقت تهران) در ساعات معاملات است؟"""
+def is_trading_session(day: Union[date, datetime], calendar=None) -> bool:
+    """Recorded date exceptions override the weekday fallback; price availability is not a calendar."""
+    key = day.date().isoformat() if isinstance(day, datetime) else day.isoformat()
+    if calendar is not None and key in calendar:
+        value = calendar[key]
+        if not isinstance(value, bool):
+            raise ValueError('وضعیت تقویم باید معلوم و بولی باشد')
+        return value
+    return is_trading_weekday(day)
+
+
+def is_market_open(at: Optional[datetime] = None, *, calendar=None) -> bool:
+    """ساعات معامله با استثناهای تقویم ثبت‌شده؛ بدون تقویم فقط قاعده روز هفته معلوم است."""
     at = at or now_tehran()
     at = at.replace(tzinfo=TEHRAN_TZ) if at.tzinfo is None else at.astimezone(TEHRAN_TZ)
-    if not is_trading_weekday(at):
+    if not is_trading_session(at, calendar):
         return False
     start = _parse_hhmm(settings.TRADING_HOURS.get("start", "09:00"))
     end = _parse_hhmm(settings.TRADING_HOURS.get("end", "12:30"))

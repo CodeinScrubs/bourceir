@@ -30,7 +30,13 @@ FLOW_RESEARCH_VERSION = 'flow-portfolio-v1'
 
 
 def ranked_matches(metrics, name, k):
-    diagnostics = filter_diagnostics(metrics, name)
+    return _rank_diagnostics(metrics, filter_diagnostics(metrics, name), k)
+
+
+def _rank_diagnostics(metrics, diagnostics, k):
+    """Rank an already computed mask; no second filter name can disagree with it."""
+    if not diagnostics[['symbol', 'date']].equals(metrics[['symbol', 'date']]):
+        raise ValueError('تشخیص فیلتر باید دقیقاً با نماد، تاریخ و ترتیب ورودی یکسان باشد')
     picked = metrics.loc[diagnostics['match'], ['date', 'symbol', 'value']].copy()
     picked = picked.sort_values(['date', 'value', 'symbol'], ascending=[True, False, True])
     picked['rank'] = picked.groupby('date').cumcount()
@@ -116,7 +122,7 @@ def run_flow_research(db, *, source_id=None, initial_capital_rial=None, min_trai
     for name, frame in diagnostics.items():
         frame.to_parquet(folder/f'diagnostics-{name}.parquet', index=False, compression='zstd')
     metrics.to_parquet(folder/'metrics.parquet', index=False, compression='zstd')
-    all_picks = {name: ranked_matches(metrics, name, cfg['top_k']) for name in RESEARCH_FILTERS}
+    all_picks = {name: _rank_diagnostics(metrics, diagnostics[name], cfg['top_k']) for name in RESEARCH_FILTERS}
     results, accumulated = [], {}
     for index, fold in enumerate(folds):
         chosen, training = select_from_past(panel, fold, horizons, cfg['top_k'])

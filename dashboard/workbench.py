@@ -38,6 +38,7 @@ def page_workbench():
         repo = WorkbenchRepository(db)
         saved = repo.profile()
         rows = repo.market_rows()
+        calendar = db.get_market_calendar()
         broker_snapshot = BrokerRepository(db).latest('portfolio')
         broker_baseline = BrokerRepository(db).baseline()
     with st.expander("سرمایه و سقف زیان کل", expanded=saved is None):
@@ -97,7 +98,7 @@ def page_workbench():
     risk_reserved = reserved_position_risk(state, plans)
     for symbol in state["positions"]:
         source = rows.loc[rows["symbol_fa"] == symbol]
-        account_current &= not source.empty and current_daily_row(source.iloc[0]["date"])
+        account_current &= not source.empty and current_daily_row(source.iloc[0]["date"], calendar=calendar)
     if state["positions"]:
         positions = pd.DataFrame.from_dict(state["positions"], orient="index").reset_index().rename(columns={"index": "نماد"})
         positions["موجودی"] = positions.pop("quantity")
@@ -124,7 +125,7 @@ def page_workbench():
             budget = st.number_input("بودجه زیان همین معامله (تومان)", min_value=1, value=1)
             rationale = st.text_area("دلیل انتخاب سهم و شرط نامعتبر شدن برنامه")
             at = now_tehran()
-            data_current = current_daily_row(source["date"], at)
+            data_current = current_daily_row(source["date"], at, calendar=calendar)
             locks = market_rules.lock_flags(pd.DataFrame([source])).iloc[0]
             data_current &= bool(market_rules.daily_vwap(pd.DataFrame([source])).notna().iloc[0])
             intraday = HORIZONS[horizon_label] == 'intraday'
@@ -135,7 +136,7 @@ def page_workbench():
                 with DatabaseManager(read_only=True) as db:
                     snapshots = WorkbenchRepository(db).latest_snapshots(set(state['positions']) | {symbol})
                 snapshot = snapshots.get(symbol)
-                live = intraday_account_state(events, profile, plans, snapshots, at=at)
+                live = intraday_account_state(events, profile, plans, snapshots, at=at, calendar=calendar)
                 sizing_state, sizing_reserved = live['state'], live['reserved_risk_rial']
                 account_evidence = live['evidence']
                 data_current &= live['current']
@@ -153,7 +154,7 @@ def page_workbench():
                                          equity_rial=sizing_state["equity_rial"] or 0, reserved_risk_rial=sizing_reserved or 0,
                                          daily_value_rial=source["value"], data_current=bool(data_current),
                                          intraday=intraday, intraday_snapshot=snapshot,
-                                         at=at,
+                                         at=at, calendar=calendar,
                                          locked_up=bool(locks["locked_up"]), locked_down=bool(locks["locked_down"]),
                                          account_complete=mode == "paper" or not actual_incomplete)
                 calculation['account_risk_evidence'] = account_evidence
@@ -225,12 +226,15 @@ def page_shortlist():
     st.caption("مرتب‌سازی توصیفی بر اساس ارزش معاملات؛ احتمال سود یا توصیه ورود و خروج از این جدول استنتاج نمی‌شود.")
     with DatabaseManager(read_only=True) as db:
         rows = WorkbenchRepository(db).market_rows()
+        calendar = db.get_market_calendar()
     if rows.empty:
         st.info("ابتدا داده‌های واقعی سهام را به‌روزرسانی کن.")
         return
     minimum = st.number_input("حداقل ارزش معاملات روز (میلیارد تومان)", min_value=0.0,
                               value=settings.RESEARCH_CONFIG["min_daily_value_rial"] / 1e10)
-    screened = descriptive_screen(rows, minimum * 1e10)
+    screened = descriptive_screen(rows, minimum * 1e10, calendar=calendar)
+    if not calendar:
+        st.caption('تقویم تعطیلات ثبت نشده است؛ تازگی داده با روزهای هفته سنجیده می‌شود و پس از تعطیلات رسمی ممکن است مسدود بماند.')
     eligible = screened.loc[screened["current"] & screened["liquid"]]
     st.write(f"{len(eligible)} نماد با داده روز کامل و نقدشوندگی خواسته‌شده از {len(rows)} نماد دارای قیمت")
     if eligible.empty:

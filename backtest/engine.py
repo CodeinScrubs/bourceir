@@ -70,6 +70,7 @@ class BacktestEngine:
         self.periods_per_year = periods_per_year
         self._daily_used: Dict[tuple, List[float]] = {}
         self.corporate_action_receivable = 0.0   # ارزش کسر سهم (کمتر از یک سهم) پس از تعدیل؛ نقد قابل خرج نیست
+        self.corporate_action_receivable_cost = 0.0  # بهای تخصیص‌یافته به طلب، مستقل از بهای سهام قابل فروش
         self.corporate_action_events = 0
         # جمع خرید و فروش هر پوزیشن از باز شدن تا بسته شدن کامل (یک معامله رفت‌وبرگشت)
         self._round_trips: Dict[str, Dict[str, float]] = {}
@@ -229,18 +230,7 @@ class BacktestEngine:
         trip["sold"] += sell_qty
         if sell_qty == pos.quantity:
             # فروش چندمرحله‌ای (سقف نقدشوندگی یا صف) یک معامله است، نه چند معامله؛ نرخ برد دوبار شمرده نمی‌شود
-            pnl = trip["proceeds"] - trip["cost"]
-            self.closed_trades.append(ClosedTrade(
-                symbol_fa=symbol_fa, entry_date=pos.opened_at or date, exit_date=date, quantity=int(trip["sold"]),
-                entry_price=round(trip["buy_gross"] / trip["bought"], 2) if trip["bought"] else 0.0,
-                exit_price=round(trip["sell_gross"] / trip["sold"], 2),
-                gross_pnl=round(trip["sell_gross"] - trip["buy_gross"], 2),
-                commissions=round((trip["cost"] - trip["buy_gross"]) + (trip["sell_gross"] - trip["proceeds"]), 2),
-                net_pnl=round(pnl, 2),
-                return_pct=round(pnl / trip["cost"] * 100.0, 4) if trip["cost"] > 0 else 0.0,
-                is_winner=pnl > 0,
-            ))
-            self._round_trips.pop(symbol_fa, None)
+            self._close_round_trip(symbol_fa, pos.opened_at or date, date)
 
         pos.realized_pnl += net_trade_pnl
         pos.quantity -= sell_qty
@@ -254,6 +244,22 @@ class BacktestEngine:
         self.last_prices[symbol_fa] = execution_price
         return trade
 
+    def _close_round_trip(self, symbol_fa: str, entry_date: str, exit_date: str) -> None:
+        trip = self._round_trips.pop(symbol_fa, None)
+        if not trip or not trip['sold']:
+            return  # A conversion entirely into a non-cash claim is not a cash sale.
+        cost = trip['cost'] - trip.get('receivable_cost', 0.0)
+        buy_gross = trip['buy_gross'] - trip.get('receivable_cost', 0.0) / (1 + self.BUY_COMMISSION_RATE)
+        pnl = trip['proceeds'] - cost
+        self.closed_trades.append(ClosedTrade(
+            symbol_fa=symbol_fa, entry_date=entry_date, exit_date=exit_date, quantity=int(trip['sold']),
+            entry_price=round(trip['buy_gross'] / trip['bought'], 2) if trip['bought'] else 0.0,
+            exit_price=round(trip['sell_gross'] / trip['sold'], 2),
+            gross_pnl=round(trip['sell_gross'] - buy_gross, 2),
+            commissions=round((cost - buy_gross) + (trip['sell_gross'] - trip['proceeds']), 2),
+            net_pnl=round(pnl, 2), return_pct=round(pnl / cost * 100, 4), is_winner=pnl > 0,
+        ))
+
     # ═══════════════════════════════════════════════
     # ارزش پرتفوی و متریک‌ها
     # ═══════════════════════════════════════════════
@@ -261,14 +267,16 @@ class BacktestEngine:
     def apply_corporate_action(self, symbol_fa: str, ref_price: float, date: str) -> float:
         """
         روز اقدام شرکتی: قیمت مرجع امروز با قیمت پایانی دیروز فرق دارد. تعداد سهم پوزیشن باز با ضریب
-        «پایانی دیروز ÷ مرجع امروز» زیاد می‌شود تا ارزش پوزیشن ثابت بماند (بهای تمام‌شده تغییر نمی‌کند؛
-        سود/زیان معامله فقط از حرکت واقعی قیمت می‌آید). کسر کمتر از یک سهم به ارزش روز، طلب ثبت می‌شود.
+        «پایانی دیروز ÷ مرجع امروز» تغییر می‌کند تا ارزش پوزیشن ثابت بماند. بهای اولیه میان سهام صحیح و
+        کسر سهم تفکیک می‌شود؛ طلب غیرنقدی فروش یا سود محقق‌شده نیست و به نقد قابل خرج اضافه نمی‌شود.
         خروجی: ضریب تعدیل تعداد سهم (۱ یعنی بدون اقدام شرکتی).
         """
         pos = self.positions.get(symbol_fa)
         prev_close = self.last_prices.get(symbol_fa)
-        if not pos or pos.quantity <= 0 or not prev_close or not ref_price or ref_price <= 0:
+        if not pos or pos.quantity <= 0:
             return 1.0
+        if not self._valid_number(prev_close) or not self._valid_number(ref_price):
+            raise ValueError('قیمت مرجع یا پایانی قبلی پوزیشن باز نامعلوم/نامعتبر است')
         ratio = prev_close / ref_price
         if abs(ratio - 1.0) <= 1e-6:
             return 1.0
@@ -277,12 +285,22 @@ class BacktestEngine:
                            symbol_fa, date, ref_price, prev_close)
         exact = pos.quantity * ratio
         new_quantity = int(exact)
-        self.corporate_action_receivable += (exact - new_quantity) * ref_price
+        fraction = exact - new_quantity
+        fraction_cost = pos.total_cost * fraction / exact
+        self.corporate_action_receivable += fraction * ref_price
+        self.corporate_action_receivable_cost += fraction_cost
+        pos.total_cost = pos.total_cost - fraction_cost if new_quantity else 0.0
+        if symbol_fa in self._round_trips:
+            trip = self._round_trips[symbol_fa]
+            trip['receivable_cost'] = trip.get('receivable_cost', 0.0) + fraction_cost
         self.corporate_action_events += 1
         logger.info("اقدام شرکتی «%s» در %s: تعداد سهم %d → %d (ضریب %.4f).",
                     symbol_fa, date, pos.quantity, new_quantity, ratio)
         pos.quantity = new_quantity
         pos.average_entry_price = pos.total_cost / new_quantity if new_quantity else 0.0
+        if not new_quantity:
+            self._close_round_trip(symbol_fa, pos.opened_at or date, date)
+            pos.opened_at = None
         self.last_prices[symbol_fa] = ref_price
         return ratio
 
@@ -306,7 +324,8 @@ class BacktestEngine:
                                       total_return_pct=round(total_return_pct, 2),
                                       blocked_orders=self.blocked_orders, equity_curve=self.equity_curve,
                                       corporate_action_events=self.corporate_action_events,
-                                      corporate_action_receivable=round(self.corporate_action_receivable, 2))
+                                      corporate_action_receivable=round(self.corporate_action_receivable, 2),
+                                      corporate_action_receivable_cost=round(self.corporate_action_receivable_cost, 2))
 
         closed = self.closed_trades
         winners = [t for t in closed if t.is_winner]
@@ -352,6 +371,7 @@ class BacktestEngine:
             blocked_orders=self.blocked_orders,
             corporate_action_events=self.corporate_action_events,
             corporate_action_receivable=round(self.corporate_action_receivable, 2),
+            corporate_action_receivable_cost=round(self.corporate_action_receivable_cost, 2),
             equity_curve=self.equity_curve,
         )
 

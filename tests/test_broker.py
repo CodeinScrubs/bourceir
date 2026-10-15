@@ -70,6 +70,18 @@ def test_capture_keeps_negative_adjusted_cost_and_unknown_infinite_return(captur
     assert parsed['captured_at'].endswith('+03:30')
 
 
+def test_zero_broker_cost_never_proves_recovered_capital_or_economic_profit(capture):
+    report = reconcile_account(parse_portfolio(encoded(capture)))
+    first = next(p for p in report['positions'] if p['symbol_fa'] == 'فولاد')
+    assert first['broker_cost_state'] == 'requires_history_reconciliation'
+    assert first['economic_return_pct'] is None
+    assert first['broker_return_pct'] is None
+    assert report['accounting_review']['nonpositive_cost_symbols'] == ['فولاد']
+    assert not report['accounting_review']['zero_cost_proves_recovered_capital']
+    assert not report['accounting_review']['corporate_action_linkage_verified']
+    assert not report['accounting_review']['subscription_deadlines_verified']
+
+
 @pytest.mark.parametrize('mutation', ['missing_row', 'duplicate', 'wrong_currency', 'wrong_header', 'wrong_total', 'future', 'wrong_origin'])
 def test_capture_rejects_incomplete_or_inconsistent_sources(capture, mutation):
     if mutation == 'missing_row':

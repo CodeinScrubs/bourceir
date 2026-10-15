@@ -25,7 +25,17 @@ class MarketReplayEngine:
     """موتور بازپخش جریان داده‌های بازار (Market Replay)."""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db = DatabaseManager(db_path=db_path) if db_path else DatabaseManager()
+        self.db = DatabaseManager(db_path=db_path, read_only=True)
+
+    def close(self) -> None:
+        self.db.close()
+
+    def __enter__(self):
+        self.db.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def get_available_replay_dates(self) -> List[str]:
         """دریافت لیست تاریخ‌هایی که اسنپ‌شات برای بازپخش دارند."""

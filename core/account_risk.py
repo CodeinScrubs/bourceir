@@ -22,7 +22,7 @@ def reserved_position_risk(state, plans):
     return reserved
 
 
-def intraday_account_state(events, profile, plans, snapshots, *, at=None):
+def intraday_account_state(events, profile, plans, snapshots, *, at=None, calendar=None):
     """Value every open holding using fresh last/bid observations from one evaluation clock.
 
     The lower of last and best bid is a conservative mark, not a fill for the entire position.
@@ -34,7 +34,7 @@ def intraday_account_state(events, profile, plans, snapshots, *, at=None):
         raise ValueError('زمان باید دارای منطقه زمانی باشد')
     holdings = summarize_executions(events, profile, {})['positions']
     marks, observations, blockers = {}, {}, []
-    if not is_market_open(at):
+    if not is_market_open(at, calendar=calendar):
         blockers.append('بازار خارج از ساعات معاملات است')
     for symbol, position in holdings.items():
         snapshot = snapshots.get(symbol)
@@ -64,7 +64,8 @@ def intraday_account_state(events, profile, plans, snapshots, *, at=None):
                                     mark_rial=marks.get(symbol), blockers=problems)
     state = summarize_executions(events, profile, marks)
     reserved = reserved_position_risk(state, plans)
-    evidence = dict(version='intraday-account-v1', evaluated_at=at.isoformat(), observations=observations,
+    evidence = dict(version='intraday-account-v2', evaluated_at=at.isoformat(), observations=observations,
+                    calendar_exceptions=dict(calendar or {}),
                     mark_basis='min_last_and_best_bid_net_sell_fee', equity_rial=state['equity_rial'],
                     reserved_risk_rial=reserved, equity_floor_rial=profile.equity_floor_rial,
                     loss_limit_reached=state['loss_limit_reached'], blockers=blockers,

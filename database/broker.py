@@ -131,7 +131,8 @@ def broker_report(db):
             by_symbol[quote['symbol_fa']] = quote
     sources = {kind: repo.latest(kind) for kind in ('portfolio', 'turnover', 'fills')}
     report = reconcile_account(sources['portfolio'], sources['turnover'], sources['fills'],
-                               market_rows=list(by_symbol.values()), baseline=repo.baseline())
+                               market_rows=list(by_symbol.values()), baseline=repo.baseline(),
+                               calendar=db.get_market_calendar())
     if report is not None:
         report['sources'] = {kind: {key: source[key] for key in ('id', 'source_sha256', 'parser_version', 'source_name', 'captured_at')}
                              for kind, source in sources.items() if source}

@@ -206,10 +206,14 @@ class DataCollector:
         بلافاصله کامل می‌کند و به‌روزرسانی بعدی تاریخچه، همان رکورد را با داده رسمی بازنویسی می‌کند.
         """
         started_at = now_tehran_iso()
+        now = now_tehran()
+        if not self.db.is_trading_day(now.date().isoformat()) or now.strftime('%H:%M') < SESSION_FINAL_AFTER:
+            return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
+                    "symbols_failed": 0, "errors": [],
+                    "message": "دیده‌بان کندل امروز در روز تعطیل ثبت‌شده یا پیش از ساعت ۱۳ لازم نیست؛ تاریخچه مستقل دریافت می‌شود."}
         result = self.provider.get_session_candles()
         if not result:
             return self._finish("session_candles", started_at, 0, 0, 1, ["دیده‌بان بازار یا تاریخ روز معاملاتی دریافت نشد"])
-        now = now_tehran()
         if result["date"] == now.date().isoformat() and now.strftime("%H:%M") < SESSION_FINAL_AFTER:
             return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
                     "symbols_failed": 0, "errors": [], "message": "معاملات امروز هنوز نهایی نشده است (بعد از ساعت ۱۳)."}
@@ -313,7 +317,8 @@ class DataCollector:
 
     def run_collection_cycle(self) -> Dict[str, Any]:
         """یک چرخه پایش: فقط در ساعات رسمی بازار اسنپ‌شات گرفته می‌شود."""
-        if not is_market_open():
+        clock = now_tehran()
+        if not is_market_open(clock) or not self.db.is_trading_day(clock.date().isoformat()):
             return {
                 "status": "skipped", "is_market_open": False, "timestamp": now_tehran_iso(),
                 "message": "بازار خارج از ساعات معاملاتی است (شنبه تا چهارشنبه ۹:۰۰ تا ۱۲:۳۰).",
