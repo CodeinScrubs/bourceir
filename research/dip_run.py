@@ -35,7 +35,7 @@ MAIN_RULES = [  # روش کاربر: ۲٪ زیر قیمت مرجع بخر، ۳ �
 SENSITIVITY_RULES = [DipRule(d, tp, h, None, True) for d in (0.01, 0.02, 0.03) for tp in (0.02, 0.03, 0.04)
                      for h in (1, 2) if not (d == 0.02 and h == 1 and tp in (0.03, 0.04))]
 RANDOM_DRAWS = 20
-DIP_SUMMARY_VERSION = 'dip-summary-v1'
+DIP_SUMMARY_VERSION = 'dip-summary-v2'
 
 
 def _finite_stat(values, statistic, *args):
@@ -95,6 +95,7 @@ def evaluate(trades: pd.DataFrame, picks: pd.DataFrame, calendar_days: pd.Index,
     up, down = regime_values > 0.5, regime_values <= 0.5
     return {
         "picks": int(len(df)),
+        "entry_known_picks": int(known.sum()), "entry_unknown_picks": int((~known).sum()),
         "fill_rate": float(filled.sum() / known.sum()) if known.sum() else float("nan"),
         "trades": int(done.sum()),
         "censored": int((df["dip_status"] == "censored").sum()),
@@ -255,8 +256,9 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
         "**محافظه‌کار / خوش‌بینانه:** داده روزانه نمی‌گوید سقف روز قبل از کف آمده یا بعد از آن. «محافظه‌کار» فرض می‌کند "
         "هدف در همان روز خرید (بعد از افت) نمی‌رسد و لمس دقیق قیمت سفارش کافی نیست؛ «خوش‌بینانه» برعکس. این دو فرض، کران تضمینی واقعیت نیستند.",
         "",
-        "ستون‌ها: «خرید شد» = درصد نامزدهایی که به قیمت سفارش رسیدند؛ «میانگین معامله» = سود خالص هر خرید؛ «هدف» = درصد "
-        "معامله‌هایی که به هدف رسیدند؛ «روزانه» = میانگین گروه تصمیم‌ها (سرمایه بیکار لحاظ شده؛ بازده سبد نیست)؛ "
+        "ستون‌ها: «خرید شد» = درصد نامزدهای دارای نتیجه معلوم ورود که خریدشان مدل شده؛ «میانگین معامله» = میانگین سود خالص خروج‌های تکمیل‌شده؛ "
+        "«نرخ برد» و «هدف» نیز فقط از خروج‌های تکمیل‌شده محاسبه می‌شوند؛ نتیجه خریدهای سانسورشده یا نامعتبر از این اعداد معلوم نمی‌شود. "
+        "«روزانه» = میانگین گروه تصمیم‌ها (سرمایه بیکار لحاظ شده؛ بازده سبد نیست)؛ "
         "«بازار مثبت/منفی» = میانگین معامله وقتی پهنای ۵ روزه بازار بالای ۵۰٪ / زیر ۵۰٪ بوده؛ «سال‌های مثبت» = پایداری.",
         "«روزانه» فقط با معلوم بودن همه گروه‌های تصمیم گزارش می‌شود. میانگین روزهای معلوم به‌تنهایی بازده کل دوره نیست. "
         "قرعه نامعلوم از کنترل تصادفی حذف نمی‌شود؛ آمار شرطی فقط در known_draw_diagnostics و با شمار قرعه‌های معلوم ذخیره است.",
@@ -288,11 +290,12 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
             if metric in coverage:
                 counts = coverage[metric]
                 lines.append(f"کنترل تصادفی {metric}: {counts['known']}/{counts['total']} قرعه معلوم؛ {counts['unknown']} نامعلوم.")
-        lines.extend(['', '| نامزدها | روز معلوم | روز نامعلوم | خروج سانسورشده | نتیجه نامعتبر/گمشده |',
-                      '|---|---:|---:|---:|---:|'])
+        lines.extend(['', '| نامزدها | ورود معلوم | ورود نامعلوم | خروج کامل | روز معلوم | روز نامعلوم | خروج سانسورشده | نتیجه نامعتبر/گمشده |',
+                      '|---|---:|---:|---:|---:|---:|---:|---:|---:|'])
         for name in order:
             item = entry[name]
-            lines.append(f"| {item['label_fa']} | {item['cohort_known_days']} | {item['cohort_unknown_days']} | "
+            lines.append(f"| {item['label_fa']} | {item['entry_known_picks']} | {item['entry_unknown_picks']} | {item['trades']} | "
+                         f"{item['cohort_known_days']} | {item['cohort_unknown_days']} | "
                          f"{item['censored']} | {item['invalid_or_missing']} |")
 
     for rule in MAIN_RULES:

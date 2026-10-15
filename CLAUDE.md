@@ -32,7 +32,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |
 | `backtest/engine.py` | بکتست: اجرای روز بعد، VWAP، صف قفل، کارمزد از config |
 | `features/` | موتور فیچر PIT (`daily`, `market`) و انبار فیچر Parquet نسخه‌دار (`store`)؛ نام فارسی فیچرها در `labels_fa` — هر تغییر منطق = `FEATURE_SET_VERSION` جدید + آزمون بریدن داده |
-| `research/` | daily-v5، labels-v4، dip-v4 با خلاصه dip-summary-v1 و portfolio-v3؛ `portfolio_run` پژوهش سرمایه مشترک از ورودی پایه محفوظ، `walkforward` برش زمانی و purge با تاریخ خروج واقعی. آمار روز یا قرعه نامعلوم صفر یا از مخرج حذف نمی‌شود. نتیجه پژوهشی است و سیگنال پذیرفته‌شده نداریم. دوره `holdout_start` مهر و موم است. پروتکل سه افق: `docs/research/personal_strategy_protocol.md` |
+| `research/` | daily-v5، labels-v4، dip-v4 با خلاصه dip-summary-v2 و portfolio-v3؛ `portfolio_run` پژوهش سرمایه مشترک از ورودی پایه محفوظ، `walkforward` برش زمانی و purge با تاریخ خروج واقعی. آمار روز یا قرعه نامعلوم صفر یا از مخرج حذف نمی‌شود. مخرج ورود و خروج و آمار شرطی صریح‌اند. نتیجه پژوهشی است و سیگنال پذیرفته‌شده نداریم. دوره `holdout_start` مهر و موم است. پروتکل سه افق: `docs/research/personal_strategy_protocol.md` |
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |

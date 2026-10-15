@@ -212,6 +212,17 @@ def test_random_summary_preserves_unknown_draws_and_reports_coverage():
     assert result['fill_rate'] == .5
 
 
+def test_dip_conditional_entry_and_exit_statistics_disclose_their_denominators():
+    from research.dip_run import evaluate
+    picks = pd.DataFrame({'date':['2024-01-01']*3,'symbol':['A','B','C']})
+    trades = picks.assign(dip_status=['complete','not_filled','invalid'],entry_filled=[1.,0.,np.nan],
+                          net_ret=[.01,np.nan,np.nan],exit_kind=['target',None,None],days_held=[1.,np.nan,np.nan])
+    result = evaluate(trades,picks,pd.Index(['2024-01-01']),3,1,pd.Series({'2024-01-01':.6}))
+    assert result['picks']==3 and result['entry_known_picks']==2 and result['entry_unknown_picks']==1
+    assert result['trades']==1 and result['fill_rate']==.5 and result['mean_trade']==.01
+    assert np.isnan(result['mean_daily_cohort']) and result['cohort_unknown_days']==1
+
+
 def test_initial_reference_scale_does_not_create_a_flow_breakout():
     from core.flow_filters import flow_metrics
     from tests.test_flow_filters import history
