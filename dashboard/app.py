@@ -455,6 +455,10 @@ def latest_research_report(pointer: str = "latest.json") -> str:
                        and protocol.get('filter_version') == FLOW_FILTER_VERSION
                        and protocol.get('portfolio_version') == PORTFOLIO_VERSION)
             if current:
+                capital = protocol['config']['initial_capital_rial']
+                report += (f'\n\nسرمایه آغاز هر برش: {to_fa_digits(f"{capital:,.0f}")} ریال '
+                           f'({to_fa_digits(f"{capital/10:,.0f}")} تومان)، تماماً نقد فرضی. '
+                           'این آزمون سبد فعلی کارگزاری را بازسازی نمی‌کند و سود حساب واقعی نیست.\n')
                 names = {'retail_acceleration': 'تقویت سرانه', 'volume_breakout': 'شکست سقف', 'daily_pressure': 'فشار خرید'}
                 def mode_label(mode):
                     if mode.startswith('past_baseline'):
@@ -524,8 +528,10 @@ def page_research() -> None:
         report = latest_research_report(f"latest-portfolio-{selectors[selector]}.json")
         st.markdown(report) if report else st.info("برای این فرضیه گزارشی ثبت نشده است؛ ابتدا پژوهش پایه و سپس پژوهش همین فرضیه را اجرا کنید.")
     with flow_tab:
+        default_capital = to_fa_digits(f"{settings.BACKTEST_CONFIG['initial_capital']/10:,.0f}")
         job_panel('research-flow', ['research-flow'], 'آزمون فیلترهای ثابت روزانه',
                   'سه تعریف از پیش ثابت، افق ۲ و ۳ جلسه، نقد مشترک، کارمزد، صف و فشار اجرا. '
+                  f'سرمایه فرضی پیش‌فرض از تنظیمات بکتست: {default_capital} تومان. '
                   'این آزمون الگوی درون‌روزی یا فیلتر ۹ شرطی ناقص را تأیید نمی‌کند؛ دوره نهایی بسته می‌ماند.')
         report = latest_research_report('latest-flow.json')
         st.markdown(report) if report else st.info('هنوز پژوهش فیلترهای جریان حقیقی اجرا نشده است.')

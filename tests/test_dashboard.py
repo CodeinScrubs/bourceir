@@ -116,7 +116,8 @@ def test_flow_report_has_readable_control_labels_and_action_counts(dashboard_db,
     root.mkdir()
     mode = 'retail_acceleration-3d-random'
     (root/'latest-flow.json').write_text(json.dumps(dict(experiment_id='flow-test')), encoding='utf-8')
-    payload = dict(protocol=dict(version=FLOW_RESEARCH_VERSION, filter_version=FLOW_FILTER_VERSION,
+    payload = dict(protocol=dict(config=dict(initial_capital_rial=1_000_000_000),
+        version=FLOW_RESEARCH_VERSION, filter_version=FLOW_FILTER_VERSION,
         portfolio_version=PORTFOLIO_VERSION), summary={mode: {}}, results=[dict(modes={mode: dict(metrics=dict(
         corporate_action_events=3, open_positions=1, stale_mark_days=4))})])
     payload['summary']['past_baseline_stress'] = {}
@@ -131,6 +132,7 @@ def test_flow_report_has_readable_control_labels_and_action_counts(dashboard_db,
     assert 'تقویت سرانه / ۳ جلسه / کنترل تصادفی' in texts
     assert 'گذر از رویداد مصنوعی' in texts and '| 3 | 1 | 4 |' in texts
     assert 'پایه منتخب گذشته / فشار اجرا' in texts
+    assert 'تماماً نقد فرضی' in texts and 'سود حساب واقعی نیست' in texts
     assert mode not in texts
 
 
