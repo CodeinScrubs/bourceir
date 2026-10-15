@@ -438,6 +438,7 @@ def page_codal() -> None:
 def latest_research_report(pointer: str = "latest.json") -> str:
     """متن گزارش آخرین پژوهش (data/research)، یا رشته خالی."""
     import json
+    import re
 
     folder = settings.DATA_DIR / "research"
     try:
@@ -477,6 +478,8 @@ def latest_research_report(pointer: str = "latest.json") -> str:
                 report += '\n'.join(details)
                 for mode in sorted(payload['summary'], key=len, reverse=True):
                     report = report.replace(f'| {mode} |', f'| {mode_label(mode)} |')
+                # Keep the sign and percent with the number inside Persian table cells.
+                report = re.sub(r'[+-]?\d+(?:\.\d+)?%', lambda m: '\u2066'+m.group(0)+'\u2069', report)
         elif pointer == 'latest-dip.json':
             current = params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
         elif pointer in {'latest-portfolio.json', 'latest-portfolio-buy_queue.json', 'latest-portfolio-buyer_power.json'}:

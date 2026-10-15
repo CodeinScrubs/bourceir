@@ -124,7 +124,7 @@ def test_flow_report_has_readable_control_labels_and_action_counts(dashboard_db,
     payload['results'][0]['modes']['past_baseline_stress'] = dict(metrics=dict(corporate_action_events=0,
         open_positions=0, stale_mark_days=0))
     (root/'flow-test.json').write_text(json.dumps(payload), encoding='utf-8')
-    (root/'flow-test.md').write_text(f'| {mode} | synthetic test result |', encoding='utf-8')
+    (root/'flow-test.md').write_text(f'| {mode} | +1.25% |', encoding='utf-8')
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.sidebar.radio[0].set_value('🔬 پژوهش').run()
     assert not at.exception
@@ -133,6 +133,7 @@ def test_flow_report_has_readable_control_labels_and_action_counts(dashboard_db,
     assert 'گذر از رویداد مصنوعی' in texts and '| 3 | 1 | 4 |' in texts
     assert 'پایه منتخب گذشته / فشار اجرا' in texts
     assert 'تماماً نقد فرضی' in texts and 'سود حساب واقعی نیست' in texts
+    assert '\u2066+1.25%\u2069' in texts
     assert mode not in texts
 
 
