@@ -79,8 +79,8 @@ def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=
 
 
 def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, target_rial: float,
-               trade_loss_budget_rial: float, available_cash_rial: float, equity_rial: float,
-               daily_value_rial: Optional[float], reserved_risk_rial: float = 0,
+               trade_loss_budget_rial: float, available_cash_rial: float, equity_rial: Optional[float],
+               daily_value_rial: Optional[float], reserved_risk_rial: Optional[float] = 0,
                requested_quantity: Optional[int] = None, data_current: bool = False,
                account_complete: bool = False, slippage_bps: Optional[float] = None,
                locked_up: bool = False, locked_down: bool = False,
@@ -94,8 +94,9 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
     if not stop < entry < target:
         raise ValueError("برای برنامه خرید، حد زیان < ورود < هدف لازم است")
     budget = finite_number(trade_loss_budget_rial)
-    cash, equity, reserved = [finite_number(v, positive=False) for v in
-                              (available_cash_rial, equity_rial, reserved_risk_rial)]
+    cash = finite_number(available_cash_rial, positive=False)
+    equity = None if equity_rial is None else finite_number(equity_rial, positive=False)
+    reserved = None if reserved_risk_rial is None else finite_number(reserved_risk_rial, positive=False)
     slip = finite_number(settings.BACKTEST_CONFIG["default_slippage_bps"] if slippage_bps is None else slippage_bps,
                          positive=False) / 10000
     if slip >= 1:
@@ -110,15 +111,19 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
     cost = buy_price * (1 + buy)
     loss = cost - exit_stop * (1 - sell)
     reward = exit_target * (1 - sell) - cost
-    remaining = max(0, equity - profile.equity_floor_rial - reserved)
+    remaining = None if equity is None or reserved is None else max(0, equity - profile.equity_floor_rial - reserved)
     blockers = []
+    if loss <= 0:
+        blockers.append('بهای ورود و سناریوی زیان با داده موجود سازگار نیست؛ بودجه این معامله نامعلوم است')
     if not data_current:
         blockers.append("داده قیمت/نقدشوندگی به‌روز تأیید نشده است")
     if not account_complete:
         blockers.append("کامل بودن نقدینگی و پوزیشن‌های این دفتر تأیید نشده است")
     if not intraday and (locked_up or locked_down):
         blockers.append("قفل صف در آخرین داده مشاهده شده است؛ امکان ورود/خروج تأیید نشده است")
-    if remaining <= 0:
+    if remaining is None:
+        blockers.append("ارزش روز دارایی‌ها یا ریسک باز دفتر نامعلوم است؛ بودجه ریسک باقیمانده قابل محاسبه نیست")
+    elif remaining <= 0:
         blockers.append("سقف زیان کل یا بودجه ریسک باقیمانده مصرف شده است")
     participation = min(0.05, settings.BACKTEST_CONFIG["max_volume_participation_pct"])
     try:
@@ -126,8 +131,8 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
     except ValueError:
         daily_value = None
         blockers.append("ارزش معاملات معتبر برای کنترل نقدشوندگی موجود نیست")
-    caps = {"cash": math.floor(cash / cost), "loss_budget": math.floor(min(budget, remaining) / loss),
-            "liquidity": math.floor(daily_value * participation / buy_price) if daily_value else 0}
+    caps = {"cash": math.floor(cash / cost), "loss_budget": math.floor(min(budget, remaining) / loss) if remaining is not None and loss > 0 else None,
+            "liquidity": math.floor(daily_value * participation / buy_price) if daily_value is not None else None}
     if intraday:
         live_blockers, live_caps = intraday_entry_constraints(intraday_snapshot, entry, at=at, buy_price_rial=buy_price,
                                                             calendar=calendar)
@@ -151,11 +156,11 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
         blockers.append("نقدینگی، نقدشوندگی یا بودجه ریسک برای یک سهم کافی نیست")
     return {"quantity": quantity, "blockers": blockers, "caps": caps, "remaining_loss_budget_rial": remaining,
             "entry_cost_rial": quantity * cost, "stop_loss_scenario_rial": quantity * loss,
-            "target_net_scenario_rial": quantity * reward, "net_reward_risk": reward / loss,
+            "target_net_scenario_rial": quantity * reward, "net_reward_risk": reward / loss if loss > 0 else None,
             "breakeven_exit_rial": cost / ((1 - sell) * (1 - slip)),
             "fee_only_breakeven_pct": breakeven_move(), "participation_cap": participation,
             "fees": {"buy": buy, "sell": sell}, "slippage_bps": slip * 10000,
             "equity_floor_rial": profile.equity_floor_rial, "capital_at_risk_rial": quantity * cost,
-            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v4",
+            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v5",
             "calendar_exceptions": dict(calendar or {}),
             "intraday_evidence": dict(intraday_snapshot) if intraday and intraday_snapshot else None}

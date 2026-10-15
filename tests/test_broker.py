@@ -240,7 +240,7 @@ def test_public_quote_observation_never_expands_research_universe(db, capture):
     assert row['price_check'] == 'price_equal_date_unverified'
     assert db.conn.execute('SELECT COUNT(*) FROM symbols').fetchone()[0] == 0
     assert db.conn.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0] == 0
-    assert report['sources']['portfolio']['parser_version'] == 'farabi-v2'
+    assert report['sources']['portfolio']['parser_version'] == 'farabi-v3'
     with pytest.raises(ValueError, match='آینده'):
         repo.record_market_observation(dict(symbol_fa='خزامیا', ins_code='123'), dict(date='2999-01-01', close_raw=1010))
     with pytest.raises(sqlite3.IntegrityError, match='append-only'):

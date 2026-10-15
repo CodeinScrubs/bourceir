@@ -1,7 +1,8 @@
 # یکسان‌سازی پایان خط‌ها: کد و مستندات با LF، فایل‌های اجرایی ویندوز با CRLF
 * text=auto eol=lf
-*.bat text eol=crlf
-*.cmd text eol=crlf
+# پایان خط واقعی batch در شیء Git حفظ می‌شود تا ZIP گیت‌هاب هم در cmd اجرا شود.
+*.bat -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+*.cmd -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 *.ps1 text eol=crlf
 *.db binary
 *.png binary

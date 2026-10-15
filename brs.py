@@ -287,9 +287,11 @@ def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector()
-    report = collector.sync_universe()
-    _print_report("جامعه سهام", report)
-    collector.db.close()
+    try:
+        report = collector.sync_universe()
+        _print_report("جامعه سهام", report)
+    finally:
+        collector.db.close()
     return 0 if report.get('status') == 'success' else 1
 
 
@@ -297,17 +299,20 @@ def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
 
-    collector = DataCollector(symbols=_symbols(args.symbols))
-    if not collector.db.get_universe_symbols() and not args.symbols:
-        print("⚠️ جامعه سهام هنوز ثبت نشده؛ ابتدا همگام‌سازی انجام می‌شود...", flush=True)
-        collector.sync_universe()
     if args.interval <= 0 or args.cycles < 0:
-        collector.db.close()
         raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
+    selected = _symbols(args.symbols)
+    collector = DataCollector(symbols=selected)
     cycles = 0
     returncode = 0
-    print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
     try:
+        if not collector.db.get_universe_symbols() and not selected:
+            print("⚠️ جامعه سهام هنوز ثبت نشده؛ ابتدا همگام‌سازی انجام می‌شود...", flush=True)
+            report = collector.sync_universe()
+            if report.get('status') != 'success' or not collector.db.get_universe_symbols():
+                print('❌ جامعه سهام معتبر دریافت نشد؛ پایش آغاز نشد. اتصال را بررسی و دوباره اجرا کنید.', flush=True)
+                return 1
+        print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
         while True:
             started = time.monotonic()
             clock = now_tehran()
@@ -315,7 +320,7 @@ def cmd_live(args) -> int:
             if not args.force and (not is_market_open(clock) or not collector.db.is_trading_day(clock.date().isoformat())):
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
             else:
-                report = collector.collect_market_snapshot(symbols=_symbols(args.symbols))
+                report = collector.collect_market_snapshot(symbols=selected)
                 success = report.get('status') == 'success'
                 returncode = max(returncode, 0 if success else 1)
                 print(f"[{now}] {'✅' if success else '⚠️'} {report.get('status')} | ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
@@ -355,8 +360,10 @@ def cmd_backup(args) -> int:
     from database.db import DatabaseManager
 
     db = DatabaseManager()
-    target = db.backup(keep=args.keep)
-    db.close()
+    try:
+        target = db.backup(keep=args.keep)
+    finally:
+        db.close()
     print(f"💾 نسخه پشتیبان ساخته شد: {target}")
     return 0
 

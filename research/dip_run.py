@@ -35,12 +35,27 @@ MAIN_RULES = [  # روش کاربر: ۲٪ زیر قیمت مرجع بخر، ۳ �
 SENSITIVITY_RULES = [DipRule(d, tp, h, None, True) for d in (0.01, 0.02, 0.03) for tp in (0.02, 0.03, 0.04)
                      for h in (1, 2) if not (d == 0.02 and h == 1 and tp in (0.03, 0.04))]
 RANDOM_DRAWS = 20
+DIP_SUMMARY_VERSION = 'dip-summary-v1'
 
 
 def _finite_stat(values, statistic, *args):
     values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-    return float(statistic(values, *args)) if len(values) else float("nan")
+    return float(statistic(values, *args)) if len(values) and np.isfinite(values).all() else float("nan")
+
+
+def summarize_random_draws(draws):
+    """قرعه نامعلوم حذف نمی‌شود؛ آمار شرطیِ قرعه‌های معلوم جدا و با مخرج صریح است."""
+    result = dict(label_fa=f'انتخاب تصادفی ({len(draws)} بار)', coverage={}, known_draw_diagnostics={})
+    for key in ('mean_trade', 'mean_daily_cohort', 'fill_rate', 'win_rate', 'target_rate'):
+        values = np.asarray([draw[key] for draw in draws], dtype=float)
+        known = values[np.isfinite(values)]
+        result['coverage'][key] = dict(known=len(known), unknown=len(values) - len(known), total=len(values))
+        result[key] = _finite_stat(values, np.mean)
+        result['known_draw_diagnostics'][key] = _finite_stat(known, np.mean)
+        if key == 'mean_trade':
+            result['mean_trade_p95'] = _finite_stat(values, np.percentile, 95)
+            result['known_draw_diagnostics']['mean_trade_p95'] = _finite_stat(known, np.percentile, 95)
+    return result
 
 
 def load_prices_until(db: DatabaseManager, end_date: str) -> pd.DataFrame:
@@ -91,7 +106,8 @@ def evaluate(trades: pd.DataFrame, picks: pd.DataFrame, calendar_days: pd.Index,
         "win_rate": float((nets > 0).mean()) if len(nets) else float("nan"),
         "target_rate": float(exits.str.startswith("target").mean()) if len(exits) else float("nan"),
         "mean_days_held": float(df.loc[done, "days_held"].mean()) if len(nets) else float("nan"),
-        "mean_daily_cohort": float(cohort.mean()),
+        "mean_daily_cohort": _finite_stat(cohort, np.mean),
+        "known_mean_daily_cohort": float(cohort.mean()),
         "t_cohort": tolerant_t(cohort, lag=hold + 1),
         "years_positive": int((years > 0).sum()), "years_total": int(len(years)),
         "by_year": {y: round(float(v), 5) for y, v in years.items()},
@@ -174,20 +190,13 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
             entry[name] = stats
         draws = [evaluate(trades, candidates[f"random_{d}"], calendar_days, k, rule.hold, regime)
                  for d in range(RANDOM_DRAWS)]
-        entry["random"] = {
-            "label_fa": f"انتخاب تصادفی ({RANDOM_DRAWS} بار)",
-            "mean_trade": _finite_stat([d["mean_trade"] for d in draws], np.mean),
-            "mean_daily_cohort": float(np.mean([d["mean_daily_cohort"] for d in draws])),
-            "mean_trade_p95": _finite_stat([d["mean_trade"] for d in draws], np.percentile, 95),
-            "fill_rate": _finite_stat([d["fill_rate"] for d in draws], np.mean),
-            "win_rate": _finite_stat([d["win_rate"] for d in draws], np.mean),
-            "target_rate": _finite_stat([d["target_rate"] for d in draws], np.mean),
-        }
+        entry["random"] = summarize_random_draws(draws)
         results[rule.name] = {"rule": rule.__dict__, "candidates": entry}
 
     if research_code_fingerprint() != code_sha:
         raise RuntimeError("کد پژوهش هنگام اجرا تغییر کرده است؛ نتیجه منتشر نشد")
-    params = {"version": DIP_VERSION, "top_k": k, "period": [start, cutoff], "random_draws": RANDOM_DRAWS,
+    params = {"version": DIP_VERSION, "summary_version": DIP_SUMMARY_VERSION,
+              "top_k": k, "period": [start, cutoff], "random_draws": RANDOM_DRAWS,
               "min_daily_value_rial": cfg["min_daily_value_rial"], "fees": dict(settings.FEES),
               "rules": [r.name for r in rules], "rule_definitions": {r.name: r.__dict__ for r in rules},
               "slippage_bps_time_exit": settings.BACKTEST_CONFIG["default_slippage_bps"],
@@ -199,7 +208,8 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
               "source_files_sha256": source_hashes, "git_commit": _git_commit(),
               "database_schema_version": schema_version, "corporate_action_model": "synthetic_reference_share_multiplier",
               "portfolio_simulated": False, "holdout": "sealed for this run; prices and feature rows restricted before cutoff"}
-    payload = {"experiment_id": experiment_id, "created_at": now_tehran_iso(), "params": params, "results": results}
+    payload = {"experiment_id": experiment_id, "created_at": now_tehran_iso(), "params": params, "results": results,
+               "accepted_for_signals": False}
     clean = _json_safe(payload)
     (folder / f"{experiment_id}.json").write_text(json.dumps(clean, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     (artifacts / "manifest.json").write_text(json.dumps(_json_safe(params), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
@@ -248,6 +258,8 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
         "ستون‌ها: «خرید شد» = درصد نامزدهایی که به قیمت سفارش رسیدند؛ «میانگین معامله» = سود خالص هر خرید؛ «هدف» = درصد "
         "معامله‌هایی که به هدف رسیدند؛ «روزانه» = میانگین گروه تصمیم‌ها (سرمایه بیکار لحاظ شده؛ بازده سبد نیست)؛ "
         "«بازار مثبت/منفی» = میانگین معامله وقتی پهنای ۵ روزه بازار بالای ۵۰٪ / زیر ۵۰٪ بوده؛ «سال‌های مثبت» = پایداری.",
+        "«روزانه» فقط با معلوم بودن همه گروه‌های تصمیم گزارش می‌شود. میانگین روزهای معلوم به‌تنهایی بازده کل دوره نیست. "
+        "قرعه نامعلوم از کنترل تصادفی حذف نمی‌شود؛ آمار شرطی فقط در known_draw_diagnostics و با شمار قرعه‌های معلوم ذخیره است.",
     ]
 
     def table(rule_name: str, title: str) -> None:
@@ -267,7 +279,21 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
                 f"{_pct(s['target_rate'], 0)} | {_pct(s['mean_daily_cohort'], 3)} | {_pct(s.get('mean_trade_market_up'))} | "
                 f"{_pct(s.get('mean_trade_market_down'))} | {years} |")
         random_p95 = entry["random"].get("mean_trade_p95")
-        lines.append(f"\nمرز شانس: ۹۵٪ انتخاب‌های تصادفی میانگین معامله‌ای کمتر از {_pct(random_p95)} داشتند.")
+        if pd.notna(random_p95):
+            lines.append(f"\nصدک ۹۵ میانگین معامله در قرعه‌های تصادفی همین اجرا: {_pct(random_p95)}؛ این احتمال سود آینده نیست.")
+        else:
+            lines.append('\nصدک کنترل تصادفی نامعلوم است؛ قرعه نامعلوم از مخرج حذف نشد.')
+        coverage = entry['random'].get('coverage', {})
+        for metric in ('mean_trade', 'mean_daily_cohort'):
+            if metric in coverage:
+                counts = coverage[metric]
+                lines.append(f"کنترل تصادفی {metric}: {counts['known']}/{counts['total']} قرعه معلوم؛ {counts['unknown']} نامعلوم.")
+        lines.extend(['', '| نامزدها | روز معلوم | روز نامعلوم | خروج سانسورشده | نتیجه نامعتبر/گمشده |',
+                      '|---|---:|---:|---:|---:|'])
+        for name in order:
+            item = entry[name]
+            lines.append(f"| {item['label_fa']} | {item['cohort_known_days']} | {item['cohort_unknown_days']} | "
+                         f"{item['censored']} | {item['invalid_or_missing']} |")
 
     for rule in MAIN_RULES:
         mode = "محافظه‌کار" if rule.conservative else "خوش‌بینانه"

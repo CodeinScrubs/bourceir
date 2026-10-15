@@ -18,7 +18,25 @@ FILLS_HEADERS = ['تاریخ و زمان', 'سمت معامله', 'نماد', '�
 NS = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_XML_BYTES = 64 * 1024 * 1024
-PARSER_VERSION = 'farabi-v2'
+PARSER_VERSION = 'farabi-v3'
+
+
+def _display_text(value):
+    text = to_en_digits(str(value)).replace('٬', ',').replace('٫', '.').replace('٪', '%').replace('−', '-')
+    return re.sub(r'[\u200e\u200f\u202a-\u202e\u2066-\u2069]', '', text).strip()
+
+
+def _performance(value):
+    text = _display_text(value)
+    percent = r'([+-]?(?:\d+(?:\.\d+)?|∞)|-)'
+    amount = r'([+-]?[\d,]+)'
+    match = re.fullmatch(r'\(' + percent + r'%\)\s*' + amount, text)
+    if match:
+        return match[1], match[2]
+    match = re.fullmatch(amount + r'\s*\(' + percent + r'%\)', text)
+    if match:
+        return match[2], match[1]
+    raise ValueError('قالب قیمت یا سود/زیان سبد تغییر کرده است')
 
 
 def import_report(repository, data: bytes, filename: str, captured_at=None):
@@ -28,9 +46,12 @@ def import_report(repository, data: bytes, filename: str, captured_at=None):
 
 
 def number(value, *, integer=False, optional=False):
-    text = to_en_digits(str(value)).replace(',', '').replace('٬', '').replace('−', '-').strip()
+    text = _display_text(value)
     if optional and text in ('', '-', 'None', '∞', '+∞', '-∞'):
         return None
+    if ',' in text and not re.fullmatch(r'[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?', text):
+        raise ValueError('جداکننده عدد در گزارش فارابی معتبر نیست')
+    text = text.replace(',', '')
     try:
         parsed = Decimal(text)
     except InvalidOperation as exc:
@@ -78,15 +99,13 @@ def parse_portfolio(data: bytes):
         if not symbol or symbol in seen:
             raise ValueError('نماد خالی یا تکراری در برداشت سبد')
         seen.add(symbol)
-        pnl = re.fullmatch(r'\(([+−\-]?[\d.,∞]+)%\)\s*([+−\-]?[\d,]+)', to_en_digits(values[7]).strip())
-        quote = re.fullmatch(r'\([^)]*%\)\s*([\d,]+)', to_en_digits(values[5]).strip())
-        if pnl is None or quote is None:
-            raise ValueError('قالب قیمت یا سود/زیان سبد تغییر کرده است')
+        pnl_pct, pnl_amount = _performance(values[7])
+        _, quote_amount = _performance(values[5])
         row = dict(symbol_fa=symbol, quantity=number(values[1], integer=True),
                    broker_net_average_rial=number(values[2]), buy_total_rial=number(values[3], integer=True),
-                   breakeven_rial=number(values[4]), last_price_rial=number(quote[1], integer=True),
-                   value_rial=number(values[6], integer=True), broker_pnl_rial=number(pnl[2], integer=True),
-                   broker_return_pct=number(pnl[1], optional=True))
+                   breakeven_rial=number(values[4]), last_price_rial=number(quote_amount, integer=True),
+                   value_rial=number(values[6], integer=True), broker_pnl_rial=number(pnl_amount, integer=True),
+                   broker_return_pct=number(pnl_pct, optional=True))
         if row['quantity'] <= 0 or min(row['buy_total_rial'], row['value_rial'], row['last_price_rial']) < 0:
             raise ValueError('موجودی یا ارزش دارایی نامعتبر است')
         rows.append(row)
@@ -173,6 +192,8 @@ def xlsx_rows(data: bytes):
                         raise ValueError('نوع سلول در گزارش پشتیبانی نمی‌شود')
                     values.append(text)
                 if any(values):
+                    if rows and len(values) < len(rows[0]):
+                        values.extend([''] * (len(rows[0]) - len(values)))
                     rows.append(values)
                 if len(rows) > 100_000:
                     raise ValueError('تعداد ردیف بیش از حد مجاز است')

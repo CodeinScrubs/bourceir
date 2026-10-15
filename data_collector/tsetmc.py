@@ -209,13 +209,37 @@ class TsetmcProvider(BaseDataProvider):
     def search_symbol(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
         target = normalize_symbol(symbol_fa)
         data = self._get_json(f"{BASE_URL}/Instrument/GetInstrumentSearch/{requests.utils.quote(target)}")
-        if not data:
+        if not isinstance(data, dict):
             return None
-        for item in data.get("instrumentSearch", []):
-            if normalize_symbol(item.get("lVal18AFC", "")) == target and item.get("lastDate", 1) != 0:
-                info = self.get_instrument_info(str(item["insCode"]))
-                if info:
-                    return info
+        records = data.get('instrumentSearch')
+        if not isinstance(records, list):
+            logger.warning('قالب پاسخ جستجوی نماد معتبر نیست')
+            return None
+        matches = {str(item['insCode']): item for item in records if isinstance(item, dict) and item.get('insCode')
+                   and normalize_symbol(item.get('lVal18AFC', '')) == target
+                   and item.get('lastDate') not in (0, '0')}
+        dated = {}
+        for code, item in matches.items():
+            raw_date = item.get('lastDate')
+            if raw_date is not None or len(matches) > 1:
+                try:
+                    text = str(raw_date)
+                    day = datetime.strptime(text, '%Y%m%d').date()
+                    if day.strftime('%Y%m%d') != text or day > now_tehran().date():
+                        raise ValueError('future date')
+                    dated[code] = day
+                except (ValueError, TypeError):
+                    logger.warning('هویت جاری «%s» به علت تاریخ نامعلوم یا نامعتبر مبهم است', target)
+                    return None
+        if len(matches) > 1:
+            newest = max(dated.values())
+            matches = {code: matches[code] for code, day in dated.items() if day == newest}
+        if len(matches) == 1:
+            code = next(iter(matches))
+            info = self.get_instrument_info(code)
+            # شکست هویت جدید، مجوز برگشت به شناسه قدیمی یا هویت نامنطبق نیست.
+            if info and normalize_symbol(info.get('symbol_fa', '')) == target and str(info.get('ins_code')) == code:
+                return info
         logger.warning("نماد «%s» در TSETMC یافت نشد.", symbol_fa)
         return None
 

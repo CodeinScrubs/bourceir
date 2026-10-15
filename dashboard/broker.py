@@ -66,8 +66,10 @@ def page_broker():
             st.error('ارزش مشاهده‌شده به مرز توقف مرحله جدید رسیده است؛ برنامه جدید متوقف بماند.')
         st.caption('مبنای مرحله با ورود گزارش بعدی جابه‌جا نمی‌شود. ورود یا خروج وجه جدید نیازمند تعدیل مستقل مبناست؛ رسیدن به حد زیان، امکان فروش در آن قیمت را تضمین نمی‌کند.')
     positions = pd.DataFrame(report['positions'])
-    st.write(f"وزن دو دارایی بزرگ: {report['concentration']['top_two_weight_pct']:.2f}٪؛ "
-             f"وزن ده دارایی بزرگ: {report['concentration']['top_ten_weight_pct']:.2f}٪ از ارزش گزارش‌شده سبد")
+    def weight(value):
+        return 'نامعلوم' if value is None else f'{value:.2f}٪'
+    st.write(f"وزن دو دارایی بزرگ: {weight(report['concentration']['top_two_weight_pct'])}؛ "
+             f"وزن ده دارایی بزرگ: {weight(report['concentration']['top_ten_weight_pct'])} از ارزش گزارش‌شده سبد")
     view = pd.DataFrame({
         'نماد': positions['symbol_fa'], 'تعداد': positions['quantity'], 'وزن سبد (٪)': positions['weight_pct'],
         'قیمت آخر فارابی (ریال)': positions['last_price_rial'], 'قیمت آخر آرشیو (ریال)': positions['archive_last_rial'],

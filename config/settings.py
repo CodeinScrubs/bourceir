@@ -13,6 +13,7 @@
 import logging
 import math
 import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict
@@ -81,6 +82,10 @@ def _check_range(config: Dict[str, Any], section: str, key: str, low: float, hig
 
 def validate_config(config: Dict[str, Any]) -> None:
     """قیدهای حیاتی که اشتباه در آن‌ها نتایج بکتست و داده را بی‌صدا خراب می‌کند."""
+    project = config.get('project')
+    version = project.get('version') if isinstance(project, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('project.version باید نسخه معتبر پروژه باشد؛ نسخه پیش‌فرض ساختگی استفاده نمی‌شود')
     market = config.get("market", {})
     if market.get("timezone", "Asia/Tehran") != "Asia/Tehran" or market.get("price_unit", "Rial") != "Rial":
         raise ValueError("منطقه زمانی باید Asia/Tehran و واحد قیمت Rial باشد (قانون ۵ AGENTS.md)")
@@ -144,7 +149,7 @@ _ai = CONFIG.get("ai", {})
 
 # ─── پروژه و مسیرها ───
 PROJECT_NAME = _project.get("name", "BRS Quant Engine")
-VERSION = str(_project.get("version", "0.5.2"))
+VERSION = _project['version']
 # امکان تغییر مسیر داده و لاگ با متغیر محیطی (برای CI و نصب‌های جدا)
 DATA_DIR = Path(os.getenv("BRS_DATA_DIR", str(BASE_DIR / "data")))
 LOG_DIR = Path(os.getenv("BRS_LOG_DIR", str(BASE_DIR / "logs")))

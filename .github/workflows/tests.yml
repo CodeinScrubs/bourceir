@@ -67,10 +67,51 @@ jobs:
         python -m venv venv
         call SETUP.bat --ci
 
-    - name: Install standalone Farabi capture runtime and launch Chromium offline
+    - name: Verify first-run capture entry point installs its local runtime
       if: runner.os == 'Windows'
       shell: cmd
-      run: call SETUP_FARABI.bat --ci
+      run: call CAPTURE_FARABI.bat --check
+
+    - name: Verify Farabi DOM capture against an isolated browser fixture
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:BRS_PLAYWRIGHT_MODULE = Join-Path $PWD 'data/runtime/farabi/node_modules/playwright/index.mjs'
+        $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PWD 'data/runtime/farabi/browsers'
+        node tests/farabi_capture.browser.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Capture entry point must propagate an invalid custom runtime
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:BRS_NODE = Join-Path $env:RUNNER_TEMP 'missing-node.exe'
+        $env:BRS_PLAYWRIGHT_MODULE = Join-Path $env:RUNNER_TEMP 'missing-playwright.mjs'
+        cmd /c "call CAPTURE_FARABI.bat --check"
+        if ($LASTEXITCODE -ne 1) { throw 'CAPTURE did not propagate the runtime failure' }
+        $global:LASTEXITCODE = 0
+
+    - name: Verify capture launcher from the actual Git ZIP archive
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $archivePath = Join-Path $env:RUNNER_TEMP 'brs-distribution.zip'
+        $distributionPath = Join-Path $env:RUNNER_TEMP 'brs-distribution'
+        git archive --format=zip HEAD -o $archivePath
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $distributionPath
+        $runtimeDirectories = @(Get-ChildItem -LiteralPath 'data/runtime/farabi' -Directory -Filter 'node-v*-win-*')
+        if ($runtimeDirectories.Count -ne 1) { throw 'Expected one installed capture runtime' }
+        $env:BRS_NODE = Join-Path $runtimeDirectories[0].FullName 'node.exe'
+        $env:BRS_PLAYWRIGHT_MODULE = Join-Path $PWD 'data/runtime/farabi/node_modules/playwright/index.mjs'
+        $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PWD 'data/runtime/farabi/browsers'
+        Push-Location -LiteralPath $distributionPath
+        try {
+          $launcherOutput = cmd /c "call CAPTURE_FARABI.bat --check"
+          if ($LASTEXITCODE -ne 0) { throw 'ZIP capture entry point failed' }
+          $launcherOutput | Write-Output
+          if (-not ($launcherOutput -match 'Capture entry point check passed')) { throw 'ZIP launcher did not actually run its runtime check' }
+        } finally { Pop-Location }
 
     - name: Windows setup must propagate a database failure
       if: runner.os == 'Windows'

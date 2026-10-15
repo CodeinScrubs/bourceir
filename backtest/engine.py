@@ -245,10 +245,13 @@ class BacktestEngine:
         return trade
 
     def _close_round_trip(self, symbol_fa: str, entry_date: str, exit_date: str) -> None:
-        trip = self._round_trips.pop(symbol_fa, None)
+        trip = self._round_trips.get(symbol_fa)
         if not trip or not trip['sold']:
+            self._round_trips.pop(symbol_fa, None)
             return  # A conversion entirely into a non-cash claim is not a cash sale.
         cost = trip['cost'] - trip.get('receivable_cost', 0.0)
+        if not self._valid_number(cost):
+            raise ValueError('بهای تخصیص‌یافته معامله بسته‌شده نامعلوم یا نامعتبر است؛ بازده صفر ساخته نشد')
         buy_gross = trip['buy_gross'] - trip.get('receivable_cost', 0.0) / (1 + self.BUY_COMMISSION_RATE)
         pnl = trip['proceeds'] - cost
         self.closed_trades.append(ClosedTrade(
@@ -263,6 +266,7 @@ class BacktestEngine:
             exit_notional_rial=trip['sell_gross'],
             corporate_action_events=int(trip.get('corporate_action_events', 0)),
         ))
+        self._round_trips.pop(symbol_fa, None)
 
     # ═══════════════════════════════════════════════
     # ارزش پرتفوی و متریک‌ها

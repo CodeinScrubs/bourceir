@@ -22,7 +22,7 @@ def refresh_account_quotes(db, provider: BaseDataProvider, progress=None):
     for index, position in enumerate(portfolio['rows'], start=1):
         symbol = position['symbol_fa']
         try:
-            meta = repo.valuation_metadata(symbol) or provider.search_symbol(symbol)
+            meta = provider.search_symbol(symbol)
             if not meta or normalize_symbol(meta.get('symbol_fa', '')) != symbol or not meta.get('ins_code'):
                 raise ValueError('شناسه عمومی دقیق نماد پیدا نشد')
             history = provider.get_symbol_history(str(meta['ins_code']), last_n=10)
