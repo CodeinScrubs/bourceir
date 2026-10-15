@@ -1,0 +1,389 @@
+{
+  "review_date": "2026-10-15",
+  "review_commit": "230ff8189b5bce991d108a4d3cbf991d51918ae3",
+  "environment": {
+    "os": "Windows",
+    "python": "3.11.15"
+  },
+  "existing_offline_tests": {
+    "passed": 178,
+    "network_deselected": 4,
+    "seconds": 28.0
+  },
+  "dedicated_audit_probes": {
+    "passed": 10,
+    "failed": 16,
+    "total": 26,
+    "seconds": 2.98,
+    "interpretation": "25 probes for the supplied reviews plus 1 new missing-live-volume probe; 16 unmet probes are not 16 independent production financial bugs."
+  },
+  "ruff": "passed",
+  "observations": {
+    "flow_missing_days": {
+      "actual": 0.12,
+      "expected": 0.2
+    },
+    "dip_invalid_cohort": {
+      "actual": 0.0,
+      "expected": "unknown"
+    },
+    "dip_missing_result": {
+      "actual": 0.0
+    },
+    "censored_fill_rate": {
+      "actual": 0.6666666666666666,
+      "expected": 0.6666666666666666,
+      "completed_trades": 1,
+      "censored": 1
+    },
+    "missing_open": {
+      "status": "invalid",
+      "return_value": null
+    },
+    "delayed_exit_mae": {
+      "actual": -0.03096903096903092,
+      "expected": -0.12087912087912078,
+      "net_return": -0.11299494040359948,
+      "delay": 3.0,
+      "actual_exit": "2024-01-06"
+    },
+    "official_close_fallback": {
+      "factor": 0.5,
+      "last_trade": 100.0
+    },
+    "unknown_reference_in_hold": {
+      "dip_status": "complete",
+      "dip_return": -0.09398768912653377,
+      "labels_status": "invalid_data",
+      "factor": 1.0
+    },
+    "missing_previous_closes": {
+      "status": "complete",
+      "net_return": -0.507219411335333,
+      "factor": 1.0
+    },
+    "market_incomplete_basket": {
+      "full_basket": null,
+      "surviving_subset": 0.1
+    },
+    "feature_store_integrity": {
+      "rejected": true
+    },
+    "symbol_reader_integrity": {
+      "displayed_ret": 0.8999999761581421
+    },
+    "target_in_sell_lock": {
+      "exit_kind": "target_gap",
+      "held": 1.0,
+      "return_value": 0.03610483599165604,
+      "factors": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9803921568627451,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "cross_symbol_factors": {
+      "actual": [
+        1.0,
+        1.0,
+        10.0,
+        1.0
+      ],
+      "expected": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "buyer_power_units": {
+      "dashboard": 1.5,
+      "feature": 1.65
+    },
+    "zero_sell_count": {
+      "actual": 0.0
+    },
+    "zero_sell_volume": {
+      "is_infinite": true
+    },
+    "additional_unknown_live_volume": {
+      "actual": 0.0,
+      "expected": "unknown"
+    },
+    "failed_dip_publication": {
+      "latest": "EXP-2026-10-15-DIP-6766542a92d0",
+      "expected": "previous-success"
+    },
+    "dip_provenance": {
+      "params": [
+        "version",
+        "top_k",
+        "period",
+        "random_draws",
+        "min_daily_value_rial",
+        "fees",
+        "rules",
+        "holdout"
+      ],
+      "pinned_parquet_files": 0,
+      "persisted_experiments": 1
+    },
+    "dip_json_infinity": {
+      "has_infinity": true
+    },
+    "dip_holdout_command": {
+      "rejected": true
+    },
+    "resistant_child_cleanup": {
+      "child_still_running": true
+    },
+    "real_process_cleanup": {
+      "parent_returncode": 15,
+      "child_running": false
+    }
+  },
+  "development_archive": {
+    "cutoff": "2025-03-21",
+    "database_mode": "ro",
+    "sql": {
+      "daily_prices": {
+        "rows": 1084484,
+        "date_min": "2012-03-24",
+        "date_max": "2025-03-18",
+        "unknown_reference": 5,
+        "unknown_open": 704,
+        "unknown_last": 19,
+        "unknown_official_close": 0
+      },
+      "flow_windows": {
+        "affected_five_session_windows": 1071,
+        "mean_abs_feature_difference": 0.03907290766507528,
+        "max_abs_feature_difference": 0.738922204131186
+      },
+      "unknown_reference_examples": [
+        {
+          "symbol_fa": "خودرو",
+          "date": "2023-03-27",
+          "ref_price_raw": null
+        },
+        {
+          "symbol_fa": "شپنا",
+          "date": "2023-03-27",
+          "ref_price_raw": null
+        },
+        {
+          "symbol_fa": "فولاد",
+          "date": "2023-03-27",
+          "ref_price_raw": null
+        },
+        {
+          "symbol_fa": "وبملت",
+          "date": "2023-03-27",
+          "ref_price_raw": null
+        },
+        {
+          "symbol_fa": "کگل",
+          "date": "2023-03-27",
+          "ref_price_raw": null
+        }
+      ]
+    },
+    "saved_baseline": {
+      "experiment_id": "EXP-2026-10-12-BASELINES-a0f5c2ff93b14d978e5ea60a351a8b82",
+      "eligible_rows": 416535,
+      "horizons": {
+        "1": {
+          "calendar_days": 3116,
+          "unknown_benchmark_days": 28,
+          "known_benchmark_days": 3088,
+          "unknown_day_fraction": 0.008985879332477536,
+          "status_counts": {
+            "complete": 392689,
+            "entry_blocked": 23282,
+            "censored": 548,
+            "invalid_data": 16
+          },
+          "saved_report_market_days": 3088,
+          "saved_market_mean_trade": -0.014319535195076607
+        },
+        "2": {
+          "calendar_days": 3116,
+          "unknown_benchmark_days": 33,
+          "known_benchmark_days": 3083,
+          "unknown_day_fraction": 0.010590500641848523,
+          "status_counts": {
+            "complete": 392418,
+            "entry_blocked": 23282,
+            "censored": 812,
+            "invalid_data": 23
+          },
+          "saved_report_market_days": 3083,
+          "saved_market_mean_trade": -0.012691059689451417
+        },
+        "3": {
+          "calendar_days": 3116,
+          "unknown_benchmark_days": 39,
+          "known_benchmark_days": 3077,
+          "unknown_day_fraction": 0.01251604621309371,
+          "status_counts": {
+            "complete": 392162,
+            "entry_blocked": 23282,
+            "censored": 1063,
+            "invalid_data": 28
+          },
+          "saved_report_market_days": 3077,
+          "saved_market_mean_trade": -0.011010624584793632
+        },
+        "5": {
+          "calendar_days": 3116,
+          "unknown_benchmark_days": 48,
+          "known_benchmark_days": 3068,
+          "unknown_day_fraction": 0.01540436456996149,
+          "status_counts": {
+            "complete": 391715,
+            "entry_blocked": 23282,
+            "censored": 1502,
+            "invalid_data": 36
+          },
+          "saved_report_market_days": 3068,
+          "saved_market_mean_trade": -0.007569527802138328
+        }
+      }
+    },
+    "fixed_dip_diagnostic": {
+      "rule": {
+        "dip": 0.02,
+        "take_profit": 0.03,
+        "hold": 1,
+        "stop_loss": null,
+        "conservative": true
+      },
+      "top_k": 5,
+      "min_daily_value_rial": 20000000000.0,
+      "prices_exclusive_end": "2025-03-21",
+      "picks": 4907,
+      "symbol_days_reaching_dip_level": 749,
+      "status_counts": {
+        "not_filled": 3974,
+        "complete": 729,
+        "no_session": 202,
+        "censored": 2
+      },
+      "completed_trades": 729,
+      "mean_trade_current_model": 0.007273774799460509,
+      "completed_exits_on_locked_down_days": 0,
+      "locked_down_exit_examples": [],
+      "holds_with_missing_reference": [],
+      "seconds": 15.625,
+      "limitations": "Current inputs, not a pinned original DIP input; no parameter search; no corrected P&L claim."
+    },
+    "historical_tick_api": [
+      {
+        "date": "2016-06-14",
+        "url": "https://cdn.tsetmc.com/api/Trade/GetTradeHistory/46348559193224090/20160614/false",
+        "seconds": 0.891,
+        "response_received": true,
+        "rows": 903,
+        "uncanceled_rows": 903,
+        "cancellation_flags": [
+          0
+        ],
+        "uncanceled_volume": 41385281,
+        "min_time": 90442,
+        "max_time": 122919,
+        "daily_archive": {
+          "volume": 41357481,
+          "trade_count": 899,
+          "low_raw": 1150.0,
+          "high_raw": 1212.0
+        }
+      },
+      {
+        "date": "2019-09-01",
+        "url": "https://cdn.tsetmc.com/api/Trade/GetTradeHistory/46348559193224090/20190901/false",
+        "seconds": 0.546,
+        "response_received": false
+      },
+      {
+        "date": "2024-10-01",
+        "url": "https://cdn.tsetmc.com/api/Trade/GetTradeHistory/46348559193224090/20241001/false",
+        "seconds": 0.563,
+        "response_received": false
+      }
+    ],
+    "attachment_sha256": {
+      "part1": "0f08c5798ac2741d4e54740099677acde2e33e9aa58d299e3e967add922653a4",
+      "part2": "e3bfc724066d124f23d155b37bf776e49ca6c697ef822a8c8099df1316dc982e"
+    }
+  },
+  "additional_existing_rule_probe": {
+    "rule": {
+      "dip": 0.03,
+      "take_profit": 0.02,
+      "hold": 1,
+      "stop_loss": null,
+      "conservative": true
+    },
+    "top_k": 5,
+    "min_daily_value_rial": 20000000000.0,
+    "prices_exclusive_end": "2025-03-21",
+    "picks": 4907,
+    "symbol_days_reaching_dip_level": 564,
+    "status_counts": {
+      "not_filled": 4150,
+      "complete": 555,
+      "no_session": 202
+    },
+    "completed_trades": 555,
+    "mean_trade_current_model": 0.012229353216476386,
+    "completed_exits_on_locked_down_days": 0,
+    "locked_down_exit_examples": [],
+    "holds_with_missing_reference": [],
+    "seconds": 15.75,
+    "limitations": "Current inputs, not a pinned original DIP input; no parameter search; no corrected P&L claim."
+  },
+  "initial_historical_api_probe": {
+    "date": "2024-10-01",
+    "ins_code": "46348559193224090",
+    "json_received": true,
+    "rows": 3056,
+    "seconds": 1.094,
+    "first_row_canceled": 1
+  },
+  "later_api_failures_from_console": {
+    "2019-09-01": "HTTP 500",
+    "2024-10-01": "HTTP 500"
+  },
+  "scope": {
+    "production_source_modified": false,
+    "production_database_writes": false,
+    "holdout_evaluated": false,
+    "new_parameter_search": false,
+    "tracked_files_at_commit": 99,
+    "main_dip_reproduced_using_current_inputs": true,
+    "original_dip_inputs_pinned": false
+  },
+  "label_cache_metadata": [
+    {
+      "version": "labels-v1",
+      "date_max": "2026-10-11",
+      "exclusive_end_date": null
+    },
+    {
+      "version": "labels-v2",
+      "date_max": "2025-03-18",
+      "exclusive_end_date": "2025-03-21"
+    }
+  ],
+  "configured_fee_arithmetic": {
+    "buy": 0.003712,
+    "sell": 0.0088,
+    "breakeven_percent": 1.2623083131557689,
+    "currently_official_rates_independently_verified": false
+  }
+}
