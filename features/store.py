@@ -81,10 +81,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _code_fingerprint() -> str:
+def _code_fingerprint(folders=("core", "features", "database", "config")) -> str:
     """اثر انگشت یکجای کدهایی که روی مقدار فیچرها اثر دارند (برای بازتولید دقیق یک آزمایش)."""
     digest = hashlib.sha256()
-    for folder in ("core", "features", "database", "config"):
+    for folder in folders:
         for path in sorted((settings.BASE_DIR / folder).rglob("*")):
             if path.suffix in (".py", ".yaml", ".sql"):
                 digest.update(str(path.relative_to(settings.BASE_DIR).as_posix()).encode("utf-8"))
@@ -158,7 +158,8 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     return manifest
 
 
-def load_feature_snapshot(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> tuple:
+def load_feature_snapshot(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None,
+                          filters: Optional[list] = None) -> tuple:
     """خروجی و manifest یکسان با کنترل hash؛ تغییر هم‌زمان فایل، نتیجه مخلوط تولید نمی‌کند."""
     path = store_dir(version, root) / "daily.parquet"
     manifest = load_manifest(version, root)
@@ -167,7 +168,7 @@ def load_feature_snapshot(version: str = FEATURE_SET_VERSION, root: Optional[Pat
     digest = (manifest.get("provenance") or {}).get("parquet_sha256")
     if not digest or _sha256(path) != digest:
         raise ValueError("اثر انگشت انبار فیچر با manifest یکسان نیست؛ ساخت فیچر را دوباره اجرا کنید")
-    frame = pd.read_parquet(path)
+    frame = pd.read_parquet(path, filters=filters)
     if _sha256(path) != digest or load_manifest(version, root) != manifest:
         raise ValueError("انبار فیچر هنگام خواندن تغییر کرد؛ پژوهش را دوباره اجرا کنید")
     return frame, manifest
@@ -184,7 +185,5 @@ def load_manifest(version: str = FEATURE_SET_VERSION, root: Optional[Path] = Non
 
 def load_symbol_features(symbol: str, version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> pd.DataFrame:
     """فیچرهای یک نماد (فقط ردیف‌های همان نماد از فایل خوانده می‌شود)."""
-    path = store_dir(version, root) / "daily.parquet"
-    if not path.exists():
-        return pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES)
-    return pd.read_parquet(path, filters=[("symbol", "==", symbol)]).sort_values("date").reset_index(drop=True)
+    frame, _ = load_feature_snapshot(version, root, filters=[("symbol", "==", symbol)])
+    return frame.sort_values("date").reset_index(drop=True)

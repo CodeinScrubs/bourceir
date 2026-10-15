@@ -355,7 +355,7 @@ class DatabaseManager:
     def recompute_adjustments(self, symbol_id: int, source: str = PRICE_SOURCE) -> int:
         """
         محاسبه مجدد ضریب اقدام شرکتی هر روز و قیمت پایانی تعدیل‌شده رو به عقب (فقط برای نمایش).
-        فقط روزهایی که قیمت مرجع دارند معتبرند؛ بقیه ضریب ۱ می‌گیرند.
+        ضریب نامعلوم پس از اولین ردیف NULL می‌ماند؛ نمودار از شکاف نامعلوم عبور نمی‌کند.
         """
         df = pd.read_sql_query(
             "SELECT id, date, close_raw, close_final_raw, ref_price_raw FROM daily_prices "
@@ -367,7 +367,7 @@ class DatabaseManager:
         factors = market_rules.corporate_action_factors(df)
         adjusted = market_rules.backward_adjusted_close(df)
         updates = [
-            (_none_if_nan(round(float(a), 4)) if pd.notna(a) else None, float(f), int(i))
+            (_none_if_nan(round(float(a), 4)) if pd.notna(a) else None, _none_if_nan(float(f)), int(i))
             for a, f, i in zip(adjusted, factors, df["id"])
         ]
         with self.conn:
@@ -461,7 +461,13 @@ class DatabaseManager:
 
     def _snapshot_query(self) -> str:
         cols = ["symbol_id"] + SNAPSHOT_COLUMNS
-        return f"INSERT OR IGNORE INTO snapshots ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))});"
+        mutable = [c for c in SNAPSHOT_COLUMNS if c not in ("captured_at", "source")]
+        changes = ", ".join(f"{c}=excluded.{c}" for c in mutable)
+        different = " OR ".join(f"snapshots.{c} IS NOT excluded.{c}" for c in mutable)
+        # Coarse Windows wall clocks can stamp distinct responses at the same instant.
+        # Preserve the latest actual response at that timestamp; never invent a later timestamp.
+        return (f"INSERT INTO snapshots ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+                f"ON CONFLICT(symbol_id, captured_at, source) DO UPDATE SET {changes} WHERE {different};")
 
     def insert_snapshot(self, symbol_id: int, data_dict: Dict[str, Any]) -> bool:
         """ثبت اسنپ‌شات لحظه‌ای یک نماد (اگر captured_at نداشته باشد، زمان فعلی تهران ثبت می‌شود)."""
@@ -480,7 +486,7 @@ class DatabaseManager:
             return 0
         with self.conn:
             cursor = self.conn.executemany(self._snapshot_query(), params)
-        # INSERT OR IGNORE: تکراری‌ها درج نمی‌شوند؛ تعداد واقعی درج گزارش می‌شود، نه تعداد تلاش
+        # Unchanged conflicts count zero; a changed response at the same clock instant counts one update.
         return max(cursor.rowcount, 0)
 
     # ═══════════════════════════════════════════════

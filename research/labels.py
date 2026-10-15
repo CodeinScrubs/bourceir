@@ -26,7 +26,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-LABEL_SET_VERSION = "labels-v2"   # هر تغییر در تعریف برچسب → نسخه جدید
+LABEL_SET_VERSION = "labels-v3"   # actual holding excursions and unknown action gaps
 DEFAULT_HORIZONS = (1, 2, 3, 5)
 CALENDAR_MIN_SYMBOLS = 20          # روزی «روز معاملاتی بازار» است که دست‌کم این تعداد نماد معامله داشته باشند
 
@@ -69,7 +69,7 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
     entry_price = np.where(entry_executable, np.minimum(vwap[j_safe] * (1 + buy_cost), high[j_safe]), np.nan)
     out["entry_executable"] = entry_executable
     out["entry_date"] = entry_date
-    invalid_cum = np.cumsum(~execution_valid)
+    invalid_cum = np.cumsum(~execution_valid | ~np.isfinite(factors))
     action_cum = np.cumsum((np.abs(factors - 1.0) > 1e-6).astype(int))
 
     # اولین ردیف «قابل فروش» از هر ردیف به بعد (نه صف فروش قفل، با میانگین موزون معتبر)
@@ -103,16 +103,25 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
         # آزمون فشار اجرا: خرید در بیشترین و فروش در کمترین قیمت همان روزها (بدترین حالت ممکن روزانه)
         worst = np.where(valid, low[k_safe] * sell_keep * share_mult / high[j_safe], np.nan)
         out[f"net_ret_{h}d_worst"] = worst - 1.0
-        # بدترین و بهترین وضعیت شناور در پنجره نگهداری برنامه‌ریزی‌شده [ورود، خروج برنامه‌ریزی‌شده]
-        end = np.minimum(p, n - 1)
-        mfe = np.full(n, -np.inf)
-        mae = np.full(n, np.inf)
-        for offset in range(h + 1):
-            m = np.minimum(j_safe + offset, n - 1)
-            inside = valid & (j_safe + offset <= end) & (dates[m] <= planned_date)
-            mult = np.exp(-(cum[m] - cum[j_safe]))
-            mfe = np.where(inside, np.maximum(mfe, high[m] * mult), mfe)
-            mae = np.where(inside, np.minimum(mae, low[m] * mult), mae)
+        # Entire actual holding interval, including sessions spent waiting for a sellable exit.
+        # Sparse range queries avoid quadratic loops for long suspensions/locked queues.
+        scale = np.exp(-cum)
+        max_table, min_table = [high * scale], [low * scale]
+        width = 2
+        while width <= n:
+            half = width // 2
+            size = n - width + 1
+            max_table.append(np.maximum(max_table[-1][:size], max_table[-1][half:half + size]))
+            min_table.append(np.minimum(min_table[-1][:size], min_table[-1][half:half + size]))
+            width *= 2
+        levels = np.floor(np.log2(np.maximum(k_safe - j_safe + 1, 1))).astype(int)
+        mfe, mae = np.full(n, np.nan), np.full(n, np.nan)
+        for level in range(len(max_table)):
+            mask = valid & (levels == level)
+            left, right = j_safe[mask], k_safe[mask] - (1 << level) + 1
+            multiplier = np.exp(cum[j_safe[mask]])
+            mfe[mask] = np.maximum(max_table[level][left], max_table[level][right]) * multiplier
+            mae[mask] = np.minimum(min_table[level][left], min_table[level][right]) * multiplier
         out[f"mfe_{h}d"] = np.where(valid, mfe / entry_price - 1.0, np.nan)
         out[f"mae_{h}d"] = np.where(valid, mae / entry_price - 1.0, np.nan)
         # تأخیر خروج (به تعداد جلسه بازار) به خاطر صف فروش یا توقف نماد

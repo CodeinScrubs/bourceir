@@ -117,11 +117,21 @@ def stop_job(name: str) -> bool:
     if not _is_alive(pid, state.get("created_at")):
         return False
     proc = psutil.Process(pid)
-    for child in proc.children(recursive=True):
-        child.terminate()
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except psutil.TimeoutExpired:
-        proc.kill()
+    processes = proc.children(recursive=True) + [proc]
+    for target in processes:
+        try:
+            target.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(processes, timeout=5)
+    for target in survivors:
+        try:
+            target.kill()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(survivors, timeout=5)
+    if survivors:
+        raise RuntimeError("برخی فرایندهای وظیفه متوقف نشدند؛ وضعیت وظیفه را بررسی کنید")
+    if owned is not None:
+        owned.wait(timeout=5)
     return True

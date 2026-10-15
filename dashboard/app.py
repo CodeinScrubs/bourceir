@@ -21,6 +21,7 @@ from config import settings  # noqa: E402
 from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
+from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
 from features.labels_fa import FEATURE_LABELS_FA, format_feature  # noqa: E402
@@ -129,7 +130,9 @@ def symbol_daily(symbol: str) -> pd.DataFrame:
     df = pd.concat([df, market_rules.lock_flags(df)], axis=1)
     if "buy_i_value" in df.columns:
         df["real_flow"] = df["buy_i_value"] - df["sell_i_value"]
-        df["buyer_power"] = (df["buy_i_volume"] / df["buy_i_count"]) / (df["sell_i_volume"] / df["sell_i_count"])
+        buy = (df["buy_i_value"] / df["buy_i_count"]).where(df["buy_i_count"] > 0)
+        sell = (df["sell_i_value"] / df["sell_i_count"]).where((df["sell_i_count"] > 0) & (df["sell_i_value"] > 0))
+        df["buyer_power"] = (buy / sell).replace([float("inf"), -float("inf")], float("nan"))
     df["jalali"] = df["date"].map(lambda d: to_jalali(d, fa_digits=False))
     return df
 
@@ -498,6 +501,8 @@ ensure_database()
 
 PAGES = {
     "🏠 خانه": page_home,
+    "🔎 فهرست بررسی": page_shortlist,
+    "🛡️ برنامه و دفتر معاملات": page_workbench,
     "📊 بررسی نماد": page_symbol,
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,

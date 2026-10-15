@@ -44,7 +44,9 @@ def test_out_of_scope_symbol_is_rejected(db):
     assert db.get_symbol_id("اهرم") is None
 
 
-def test_market_snapshot_saves_valid_and_skips_unchanged(db, market_watch_rows, client_type_all):
+def test_market_snapshot_saves_valid_and_skips_unchanged(db, market_watch_rows, client_type_all, monkeypatch):
+    # Distinct responses can share a coarse Windows clock tick; changed depth must survive.
+    monkeypatch.setattr("data_collector.tsetmc.now_tehran_iso", lambda: "2024-01-01T12:00:00+03:30")
     routes = {
         "GetMarketWatch": {"marketwatch": market_watch_rows},
         "GetClientTypeAll": {"clientTypeAllDto": list(client_type_all.values())},

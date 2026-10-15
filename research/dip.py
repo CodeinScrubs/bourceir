@@ -27,7 +27,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-DIP_VERSION = "dip-v1"
+DIP_VERSION = "dip-v2"
 THROUGH_MARGIN = 0.001   # حالت محافظه‌کار: کف روز باید این مقدار از قیمت سفارش پایین‌تر رفته باشد
 
 
@@ -39,11 +39,21 @@ class DipRule:
     stop_loss: Optional[float] = None
     conservative: bool = True
 
+    def __post_init__(self):
+        if not np.isfinite(self.dip) or not 0 < self.dip < 1 or not np.isfinite(self.take_profit) or self.take_profit <= 0:
+            raise ValueError("افت خرید و هدف باید محدود و مثبت باشند؛ افت خرید کمتر از یک است")
+        if isinstance(self.hold, bool) or not isinstance(self.hold, (int, np.integer)) or self.hold < 0:
+            raise ValueError("افق نگهداری باید تعداد صحیح و نامنفی جلسه باشد")
+        if self.stop_loss is not None and (not np.isfinite(self.stop_loss) or not 0 < self.stop_loss < 1):
+            raise ValueError("فاصله حد زیان باید بین صفر و یک باشد")
+        if not isinstance(self.conservative, bool):
+            raise ValueError("حالت محافظه‌کار باید بولی باشد")
+
     @property
     def name(self) -> str:
-        sl = f"-sl{self.stop_loss:.0%}" if self.stop_loss else ""
+        sl = f"-sl{self.stop_loss * 100:.8g}%" if self.stop_loss else ""
         mode = "cons" if self.conservative else "opt"
-        return f"dip{self.dip:.0%}-tp{self.take_profit:.0%}-h{self.hold}{sl}-{mode}"
+        return f"dip{self.dip * 100:.8g}%-tp{self.take_profit * 100:.8g}%-h{self.hold}{sl}-{mode}"
 
 
 def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
@@ -55,6 +65,13 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
     days_held (تعداد جلسه بعد از روز خرید تا فروش؛ فروش همان روز = ۰).
     """
     n = len(df)
+    calendar = np.asarray(calendar).astype(str)
+    if not len(calendar) or calendar.ndim != 1 or list(calendar) != sorted(set(calendar)):
+        raise ValueError("تقویم باید یکتا، مرتب و غیرخالی باشد")
+    if df["date"].duplicated().any() or not df["date"].is_monotonic_increasing:
+        raise ValueError("تاریخ قیمت یک نماد باید یکتا و مرتب باشد")
+    if want is not None and len(want) != n:
+        raise ValueError("ماسک تصمیم با قیمت‌ها هم‌اندازه نیست")
     # لیست پایتون برای دسترسی تک‌عنصری در حلقه چند برابر سریع‌تر از آرایه numpy است
     dates = df["date"].astype(str).tolist()
     opens = df["open_raw"].astype(float).tolist()
@@ -75,6 +92,9 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
     exit_kind = np.full(n, "", dtype=object)
     net = np.full(n, np.nan)
     held = np.full(n, np.nan)
+    entry_dates, exit_dates = np.full(n, "", dtype=object), np.full(n, "", dtype=object)
+    entry_prices, exit_prices = np.full(n, np.nan), np.full(n, np.nan)
+    entry_filled, actions = np.full(n, np.nan), np.full(n, np.nan)
 
     cal_pos = np.searchsorted(calendar, np.asarray(dates), side="right").tolist()   # روز معاملاتی بعدی بازار
     calendar_list = calendar.tolist()
@@ -83,13 +103,15 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
             status[i] = "skipped"
             continue
         if cal_pos[i] >= len(calendar):
+            status[i] = "censored"
             continue
         entry_date = calendar_list[cal_pos[i]]
         j = i + 1
         if j >= n or dates[j] != entry_date:
+            entry_filled[i] = 0
             continue                                                  # نماد فردا معامله نداشت (توقف)
         ref, op, lo, hi = refs[j], opens[j], lows[j], highs[j]
-        if not (isfinite(ref) and ref > 0 and isfinite(op) and isfinite(lo) and isfinite(hi)):
+        if not (isfinite(ref) and ref > 0 and isfinite(op) and isfinite(lo) and isfinite(hi) and 0 < lo <= op <= hi):
             status[i] = "invalid"
             continue
         limit = ref * (1.0 - rule.dip)
@@ -99,12 +121,14 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
             entry, entry_kind[i] = limit, "limit"
         else:
             status[i] = "not_filled"
+            entry_filled[i] = 0
             continue
+        entry_filled[i], entry_dates[i], entry_prices[i] = 1, entry_date, entry
         target = entry * (1.0 + rule.take_profit)
         stop = entry * (1.0 - rule.stop_loss) if rule.stop_loss else None
         # همان روز خرید: سقف بعد از خرید قطعی است فقط اگر خرید در گشایش بوده. کفِ پایین‌تر از حد ضرر همیشه بعد از
         # خرید است (قیمت برای رسیدن به آن از قیمت سفارش عبور کرده است).
-        same_day_target = (entry_kind[i] == "open" or not rule.conservative) and hi >= target
+        same_day_target = not locked_down[j] and (entry_kind[i] == "open" or not rule.conservative) and hi >= target
         same_day_stop = bool(stop) and lo <= stop and not locked_down[j]
         exit_price, exit_row = None, None
         if same_day_stop and (rule.conservative or not same_day_target):
@@ -118,17 +142,22 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
         planned_date = calendar_list[min(planned_pos, len(calendar) - 1)]
         m = j + 1
         while exit_price is None and m < n:
+            if not (isfinite(refs[m]) and refs[m] > 0 and isfinite(factors[m])
+                    and isfinite(opens[m]) and isfinite(lows[m]) and isfinite(highs[m])
+                    and 0 < lows[m] <= opens[m] <= highs[m]):
+                status[i] = "invalid"
+                break
             scale = float(np.exp(cum[m] - cum[j])) if cum[m] != cum[j] else 1.0   # تعدیل سطح‌ها در روز اقدام شرکتی
             tgt, stp = target * scale, (stop * scale if stop else None)
             if dates[m] <= planned_date:
                 can_sell = not locked_down[m]
-                if opens[m] >= tgt:
+                if can_sell and opens[m] >= tgt:
                     exit_price, exit_kind[i] = opens[m], "target_gap"
                 elif stp and can_sell and opens[m] <= stp:
                     exit_price, exit_kind[i] = opens[m], "stop_gap"
                 elif stp and can_sell and lows[m] <= stp and (rule.conservative or highs[m] < tgt):
                     exit_price, exit_kind[i] = stp, "stop"
-                elif highs[m] >= tgt:
+                elif can_sell and highs[m] >= tgt:
                     exit_price, exit_kind[i] = tgt, "target"
                 elif dates[m] == planned_date and can_sell and isfinite(vwap[m]):
                     exit_price, exit_kind[i] = max(vwap[m] * (1.0 - slip), lows[m]), "time"
@@ -140,15 +169,21 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
                 break
             m += 1
         if exit_price is None:
-            status[i] = "censored"
+            if status[i] != "invalid":
+                status[i] = "censored"
             exit_kind[i] = ""
             continue
         share_mult = float(np.exp(-(cum[exit_row] - cum[j])))
         net[i] = exit_price * share_mult * keep / entry - 1.0
         held[i] = int(np.searchsorted(calendar, dates[exit_row])) - cal_pos[i]
         status[i] = "complete"
+        exit_dates[i], exit_prices[i] = dates[exit_row], exit_price
+        actions[i] = np.count_nonzero(np.abs(factors[j + 1:exit_row + 1] - 1) > 1e-6)
     return pd.DataFrame({"date": dates, "dip_status": status, "entry_kind": entry_kind,
-                         "exit_kind": exit_kind, "net_ret": net, "days_held": held})
+                         "exit_kind": exit_kind, "net_ret": net, "days_held": held,
+                         "entry_filled": entry_filled, "entry_date": entry_dates, "exit_date": exit_dates,
+                         "entry_price_rial": entry_prices, "exit_price_rial": exit_prices,
+                         "corporate_actions": actions})
 
 
 def simulate(prices: pd.DataFrame, calendar: np.ndarray, rule: DipRule,

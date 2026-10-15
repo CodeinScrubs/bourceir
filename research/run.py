@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import pandas as pd
 
 from config import settings
@@ -35,6 +36,26 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def archive_research_code(target: Path) -> dict:
+    """Keep the actual dirty-tree research source and locked dependencies, excluding runtime secrets/data."""
+    files = [settings.BASE_DIR / "requirements.lock.txt"]
+    for folder in ("core", "features", "database", "config", "research"):
+        files.extend(p for p in sorted((settings.BASE_DIR / folder).rglob("*")) if p.suffix in (".py", ".yaml", ".sql"))
+    hashes = {}
+    for source in files:
+        if source.is_file():
+            relative = source.relative_to(settings.BASE_DIR)
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes().replace(b"\r\n", b"\n"))
+            hashes[relative.as_posix()] = _sha256(destination)
+    return hashes
+
+
+def research_code_fingerprint() -> str:
+    return _code_fingerprint(("core", "features", "database", "config", "research"))
 
 
 def _deduplicate_input(path: Path, objects: Path) -> str:
@@ -166,14 +187,13 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
     trials = cfg["random_trials"] if random_trials is None else random_trials
     if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
         raise ValueError("تعداد آزمون تصادفی باید عدد صحیح مثبت باشد")
-    features, feature_manifest = load_feature_snapshot()
+    code_sha = research_code_fingerprint()
+    filters = None if unseal_holdout else [("date", "<", cfg["holdout_start"])]
+    features, feature_manifest = load_feature_snapshot(filters=filters)
     if features.empty:
         raise ValueError("انبار فیچر خالی است؛ ابتدا python brs.py features را اجرا کنید")
     RESEARCH_ROOT.mkdir(parents=True, exist_ok=True)
     experiment_id = f"EXP-{now_tehran_iso()[:10]}-BASELINES-{uuid.uuid4().hex}"
-    code_sha = hashlib.sha256((_code_fingerprint() + "".join(
-        path.read_text(encoding="utf-8") for path in sorted((settings.BASE_DIR / "research").glob("*.py"))
-    )).encode("utf-8")).hexdigest()
     seal = RESEARCH_ROOT / "holdout-unsealed.json"
     if unseal_holdout:
         try:
@@ -196,6 +216,9 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
         features = features.loc[features["date"] < cutoff].copy()
     artifact_dir = RESEARCH_ROOT / experiment_id
     artifact_dir.mkdir()
+    source_hashes = archive_research_code(artifact_dir / "code")
+    if research_code_fingerprint() != code_sha:
+        raise RuntimeError("کد پژوهش هنگام اجرا تغییر کرده است؛ اجرا را با کد ثابت تکرار کنید")
     features.to_parquet(artifact_dir / "features.parquet", index=False, compression="zstd")
     # لینک سخت، نسخه‌های تغییرناپذیر ورودی را بدون کپی دوباره نگه می‌دارد؛ fallback برای فایل‌سیستم دیگر.
     import shutil
@@ -217,6 +240,8 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
                                        cfg["top_k"], trials, strategies=[selected] if name == "holdout" else None),
         }
     feature_sha = _deduplicate_input(artifact_dir / "features.parquet", RESEARCH_ROOT / "objects")
+    if research_code_fingerprint() != code_sha:
+        raise RuntimeError("کد پژوهش هنگام اجرا تغییر کرده است؛ نتیجه منتشر نشد")
     stamp = now_tehran_iso()
     params = {
         "strategies": [s.name for s in STRATEGIES], "top_k": cfg["top_k"], "horizons": cfg["horizons"],
@@ -228,7 +253,8 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
                      "git_commit": (feature_manifest.get("provenance") or {}).get("git_commit")},
         "research_provenance": {"code_sha256": code_sha, "git_commit": _git_commit(),
                                 "config": cfg, "label_manifest": label_manifest,
-                                "feature_manifest": feature_manifest, "artifact_dir": str(artifact_dir)},
+                                "feature_manifest": feature_manifest, "artifact_dir": str(artifact_dir),
+                                "source_files_sha256": source_hashes},
         "portfolio_simulated": False,
         "holdout_selection": {"strategy": holdout_strategy, "horizon": holdout_horizon} if unseal_holdout else None,
     }
@@ -253,7 +279,10 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
         if logged is None:
             latest_tmp.unlink(missing_ok=True)
             raise RuntimeError("ثبت آزمایش در دیتابیس ناموفق بود؛ گزارش به عنوان آخرین اجرای موفق منتشر نشد")
-    os.replace(latest_tmp, RESEARCH_ROOT / "latest.json")
+    if log_experiment:
+        os.replace(latest_tmp, RESEARCH_ROOT / "latest.json")
+    else:
+        latest_tmp.unlink(missing_ok=True)
     payload["report_path"] = str(report_path)
     return payload
 
@@ -264,6 +293,8 @@ def _json_safe(value):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
