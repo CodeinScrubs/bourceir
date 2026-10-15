@@ -105,12 +105,18 @@ def test_search_uses_latest_unique_identity_and_does_not_fall_back_on_failure(mo
     assert provider.search_symbol('آزمایش') is None and calls == ['2']
 
 
-@pytest.mark.parametrize('date', [20241001, None, 'invalid', 20990101])
+@pytest.mark.parametrize('date', [20241001, None, 1, 'invalid', 20990101])
 def test_search_ambiguous_or_unrankable_current_identity_is_unknown(monkeypatch, date):
     records = [dict(lVal18AFC='آزمایش', insCode='1', lastDate=20241001),
                dict(lVal18AFC='آزمایش', insCode='2', lastDate=date)]
     provider, calls = search_provider(monkeypatch, records)
     assert provider.search_symbol('آزمایش') is None and not calls
+
+
+@pytest.mark.parametrize('indicator', [1, '1', None])
+def test_unique_search_accepts_opaque_provider_indicator_without_inventing_a_date(monkeypatch, indicator):
+    provider, calls = search_provider(monkeypatch, [dict(lVal18AFC='آزمایش',insCode='2',lastDate=indicator)])
+    assert provider.search_symbol('آزمایش')['ins_code'] == '2' and calls == ['2']
 
 
 def test_account_refresh_rechecks_cached_identity_without_changing_research(db, capture):

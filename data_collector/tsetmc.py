@@ -221,7 +221,13 @@ class TsetmcProvider(BaseDataProvider):
         dated = {}
         for code, item in matches.items():
             raw_date = item.get('lastDate')
-            if raw_date is not None or len(matches) > 1:
+            # پاسخ زنده فعلی برای lastDate مقدار ۱ می‌دهد؛ آن را تاریخ فرض نمی‌کنیم.
+            if raw_date in (None, 1, '1'):
+                if len(matches) > 1:
+                    logger.warning('هویت جاری «%s» با نشانگر غیرتاریخی قابل رتبه‌بندی نیست', target)
+                    return None
+                continue
+            if raw_date is not None:
                 try:
                     text = str(raw_date)
                     day = datetime.strptime(text, '%Y%m%d').date()
