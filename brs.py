@@ -297,6 +297,21 @@ def cmd_universe(args) -> int:
     return 0 if report.get('status') == 'success' else 1
 
 
+def cmd_stock_study(args) -> int:
+    import json
+
+    from database.db import DatabaseManager
+    from ops.stock_study import build_stock_study
+
+    spec=json.loads(Path(args.spec).read_text(encoding='utf-8-sig'))
+    observation=json.loads(Path(args.observations).read_text(encoding='utf-8-sig')) if args.observations else None
+    news=json.loads(Path(args.news).read_text(encoding='utf-8-sig')) if args.news else None
+    with DatabaseManager() as db:
+        result=build_stock_study(db,spec,market_observation=observation,news=news)
+    print(json.dumps(result,ensure_ascii=False,indent=2))
+    return 0
+
+
 def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
@@ -465,6 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)
+
+    p = sub.add_parser('stock-study',help='مطالعه توصیفی نمادها با گروه مقایسه؛ بدون سیگنال یا آموزش مدل')
+    p.add_argument('--spec',required=True,help='فایل JSON شامل cases با symbol/start/end میلادی')
+    p.add_argument('--observations',default=None,help='مشاهده عمومی محفوظ برای ارزش بازار فعلی؛ اختیاری')
+    p.add_argument('--news',default=None,help='فهرست اطلاعیه عمومی با زمان انتشار؛ پیش‌فرض آرشیو محلی')
+    p.set_defaults(func=cmd_stock_study)
 
     p = sub.add_parser("live", help="پایش زنده بازار")
     p.add_argument("--symbols", default="", help="فقط این نمادها (پیش‌فرض: کل سهام)")

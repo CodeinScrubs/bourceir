@@ -12,7 +12,7 @@ from core import market_rules
 from core.symbol_review import volume_comparability
 from core.text import normalize_symbol
 
-FLOW_FILTER_VERSION = 'flow-filters-v2'
+FLOW_FILTER_VERSION = 'flow-filters-v3'
 RESEARCH_FILTERS = ('retail_acceleration', 'volume_breakout', 'daily_pressure')
 FILTER_NAMES = {
     'retail_acceleration': 'تقویت سرانه حقیقی — فرضیه روزانه',
@@ -22,8 +22,11 @@ FILTER_NAMES = {
 }
 
 
-def _number(frame, name):
-    values = pd.to_numeric(frame.get(name, pd.Series(np.nan, index=frame.index)), errors='coerce')
+def _number(frame, name, *, allow_boolean=False):
+    raw = frame.get(name, pd.Series(np.nan, index=frame.index))
+    if not allow_boolean:
+        raw = raw.mask(raw.map(lambda value: isinstance(value, (bool, np.bool_))))
+    values = pd.to_numeric(raw, errors='coerce')
     return values.where(np.isfinite(values))
 
 
@@ -42,6 +45,40 @@ def _participant_side(frame, side):
     return count, volume.where(vol_known), value.where(val_known)
 
 
+def _coherent_side(prices, clients, side):
+    """خام حفظ می‌شود؛ حدود هر سمت و میانگین قیمت از واحد ریال مستقل کنترل می‌شوند.
+
+    تحمل جمع: یک ریال یا یک میلیونیم کل؛ تحمل قیمت ضمنی: یک ریال.
+    نبود حقوقی، جمع کامل را تأیید نمی‌کند اما کنترل مستقل حقیقی را حذف نمی‌کند.
+    """
+    count, retail_volume, retail_value = _participant_side(clients, side)
+    total_volume, total_value = _number(prices, 'volume'), _number(prices, 'value')
+    legal_volume, legal_value = _number(clients, f'{side}_n_volume'), _number(clients, f'{side}_n_value')
+    vol_tol, value_tol = np.maximum(1., total_volume.abs()*1e-6), np.maximum(1., total_value.abs()*1e-6)
+    volume_ok = (total_volume >= 0) & (retail_volume <= total_volume + vol_tol)
+    legal_vol_present = legal_volume.notna()
+    volume_ok &= (~legal_vol_present | ((legal_volume >= 0)
+                  & ((retail_volume + legal_volume - total_volume).abs() <= vol_tol)))
+    low, high = _number(prices, 'low_raw'), _number(prices, 'high_raw')
+    range_ok = (low > 0) & (high >= low)
+    implied = _divide(retail_value, retail_volume)
+    price_ok = ((retail_volume == 0) & (retail_value == 0)) | (range_ok & implied.between(low-1., high+1.))
+    market_price = _divide(total_value, total_volume)
+    market_ok = ((total_value == 0) & (total_volume == 0)) | (range_ok & market_price.between(low-1., high+1.))
+    value_ok = volume_ok & market_ok & (total_value >= 0) & (retail_value <= total_value + value_tol) & price_ok
+    legal_present = legal_value.notna()
+    value_ok &= (~legal_present | ((legal_value >= 0)
+                 & ((retail_value + legal_value - total_value).abs() <= value_tol)))
+    legal_price = _divide(legal_value, legal_volume)
+    legal_price_ok = ((legal_volume == 0) & (legal_value == 0)) | (range_ok & legal_price.between(low-1., high+1.))
+    value_ok &= (~(legal_present & legal_vol_present) | legal_price_ok)
+    known = retail_value.notna() & retail_volume.notna() & total_value.notna() & total_volume.notna()
+    reason = pd.Series(np.where(value_ok, 'verified_component',
+                       np.where(known, 'inconsistent_totals_or_implied_price', 'missing')), index=prices.index)
+    reason.loc[value_ok & legal_present & legal_vol_present] = 'verified_side_total'
+    return count, retail_volume.where(volume_ok), retail_value.where(value_ok), reason
+
+
 def _one_symbol(prices, clients):
     p = prices.sort_values('date').reset_index(drop=True)
     c = p[['date']].merge(clients, on='date', how='left', validate='one_to_one')
@@ -58,8 +95,9 @@ def _one_symbol(prices, clients):
     out['last_vs_official_pp'] = (_divide(last - official, ref) * 100).where(range_known)
     out['range_position'] = _divide(last - low, high - low).where(range_known)
     out['last_above_official'] = (last >= official).astype('boolean').where(range_known & official.notna())
-    buy_count, buy_volume, buy_value = _participant_side(c, 'buy')
-    sell_count, sell_volume, sell_value = _participant_side(c, 'sell')
+    buy_count, buy_volume, buy_value, buy_quality = _coherent_side(p, c, 'buy')
+    sell_count, sell_volume, sell_value, sell_quality = _coherent_side(p, c, 'sell')
+    out['client_buy_value_quality'], out['client_sell_value_quality'] = buy_quality, sell_quality
     buy_cap, sell_cap = _divide(buy_value, buy_count), _divide(sell_value, sell_count)
     out['per_capita_buy_rial'], out['per_capita_sell_rial'] = buy_cap, sell_cap
     out['buyer_power_value'] = _divide(buy_cap, sell_cap)
@@ -121,8 +159,8 @@ def filter_conditions(metrics: pd.DataFrame, name: str) -> pd.DataFrame:
     conditions = {}
 
     def compare(label, left, op, right):
-        a = _number(metrics, left)
-        b = _number(metrics, right) if isinstance(right, str) else pd.Series(right, index=metrics.index)
+        a = _number(metrics, left, allow_boolean=True)
+        b = _number(metrics, right, allow_boolean=True) if isinstance(right, str) else pd.Series(right, index=metrics.index)
         known = a.notna() & b.notna()
         conditions[label] = getattr(a, op)(b).astype('boolean').where(known)
 

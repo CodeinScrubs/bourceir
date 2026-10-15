@@ -73,6 +73,9 @@ def page_flow_lab():
             'نامعلوم' if pd.isna(v) else 'برقرار' if v else 'برقرار نیست' for v in checks]}),
             hide_index=True, width='stretch')
         values = selected.iloc[0]
+        st.caption('کیفیت ارزش حقیقی: خرید '+str(values.get('client_buy_value_quality'))+
+                   '؛ فروش '+str(values.get('client_sell_value_quality'))+
+                   '. جمع هر سمت و قیمت ضمنی با داده روز کنترل می‌شود؛ ناسازگاری به مقدار نامعلوم تبدیل می‌شود.')
         st.caption('سرانه ارزشی از ارزش واقعی خرید/فروش حقیقی تقسیم بر تعداد همان سمت محاسبه شده؛ '
                    'قدرت حجمی از حجم محاسبه می‌شود. برابر بودن آن‌ها فرض نشده است.')
         caps = {label: values.get(key) for label, key in {

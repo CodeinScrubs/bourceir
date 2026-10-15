@@ -21,7 +21,7 @@ def flow_baseline(db, tmp_path, monkeypatch):
         p.loc[index, ['volume', 'value', 'low_raw', 'high_raw', 'close_raw', 'close_final_raw']] = [400_000_000., 400_000_000.*(price-10), 1000., price, price, price-10]
         p.loc[index+1, 'ref_price_raw'] = price-10
         c.loc[index, ['buy_i_volume', 'buy_n_volume', 'sell_i_volume']] = [320_000_000., 80_000_000., 200_000_000.]
-        c.loc[index, ['buy_i_value', 'sell_i_value']] = [p.loc[index, 'value']*.9, p.loc[index, 'value']*.2]
+        c.loc[index, ['buy_i_value', 'sell_i_value']] = [p.loc[index, 'value']*.8, p.loc[index, 'value']*.5]
     c = c.drop(index=[120])
     for code, symbol in [(300, 'الف'), (303, 'ب'), (300, 'ج')]:
         sid = db.upsert_symbol(dict(symbol_fa=symbol, ins_code=symbol, instrument_type_code=code))

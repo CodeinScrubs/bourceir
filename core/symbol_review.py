@@ -6,7 +6,7 @@ import pandas as pd
 from core import market_rules
 from core.data_quality import quant_anomaly_flags
 
-SYMBOL_REVIEW_VERSION = 'symbol-review-v1'
+SYMBOL_REVIEW_VERSION = 'symbol-review-v2'
 
 
 def volume_comparability(prices: pd.DataFrame, prior_sessions: int) -> pd.Series:
@@ -20,9 +20,11 @@ def volume_comparability(prices: pd.DataFrame, prior_sessions: int) -> pd.Series
     factors = market_rules.corporate_action_factors(prices)
     transition_ok = factors.eq(1).where(factors.notna()).astype(float)
     if 'symbol' in prices:
+        enough = prices.groupby('symbol', sort=False).cumcount() >= prior_sessions
         return transition_ok.groupby(prices.symbol, sort=False).transform(
-            lambda s: s.rolling(prior_sessions, min_periods=prior_sessions).sum()).eq(prior_sessions)
-    return transition_ok.rolling(prior_sessions, min_periods=prior_sessions).sum().eq(prior_sessions)
+            lambda s: s.rolling(prior_sessions, min_periods=prior_sessions).sum()).eq(prior_sessions) & enough
+    enough = pd.Series(np.arange(len(prices)) >= prior_sessions, index=prices.index)
+    return transition_ok.rolling(prior_sessions, min_periods=prior_sessions).sum().eq(prior_sessions) & enough
 
 
 def review_history(prices: pd.DataFrame, clients: pd.DataFrame) -> dict:
