@@ -38,6 +38,6 @@ def document_archive_panel(job_panel):
             st.download_button('دریافت فایل محفوظ', (folder / checked['content_file']).read_bytes(),
                                file_name=checked['content_file'], key=checked['snapshot_id'])
             if checked['links']:
-                st.caption('پیوندهای عمومی داخل این نسخه؛ محتوای آن‌ها هنوز دریافت نشده است:')
+                st.caption('پیوندهای عمومی این نسخه؛ فایل پیوندشده یک دریافت مستقل می‌خواهد:')
                 for index, link in enumerate(checked['links'], start=1):
                     st.link_button(f'باز کردن پیوند عمومی {index}', link)
