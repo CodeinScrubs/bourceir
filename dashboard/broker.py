@@ -53,6 +53,11 @@ def page_broker():
     pct = summary['broker_return_pct']
     d.metric('بازده نمای سبد فارابی', 'نامعلوم' if pct is None else f'{pct:+.2f}٪')
     st.caption('سود/زیان و خالص میانگین، فیلدهای گزارش فارابی هستند؛ بازده کل حساب با واریز، برداشت و سود نقدی هنوز تأیید نشده است.')
+    accounting = report['accounting_review']
+    if accounting['nonpositive_cost_symbols']:
+        st.info('جمع خرید یا خالص میانگین بعضی دارایی‌ها صفر یا منفی گزارش شده است. این عدد به‌تنهایی به معنی '
+                'برگشت اصل سرمایه یا سود رایگان نیست؛ تاریخچه خرید، فروش و اقدامات شرکتی باید تطبیق داده شود.')
+    st.caption('سهم و حق‌تقدم به‌صورت خودکار یک معامله فرض نمی‌شوند؛ مبلغ پرداخت و مهلت استفاده فقط با اطلاعیه همان رویداد قابل تأیید است.')
     if report.get('phase'):
         phase = report['phase']
         st.write(f"سرمایه مبنای مرحله جدید: {_toman(phase['capital_rial'])}؛ سقف زیان: {_toman(phase['max_loss_rial'])}؛ "
@@ -73,6 +78,9 @@ def page_broker():
         'خالص میانگین فارابی (ریال)': positions['broker_net_average_rial'],
         'سود/زیان فارابی (تومان)': positions['broker_pnl_rial'] / 10,
         'بازده فارابی (٪)': positions['broker_return_pct'],
+        'وضعیت هزینه گزارش‌شده': positions['broker_cost_state'].map({
+            'requires_history_reconciliation': 'صفر/منفی؛ نیازمند تطبیق سابقه',
+            'positive_broker_cost': 'مثبت؛ تأیید بازده اقتصادی نیست'}),
     })
     st.dataframe(view, hide_index=True)
     st.bar_chart(positions.set_index('symbol_fa')['weight_pct'].head(10), x_label='نماد', y_label='وزن سبد (٪)')

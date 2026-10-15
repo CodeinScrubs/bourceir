@@ -93,6 +93,7 @@ class PerformanceMetrics:
     blocked_orders: int = 0            # سفارش‌هایی که به دلیل صف قفل اجرا نشدند
     corporate_action_events: int = 0   # دفعاتی که پوزیشن باز از روز اقدام شرکتی عبور کرد
     corporate_action_receivable: float = 0.0  # ارزش کسر سهم پس از تعدیل اقدام شرکتی (ریال، جزو ارزش نهایی)
+    corporate_action_receivable_cost: float = 0.0  # بهای طلب غیرنقدی؛ از بهای معاملات بسته خارج است
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)
     execution_model: str = "daily_aggregate_proxy"
     corporate_action_assumption: str = "reference_ratio_share_multiplier"

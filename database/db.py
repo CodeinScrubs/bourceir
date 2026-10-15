@@ -644,6 +644,17 @@ class DatabaseManager:
             return bool(row["is_trading_day"])
         return datetime.strptime(date_str, "%Y-%m-%d").weekday() in settings.TRADING_DAYS
 
+    def get_market_calendar(self) -> Dict[str, bool]:
+        """Read recorded session exceptions; never infer closures from absent price rows."""
+        rows = self.conn.execute('SELECT calendar_date, is_trading_day FROM market_calendar ORDER BY calendar_date')
+        calendar = {}
+        for row in rows:
+            day, status = row['calendar_date'], row['is_trading_day']
+            if datetime.strptime(day, '%Y-%m-%d').date().isoformat() != day or status not in (0, 1):
+                raise ValueError('رکورد تقویم بازار نامعتبر است')
+            calendar[day] = bool(status)
+        return calendar
+
     def insert_corporate_action(self, symbol_id: int, event_date: str, event_type: str,
                                 adjustment_factor: float = 1.0, cash_dividend: float = 0.0,
                                 capital_increase_pct: float = 0.0, description: Optional[str] = None) -> bool:

@@ -172,20 +172,24 @@ def cmd_update(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector(symbols=_symbols(args.symbols))
-    print("📥 به‌روزرسانی داده‌ها آغاز شد...", flush=True)
-    reports = collector.update_all(full=args.full, progress=_progress)
-    titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
-    for key, report in reports.items():
-        _print_report(titles.get(key, key), report)
-    complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
-    # داده اصلی ناقص، مجوز انتشار نسل تازه فیچر نیست؛ کدال ورودی این فیچرها نیست.
-    usable = all(r.get("status") in {'success', 'skipped'} for k, r in reports.items() if k != "codal")
-    if usable and not args.symbols and not args.no_features:
-        _build_features(collector.db)
-    elif not usable:
-        print("⚠️ داده اصلی ناقص/ناموفق بود؛ انبار فیچر تازه منتشر نشد.", flush=True)
-    collector.db.close()
-    return 0 if complete else 1
+    try:
+        print("📥 به‌روزرسانی داده‌ها آغاز شد...", flush=True)
+        reports = collector.update_all(full=args.full, progress=_progress)
+        titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
+        for key, report in reports.items():
+            _print_report(titles.get(key, key), report)
+        complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
+        # Validated daily history/client types are required; the session watch is supplemental.
+        # Its failure remains visible in reports/exit status, never relabeled as success.
+        usable = all(r.get("status") in {'success', 'skipped'} for k, r in reports.items()
+                     if k not in {"codal", "session_candles"})
+        if usable and not args.symbols and not args.no_features:
+            _build_features(collector.db)
+        elif not usable:
+            print("⚠️ داده اصلی ناقص/ناموفق بود؛ انبار فیچر تازه منتشر نشد.", flush=True)
+        return 0 if complete else 1
+    finally:
+        collector.db.close()
 
 
 def _build_features(db) -> dict:

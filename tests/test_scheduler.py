@@ -84,8 +84,13 @@ def test_market_snapshot_failure_is_logged_not_faked(db):
     assert db.conn.execute("SELECT COUNT(*) FROM snapshots;").fetchone()[0] == 0
 
 
-def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_daily):
+def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_daily, monkeypatch):
     """کندل روز از دیده‌بان بازار؛ تاریخ از آخرین روز معاملاتی رسمی گرفته می‌شود (نه ساعت سیستم)."""
+    from datetime import datetime
+
+    from core.timeutils import TEHRAN_TZ
+
+    monkeypatch.setattr('data_collector.scheduler.now_tehran', lambda: datetime(2026, 10, 11, 14, tzinfo=TEHRAN_TZ))
     routes = {
         "GetMarketWatch": {"marketwatch": market_watch_rows},
         "GetClosingPriceInfo": {"closingPriceInfo": {"finalLastDate": 20261011}},
@@ -95,8 +100,6 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
     collector.sync_universe()
     collector.collect_history(symbols=["فولاد"])
     report = collector.collect_session_candles()
-    if report["status"] == "skipped":  # اجرای آزمون در روز ۱۹ مهر ۱۴۰۵ قبل از ساعت ۱۳
-        return
     assert report["market_date"] == "2026-10-11" and report["symbols_succeeded"] == 2
     row = db.get_daily_prices_df("فولاد").set_index("date").loc["2026-10-11"]
     assert (row["close_final_raw"], row["ref_price_raw"], row["high_raw"]) == (4180.0, 4100.0, 4220.0)

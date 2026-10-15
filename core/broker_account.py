@@ -47,7 +47,7 @@ def compare_trade_cash(ledger_rows, export_rows):
                 complete_execution_history_verified=False)
 
 
-def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), baseline=None):
+def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), baseline=None, calendar=None):
     if portfolio is None:
         return None
     rows, summary = portfolio['rows'], portfolio['summary']
@@ -62,7 +62,11 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                 'sector_code': quote.get('sector_code') if quote else None,
                 'instrument_type_code': quote.get('instrument_type_code') if quote else None,
                 'research_scope_eligible': quote.get('instrument_type_code') in (300, 303) if quote else None,
-                'archive_session_current': bool(quote and current_daily_row(quote.get('date')))}
+                'archive_session_current': bool(quote and current_daily_row(quote.get('date'), calendar=calendar)),
+                'broker_cost_state': ('requires_history_reconciliation'
+                    if row['buy_total_rial'] <= 0 or row['broker_net_average_rial'] <= 0
+                    else 'positive_broker_cost'),
+                'economic_return_pct': None}
         if not quote or quote.get('close_raw') is None:
             item['price_check'] = 'missing_archive'
         elif row['last_price_rial'] != quote['close_raw']:
@@ -80,6 +84,11 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                   price_checks=dict(Counter(x['price_check'] for x in positions)),
                   actual_history_complete=False, trade_recommendations_enabled=False,
                   total_account_return=None, cash_available_rial=summary['buying_power_rial'])
+    report['accounting_review'] = dict(
+        nonpositive_cost_symbols=[p['symbol_fa'] for p in positions
+                                  if p['broker_cost_state'] == 'requires_history_reconciliation'],
+        zero_cost_proves_recovered_capital=False, corporate_action_linkage_verified=False,
+        subscription_deadlines_verified=False)
     report['concentration'] = dict(top_two_weight_pct=sum(p['value_rial'] for p in positions[:2]) / total * 100 if total else None,
                                    top_ten_weight_pct=sum(p['value_rial'] for p in positions[:10]) / total * 100 if total else None)
     if turnover:

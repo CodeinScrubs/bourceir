@@ -36,7 +36,9 @@ def page_flow_lab():
     st.write(f'روز مشترک داده: {to_jalali(date)} — {len(metrics)} نماد عادی فعال دارای ردیف در این روز')
     coverage = int(metrics['buyer_power_value'].notna().sum())
     st.caption(f'قدرت ارزشی قابل محاسبه: {coverage} از {len(metrics)} نماد؛ آمار مفقود یا شمارنده نامعتبر، نامعلوم باقی می‌ماند.')
-    if not current_daily_row(date):
+    with DatabaseManager(read_only=True) as db:
+        calendar = db.get_market_calendar()
+    if not current_daily_row(date, calendar=calendar):
         st.warning('این روز، آخرین جلسه کامل مورد انتظار نیست؛ نتایج آرشیوی‌اند.')
     st.info('نسخه روزانه فقط پس از تکمیل جلسه قابل تفسیر است. برای الگوی منفی به مثبت در ساعت ۹ تا ۱۰:۳۰، '
             'ترتیب معاملات، تاریخچه هم‌ساعت و دفتر سفارش تازه لازم است؛ داده پایان روز جای آن‌ها را نمی‌گیرد.')
