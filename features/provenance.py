@@ -59,7 +59,8 @@ def feature_logic_fingerprint():
     """Feature computation dependencies, excluding unrelated account/UI/research code."""
     digest = hashlib.sha256()
     files = ('features/daily.py', 'features/market.py', 'features/store.py', 'features/provenance.py',
-             'core/market_rules.py', 'core/text.py', 'core/timeutils.py', 'database/db.py', 'config/settings.py')
+             'core/market_rules.py', 'core/client_quality.py', 'core/text.py', 'core/timeutils.py',
+             'database/db.py', 'config/settings.py')
     for name in files:
         digest.update(name.encode())
         digest.update((settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n'))

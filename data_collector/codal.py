@@ -7,6 +7,7 @@
 می‌شود تا در ساخت فیچر فقط اطلاعیه‌هایی استفاده شوند که قبل از لحظه تصمیم منتشر شده‌اند.
 """
 
+import hashlib
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -15,8 +16,9 @@ from urllib.parse import quote
 import requests
 
 from config import settings
+from core.codal_documents import is_verification_page, pdf_has_valid_ending, public_document_url, visible_document
 from core.text import normalize_fa, normalize_symbol, to_en_digits
-from core.timeutils import jalali_to_iso
+from core.timeutils import jalali_to_iso, now_tehran_iso
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +48,85 @@ class CodalProvider:
                 "letter_code": to_en_digits(letter.get("LetterCode") or "").strip() or None,
                 "sent_at": jalali_to_iso(letter["SentDateTime"]) if letter.get("SentDateTime") else None,
                 "published_at": jalali_to_iso(letter["PublishDateTime"]) if letter.get("PublishDateTime") else None,
-                "url": CODAL_BASE + letter["Url"] if letter.get("Url") else None,
+                "url": CodalProvider._document_link(letter.get("Url")),
+                "attachment_url": CodalProvider._document_link(letter.get("AttachmentUrl")),
+                "pdf_url": CodalProvider._document_link(letter.get("PdfUrl")),
             }
         except Exception as e:
             logger.warning("اطلاعیه کدال نامعتبر نادیده گرفته شد: %s", e)
             return None
+
+    @staticmethod
+    def _document_link(value):
+        if not value:
+            return None
+        try:
+            return public_document_url(value)
+        except ValueError:
+            return None
+
+    def get_document(self, url, *, max_bytes=20*1024*1024):
+        """یک سند عمومی با سقف حجم/زمان؛ کپچا شکست دریافت است و خودکار تکرار نمی‌شود.
+
+        کوکی، سرآیند پاسخ و HTML دارای viewstate ذخیره نمی‌شوند. بدنه فقط در حافظه است.
+        همه تغییرمسیرها پیش از درخواست بعدی کنترل می‌شوند؛ پیوندها خودکار دنبال نمی‌شوند.
+        """
+        source = public_document_url(url)
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 0 < max_bytes <= 20*1024*1024:
+            raise ValueError('حد حجم سند باید عدد صحیح مثبت و حداکثر ۲۰ مگابایت باشد')
+        result = dict(status='error', source_url=source, requested_at=now_tehran_iso())
+        current, started = source, time.monotonic()
+        try:
+            for _ in range(4):
+                remaining = 60 - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise ValueError('زمان دریافت سند از حد مجاز گذشت')
+                timeout = min(self.timeout, remaining)
+                response = self.session.get(current, timeout=(timeout, timeout), stream=True,
+                                            allow_redirects=False, headers={'Accept': 'text/html,application/pdf'})
+                try:
+                    result['http_status'] = response.status_code
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        current = public_document_url(response.headers.get('Location'), base=current)
+                        continue
+                    response.raise_for_status()
+                    if response.status_code != 200:
+                        raise ValueError('پاسخ جزئی یا ناموفق، سند کامل نیست')
+                    length = response.headers.get('Content-Length', '')
+                    if length.isdigit() and int(length) > max_bytes:
+                        raise ValueError('حجم اعلام‌شده سند از حد مجاز گذشت')
+                    size = 0
+                    chunks = []
+                    for chunk in response.iter_content(chunk_size=65536):
+                        size += len(chunk)
+                        if size > max_bytes or time.monotonic()-started > 60:
+                            raise ValueError('حجم یا زمان دریافت سند از حد مجاز گذشت')
+                        chunks.append(chunk)
+                    body = b''.join(chunks)
+                    result.update(effective_url=current, observed_at=now_tehran_iso(),
+                                  response_sha256=hashlib.sha256(body).hexdigest(), response_bytes=size)
+                    if body.startswith(b'%PDF-'):
+                        if not pdf_has_valid_ending(body):
+                            return dict(result, error_reason='invalid_pdf_ending',
+                                        message='PDF پایان معتبر ندارد یا محتوای اضافی پس از پایان آن آمده است؛ محفوظ نشد')
+                        return dict(result, status='captured', format='pdf', content=body, links=[])
+                    # صفحات رسمی جاری UTF-8 هستند؛ خرابی رمزگذاری نباید متن تأییدشده بسازد.
+                    html = body.decode('utf-8-sig')
+                    if is_verification_page(html):
+                        return dict(result, status='verification_required',
+                                    message='کدال تأیید انسانی می‌خواهد؛ در مرورگر خودت تأیید کن')
+                    if not any(tag in html.lower() for tag in ('<html', '<body', '<table')):
+                        raise ValueError('پاسخ سند HTML/PDF معتبر نیست')
+                    text, links = visible_document(html, current)
+                    if not text.strip():
+                        raise ValueError('متن قابل مشاهده‌ای در سند دریافت نشد')
+                    return dict(result, status='captured', format='text', content=text.encode('utf-8'), links=links)
+                finally:
+                    response.close()
+            raise ValueError('تعداد تغییرمسیرهای سند بیش از حد مجاز است')
+        except (requests.RequestException, ValueError, UnicodeError) as exc:
+            logger.warning('دریافت سند عمومی کدال ناموفق بود: %s', type(exc).__name__)
+            return dict(result, error_type=type(exc).__name__, message='دریافت سند معتبر کامل نشد؛ دوباره بررسی شود')
 
     def get_letters(self, page: int = 1, symbol_fa: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """یک صفحه (۲۰ مورد) از جدیدترین اطلاعیه‌ها؛ با تعیین نماد فقط اطلاعیه‌های همان نماد."""

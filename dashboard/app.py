@@ -105,6 +105,8 @@ def symbol_list() -> list:
 @st.cache_data(ttl=60)
 def market_pulse() -> dict:
     """نبض بازار در آخرین روز معاملاتی ثبت‌شده (فقط سهام داخل دامنه پروژه)."""
+    from core.client_quality import coherent_side
+
     with ro_db() as db:
         ids = [s["id"] for s in db.get_universe_symbols()]
     if not ids:
@@ -115,38 +117,46 @@ def market_pulse() -> dict:
         return {}
     df = query_df(
         f"""
-        SELECT dp.*, ct.buy_i_value, ct.sell_i_value
+        SELECT dp.*, ct.buy_i_value, ct.sell_i_value, ct.buy_i_count, ct.sell_i_count,
+               ct.buy_i_volume, ct.sell_i_volume, ct.buy_n_volume, ct.sell_n_volume,
+               ct.buy_n_value, ct.sell_n_value
         FROM daily_prices dp
         LEFT JOIN client_types_daily ct ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date
         WHERE dp.date = ? AND dp.source = 'tsetmc' AND dp.symbol_id IN ({placeholders});
         """, (last, *ids))
     flags = market_rules.lock_flags(df)
     ret = market_rules.pit_daily_returns(df)
+    net = coherent_side(df, df, 'buy')[2] - coherent_side(df, df, 'sell')[2]
     return {
         "date": last, "count": len(df), "up": int((ret > 0).sum()), "down": int((ret < 0).sum()),
         "locked_up": int(flags["locked_up"].sum()), "locked_down": int(flags["locked_down"].sum()),
         "value": float(df["value"].sum()),
-        "real_flow": float((df["buy_i_value"] - df["sell_i_value"]).sum()) if df["buy_i_value"].notna().any() else None,
-        "flow_coverage": int(df["buy_i_value"].notna().sum()),
+        "real_flow": float(net.sum(min_count=1)) if net.notna().any() else None,
+        "flow_coverage": int(net.notna().sum()),
     }
 
 
 @st.cache_data(ttl=60)
 def symbol_daily(symbol: str) -> pd.DataFrame:
+    from core.client_quality import validated_client_data
+
     with ro_db() as db:
         df = db.get_daily_prices_df(symbol)
         ct = db.get_client_types_df(symbol) if not df.empty else pd.DataFrame()
     if df.empty:
         return df
     if not ct.empty:
-        df = df.merge(ct, on="date", how="left")
+        clean = validated_client_data(df, ct)
+        df = df.merge(ct, on="date", how="left", validate="one_to_one")
     df["change_pct"] = market_rules.pit_daily_returns(df) * 100
     df = pd.concat([df, market_rules.lock_flags(df)], axis=1)
     if "buy_i_value" in df.columns:
-        df["real_flow"] = df["buy_i_value"] - df["sell_i_value"]
-        buy = (df["buy_i_value"] / df["buy_i_count"]).where(df["buy_i_count"] > 0)
-        sell = (df["sell_i_value"] / df["sell_i_count"]).where((df["sell_i_count"] > 0) & (df["sell_i_value"] > 0))
+        df["real_flow"] = clean["buy_i_value"] - clean["sell_i_value"]
+        buy = (clean["buy_i_value"] / clean["buy_i_count"]).where(clean["buy_i_count"] > 0)
+        sell = (clean["sell_i_value"] / clean["sell_i_count"]).where((clean["sell_i_count"] > 0) & (clean["sell_i_value"] > 0))
         df["buyer_power"] = (buy / sell).replace([float("inf"), -float("inf")], float("nan"))
+        df['client_buy_value_quality'] = clean['buy_value_quality']
+        df['client_sell_value_quality'] = clean['sell_value_quality']
     df["jalali"] = df["date"].map(lambda d: to_jalali(d, fa_digits=False))
     return df
 
@@ -288,6 +298,9 @@ def page_symbol() -> None:
     if "buyer_power" in view.columns and pd.notna(last.get("buyer_power")):
         m[1].metric("قدرت خریدار حقیقی", fa_num(last["buyer_power"], 2),
                     help="سرانه خرید حقیقی ÷ سرانه فروش حقیقی؛ بزرگ‌تر از ۱ یعنی خریداران درشت‌ترند")
+    elif 'client_buy_value_quality' in view.columns:
+        st.caption('قدرت خریدار نامعلوم است: داده موجود نیست، تقسیم تعریف نشده یا آمار با حجم، ارزش '
+                   'و بازه قیمت روز سازگار نیست. داده خام حفظ شده است.')
     if last["locked_up"]:
         st.info("آخرین روز: الگوی تک‌قیمتی صعودی — تقریب روزانه صف خرید")
     elif last["locked_down"]:
@@ -378,11 +391,9 @@ def page_live() -> None:
         snaps = snaps.copy()
         snaps["change_pct"] = (snaps["last_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
         snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["last_price"] / 1e10
-        snaps["buyer_power"] = (snaps["real_buy_volume"] / snaps["real_buy_count"].where(snaps['real_buy_count'] > 0)) / (
-            snaps["real_sell_volume"].where(snaps['real_sell_volume'] > 0) / snaps["real_sell_count"].where(snaps['real_sell_count'] > 0))
-        snaps["buyer_power"] = snaps["buyer_power"].replace([float("inf"), -float("inf")], float("nan"))
         monitor = DataFreshnessMonitor()
         health = [monitor.inspect_snapshot(row["symbol_fa"], row) for row in snaps.to_dict("records")]
+        snaps["buyer_power"] = [h['buyer_power'] for h in health]
         snaps["freshness"] = [h["status"] for h in health]
         snaps["source_delay"] = [h["delay_seconds"] for h in health]
         view_filter = st.radio("نمایش", ["همه", "فقط صف خرید", "فقط صف فروش", "قدرت خریدار > ۲"], horizontal=True)
@@ -419,6 +430,9 @@ def page_live() -> None:
 
 def page_codal() -> None:
     st.title("📰 اطلاعیه‌های کدال")
+    from dashboard.codal_documents import document_archive_panel
+
+    document_archive_panel(job_panel)
     job_panel("codal", ["codal", "--pages", "10", "--judge"], "دریافت اطلاعیه‌های جدید",
               "جدیدترین اطلاعیه‌های سهام بورس و فرابورس را از کدال می‌گیرد و با هوش مصنوعی Jev "
               "نوع و اثر احتمالی آن‌ها را ارزیابی می‌کند (ارزیابی هوش مصنوعی توصیه خرید/فروش نیست).")
