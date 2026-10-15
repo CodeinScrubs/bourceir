@@ -99,6 +99,7 @@ def test_unsupported_or_inconsistent_structure_fails_closed(mutation):
     html().replace('var datasource = ', 'var datasource = JSON.parse('),
     html().replace(';</script>', ' || evil();</script>'),
     html().replace('"tracingNo": 123', '"tracingNo": NaN'),
+    html(prefix='const pattern = /', suffix='/;'),
 ])
 def test_non_json_duplicate_or_executable_initializer_rejected(body):
     with pytest.raises(ValueError):

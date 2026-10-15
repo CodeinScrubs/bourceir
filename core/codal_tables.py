@@ -80,6 +80,9 @@ def _initializers(script):
         else:
             match = _ASSIGNMENT.match(script, i) if (
                 i == 0 or not (script[i-1].isalnum() or script[i-1] in '_$')) else None
+            # قرارداد محدود: اعلان باید ابتدای یک سطر مستقل باشد؛ متن داخل regex/عبارت اعلان نیست.
+            if match and script[script.rfind('\n', 0, i) + 1:i].strip():
+                raise ValueError('اعلان datasource خارج از ابتدای سطر مستقل پشتیبانی نمی‌شود')
             if match:
                 start = match.end()
                 try:
