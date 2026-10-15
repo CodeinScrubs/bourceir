@@ -7,8 +7,12 @@
 """
 
 import json
+import os
+import re
 import subprocess
 import sys
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +27,8 @@ _OWNED_PROCESSES: Dict[str, subprocess.Popen] = {}
 
 
 def _state_file(name: str) -> Path:
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,79}', name):
+        raise ValueError('نام وظیفه نامعتبر است')
     return JOBS_DIR / f"{name}.json"
 
 
@@ -71,11 +77,47 @@ def job_status(name: str, tail_lines: int = 15) -> Dict[str, Any]:
     }
 
 
+@contextmanager
+def _start_lock(name):
+    """OS lock, released after a crash; prevents check/start races across dashboard processes."""
+    path = _state_file(name).with_suffix('.lock')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as stream:
+        if stream.seek(0, os.SEEK_END) == 0:
+            stream.write(b'0')
+            stream.flush()
+        stream.seek(0)
+        try:
+            if sys.platform.startswith('win'):
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, PermissionError):
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            stream.seek(0)
+            if sys.platform.startswith('win'):
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def start_job(name: str, args: List[str]) -> bool:
     """اجرای brs.py با آرگومان‌های داده‌شده در پس‌زمینه. اگر همین کار در حال اجرا باشد False."""
+    with _start_lock(name) as acquired:
+        return _start_job_locked(name, args) if acquired else False
+
+
+def _start_job_locked(name: str, args: List[str]) -> bool:
     if job_status(name)["running"]:
         return False
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = settings.LOG_DIR / f"job-{name}.log"
     flags = 0
     if sys.platform.startswith("win"):
@@ -91,10 +133,24 @@ def start_job(name: str, args: List[str]) -> bool:
         created_at = psutil.Process(proc.pid).create_time()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         created_at = None
-    _state_file(name).write_text(json.dumps({
-        "pid": proc.pid, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
-        "created_at": created_at,
-    }, ensure_ascii=False), encoding="utf-8")
+    state = _state_file(name)
+    temporary = state.with_name(f'{state.stem}-{uuid.uuid4().hex}.tmp')
+    try:
+        temporary.write_text(json.dumps({
+            "pid": proc.pid, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
+            "created_at": created_at,
+        }, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, state)
+    except OSError:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        _OWNED_PROCESSES.pop(name, None)
+        temporary.unlink(missing_ok=True)
+        raise
     return True
 
 

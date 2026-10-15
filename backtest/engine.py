@@ -414,6 +414,11 @@ class BacktestEngine:
             high = row["high_raw"] if "high_raw" in row and pd.notna(row["high_raw"]) else None
 
             # ۰. اقدام شرکتی روی پوزیشن باز (قیمت مرجع امروز ≠ قیمت پایانی دیروز)
+            pos = self.positions.get(symbol_fa)
+            if pos and pos.quantity > 0 and any(c.endswith('_raw') for c in prices_df.columns) and not self._valid_number(row.get('ref_price_raw')):
+                raise ValueError(f"قیمت مرجع پوزیشن باز در {date_str} نامعلوم/نامعتبر است؛ بازده قابل محاسبه نیست")
+            if pos and pos.quantity > 0 and not self._valid_number(row['_mark']):
+                raise ValueError(f"قیمت ارزش‌گذاری پوزیشن باز در {date_str} نامعلوم است؛ بازده قابل محاسبه نیست")
             if "ref_price_raw" in row and pd.notna(row["ref_price_raw"]):
                 self.apply_corporate_action(symbol_fa, float(row["ref_price_raw"]), date_str)
 

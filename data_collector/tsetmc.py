@@ -149,7 +149,23 @@ class TsetmcProvider(BaseDataProvider):
         rows = (data or {}).get("marketwatch", [])
         activity = {str(r.get("insCode")): float(r.get("qtc") or 0) for r in rows}
         if rows and any(r.get("yVal") is not None for r in rows):
-            universe = [self._meta_from_market_watch(r) for r in rows if self.is_in_scope(r.get("lva", ""), r.get("yVal"))]
+            universe = []
+            for row in rows:
+                symbol = normalize_symbol(row.get('lva', ''))
+                if settings.UNIVERSE['exclude_block_boards'] and symbol[-1:].isdigit():
+                    continue
+                meta = self._meta_from_market_watch(row)
+                if row.get('yVal') is None:
+                    cached = known.get(str(row.get('insCode')))
+                    info = cached if cached and cached.get('instrument_type_code') is not None else self.get_instrument_info(str(row.get('insCode')))
+                    if not info or info.get('instrument_type_code') is None:
+                        logger.error('نوع ابزار %s در پاسخ مختلط نامعلوم است؛ فهرست ناقص منتشر نشد', symbol)
+                        return []
+                    for key in ('instrument_type_code', 'flow', 'market', 'board_code', 'sector_code', 'sector_name'):
+                        if info.get(key) is not None:
+                            meta[key] = info[key]
+                if self.is_in_scope(meta['symbol_fa'], meta.get('instrument_type_code')):
+                    universe.append(meta)
             logger.info("جامعه سهام (مسیر سریع): %d نماد.", len(universe))
             return self._dedupe_by_symbol(universe, activity)
 
@@ -179,12 +195,12 @@ class TsetmcProvider(BaseDataProvider):
                         meta[key] = cached[key]
             else:
                 meta = self.get_instrument_info(ins_code)
-                if meta is None:
+                if meta is None or meta.get('instrument_type_code') is None:
                     failed += 1
                     continue
             if self.is_in_scope(meta["symbol_fa"], meta.get("instrument_type_code")):
                 universe.append(meta)
-        if failed > max(10, len(candidates) // 10):
+        if failed:
             logger.error("مشخصات %d نماد دریافت نشد؛ فهرست ناقص کنار گذاشته شد.", failed)
             return []
         logger.info("جامعه سهام (مسیر پشتیبان): %d نماد.", len(universe))
@@ -273,8 +289,10 @@ class TsetmcProvider(BaseDataProvider):
                 if data is None:
                     failed += 1   # یک روز خراب نباید آمار بقیه روزها را از بین ببرد؛ اجرای بعدی دوباره امتحان می‌شود
                     continue
-                if (data.get("clientType") or {}).get("recDate"):
+                if (data.get("clientType") or {}).get("recDate") and deven_to_iso(data['clientType']['recDate']) == day:
                     rows.append(data["clientType"])
+                else:
+                    failed += 1
             if dates and failed == len(dates):
                 return None   # هیچ درخواستی موفق نشد (احتمالاً قطعی شبکه)
         else:

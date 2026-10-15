@@ -1,0 +1,9 @@
+{
+  "name": "brs-farabi-capture-runtime",
+  "version": "0.6.3",
+  "private": true,
+  "description": "Locked, local-only browser runtime for read-only Farabi report capture",
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

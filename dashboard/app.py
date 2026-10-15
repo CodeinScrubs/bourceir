@@ -176,7 +176,7 @@ def latest_snapshots() -> pd.DataFrame:
 # ═══════════════════════════════════════════════
 
 JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه",
-              "research-dip": "آزمون روش خرید در اصلاح"}
+              "research-dip": "آزمون روش خرید در اصلاح", 'research-portfolio': 'پژوهش پرتفوی با نقد مشترک'}
 
 
 def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
@@ -184,7 +184,7 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
     cols = st.columns([2, 1])
     with cols[0]:
         if status["running"]:
-            st.info(f"⏳ «{JOB_LABELS[name]}» در حال اجراست...")
+            st.info(f"⏳ «{JOB_LABELS.get(name, name)}» در حال اجراست...")
         elif status["started_at"]:
             st.caption(f"آخرین اجرا: {to_jalali(status['started_at'], with_time=True)}")
         st.caption(help_text)
@@ -464,13 +464,26 @@ def page_research() -> None:
     with portfolio_tab:
         job_panel("research-portfolio", ["research-portfolio"], "اجرای پژوهش سرمایه مشترک",
                   "از ورودی محفوظ پژوهش پایه استفاده می‌کند؛ انتخاب روش فقط با گذشته و آزمون در برش بعد. "
-                  "دوره نهایی بسته می‌ماند و این خروجی مجوز سیگنال نیست.")
+                  "قاعده ثابت اصلاح ۲٪ با هدف ۳٪ هم با نقد مشترک و فشار اجرا مقایسه می‌شود. دوره نهایی بسته می‌ماند.")
         report = latest_research_report("latest-portfolio.json")
         st.markdown(report) if report else st.info("ابتدا پژوهش پایه و سپس پژوهش سرمایه مشترک را اجرا کنید.")
 
 
 def page_health() -> None:
     st.title("🩺 سلامت سامانه")
+    with st.expander('کیفیت ثبت داده درون‌روزی'):
+        st.caption('این گزارش فقط داده ثبت‌شده را توصیف می‌کند؛ زمان مستقل عمق بازار، وضعیت مجاز معاملات و پرشدن سفارش خودمان هنوز تأیید نشده‌اند.')
+        if st.button('بررسی کیفیت آخرین جلسه ثبت‌شده'):
+            from ops.intraday_audit import audit_intraday
+            with ro_db() as db:
+                quality = audit_intraday(db)
+            if quality['rows']:
+                st.write(f"روز: {to_jalali(quality['session_date'])} | {quality['rows']:,} اسنپ‌شات | {quality['symbols']} نماد")
+                st.write(f"زمان قیمت نامعلوم: {quality['timestamp_unknown_rows']:,} | قیمت قدیمی هنگام دریافت: {quality['provider_stale_rows']:,}")
+                st.dataframe(pd.DataFrame(quality['per_symbol']).rename(columns={'symbol': 'نماد', 'rows': 'تعداد مشاهده',
+                    'gap_p95_seconds': 'صدک ۹۵ فاصله دریافت (ثانیه)', 'max_gap_seconds': 'بیشترین فاصله دریافت (ثانیه)'}), hide_index=True)
+            else:
+                st.info('هنوز اسنپ‌شات واقعی برای بررسی وجود ندارد.')
     if st.button("اجرای عیب‌یابی کامل (اینترنت، پروکسی، دیتابیس، هوش مصنوعی)", type="primary"):
         from ops.doctor import run_doctor
 

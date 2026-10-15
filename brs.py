@@ -178,12 +178,12 @@ def cmd_update(args) -> int:
     for key, report in reports.items():
         _print_report(titles.get(key, key), report)
     complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
-    # یک یا دو نماد ناموفق (قطعی لحظه‌ای شبکه) نباید فیچر کل بازار را کهنه بگذارد؛ فقط شکست کامل یک بخش مانع است
-    usable = not any(r.get("status") == "failed" for k, r in reports.items() if k != "codal")
+    # داده اصلی ناقص، مجوز انتشار نسل تازه فیچر نیست؛ کدال ورودی این فیچرها نیست.
+    usable = all(r.get("status") in {'success', 'skipped'} for k, r in reports.items() if k != "codal")
     if usable and not args.symbols and not args.no_features:
         _build_features(collector.db)
     elif not usable:
-        print("⚠️ بخشی از به‌روزرسانی کاملاً ناموفق بود؛ انبار فیچر ساخته نشد.", flush=True)
+        print("⚠️ داده اصلی ناقص/ناموفق بود؛ انبار فیچر تازه منتشر نشد.", flush=True)
     collector.db.close()
     return 0 if complete else 1
 
@@ -245,19 +245,37 @@ def cmd_research_portfolio(args) -> int:
     from research.portfolio_run import run_portfolio_research
     with DatabaseManager() as db:
         print("🔬 پژوهش سرمایه مشترک و ارزیابی زمانی؛ فقط دوره توسعه...", flush=True)
-        out = run_portfolio_research(db, source_id=args.source)
+        out = run_portfolio_research(db, source_id=args.source, initial_capital_rial=args.capital_rial)
         print(f"   • آزمایش: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
     return 0
+
+
+def cmd_intraday_audit(args) -> int:
+    import json
+
+    from database.db import DatabaseManager
+    from ops.intraday_audit import audit_intraday
+    with DatabaseManager(read_only=True) as db:
+        report = audit_intraday(db, args.date)
+    if args.report:
+        target = Path(args.report).resolve()
+        if not target.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+            raise ValueError('گزارش کیفیت را در data/private/ ذخیره کنید')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+    print(json.dumps({k: v for k, v in report.items() if k != 'per_symbol'}, ensure_ascii=False, indent=2, allow_nan=False))
+    return 0 if report['rows'] else 1
 
 
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector()
-    _print_report("جامعه سهام", collector.sync_universe())
+    report = collector.sync_universe()
+    _print_report("جامعه سهام", report)
     collector.db.close()
-    return 0
+    return 0 if report.get('status') == 'success' else 1
 
 
 def cmd_live(args) -> int:
@@ -272,6 +290,7 @@ def cmd_live(args) -> int:
         collector.db.close()
         raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
     cycles = 0
+    returncode = 0
     print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
     try:
         while True:
@@ -282,7 +301,9 @@ def cmd_live(args) -> int:
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
             else:
                 report = collector.collect_market_snapshot(symbols=_symbols(args.symbols))
-                print(f"[{now}] ✅ ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
+                success = report.get('status') == 'success'
+                returncode = max(returncode, 0 if success else 1)
+                print(f"[{now}] {'✅' if success else '⚠️'} {report.get('status')} | ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
                       f"{report.get('unchanged_skipped', 0)} | رد شده {report['symbols_failed']}", flush=True)
             cycles += 1
             if args.cycles and cycles >= args.cycles:
@@ -293,21 +314,22 @@ def cmd_live(args) -> int:
         print("\n🛑 پایش زنده متوقف شد.")
     finally:
         collector.db.close()
-    return 0
+    return returncode
 
 
 def cmd_codal(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector()
-    _print_report("کدال", collector.collect_announcements(pages=args.pages, symbol_fa=args.symbol))
+    report = collector.collect_announcements(pages=args.pages, symbol_fa=args.symbol)
+    _print_report("کدال", report)
     if args.judge:
         from ai.codal_judge import judge_pending_announcements
 
         result = judge_pending_announcements(collector.db, limit=args.limit)
         print(f"\n🤖 ارزیابی هوش مصنوعی: {result}")
     collector.db.close()
-    return 0
+    return 0 if report.get('status') == 'success' else 1
 
 
 def cmd_backup(args) -> int:
@@ -366,7 +388,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("research-portfolio", help="پژوهش سرمایه مشترک چندنماد و ارزیابی زمانی؛ فقط دوره توسعه")
     p.add_argument("--source", default=None, help="شناسه پژوهش پایه ثبت‌شده؛ پیش‌فرض آخرین اجرای موفق")
+    p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی پژوهش به ریال؛ مستقل از گزارش حساب')
     p.set_defaults(func=cmd_research_portfolio)
+
+    p = sub.add_parser('intraday-audit', help='بررسی محلی کیفیت ثبت داده درون‌روزی؛ بدون تحلیل سود')
+    p.add_argument('--date', default=None, help='روز میلادی؛ پیش‌فرض آخرین روز ثبت اسنپ‌شات')
+    p.add_argument('--report', default=None, help='فایل JSON اختیاری در data/private/')
+    p.set_defaults(func=cmd_intraday_audit)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)

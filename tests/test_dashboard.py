@@ -90,6 +90,15 @@ def test_root_app_renders_on_every_run(dashboard_db):
         assert any("BRS" in t.value for t in at.title)
 
 
+def test_running_portfolio_job_has_a_label_and_does_not_crash(dashboard_db, monkeypatch):
+    monkeypatch.setattr(jobs, 'job_status', lambda name: dict(running=name == 'research-portfolio',
+        started_at=None, log_tail=[], returncode=None))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔬 پژوهش').run()
+    assert not at.exception
+    assert any('پرتفوی' in item.value for item in at.info)
+
+
 def test_research_page_while_job_is_running(dashboard_db, monkeypatch):
     from ops import jobs
     monkeypatch.setattr(jobs, 'job_status', lambda name: dict(running=name == 'research', started_at=None,

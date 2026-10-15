@@ -6,6 +6,8 @@ from typing import Optional
 
 from config import settings
 from core.market_rules import breakeven_move
+from core.screening import current_snapshot
+from core.timeutils import is_market_open, now_tehran
 
 
 def finite_number(value, *, positive=True) -> float:
@@ -35,12 +37,54 @@ class RiskProfile:
         return self.capital_rial - self.max_loss_rial
 
 
+def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=None):
+    """A fresh visible ask is necessary, never proof of a fill or a future exit.
+
+    Provider time is the quote/trade time supplied by TSETMC; no independent book clock,
+    instrument trading-state feed or queue priority is available in this snapshot format.
+    """
+    at = at or now_tehran()
+    blockers, caps = [], {}
+    if at.tzinfo is None:
+        raise ValueError('زمان باید دارای منطقه زمانی باشد')
+    if not is_market_open(at):
+        blockers.append('بازار خارج از ساعات معاملات است')
+    if not snapshot:
+        return ['اسنپ‌شات تازه عمق بازار موجود نیست'] + blockers, caps
+    for name in ('provider_timestamp', 'captured_at'):
+        if not current_snapshot(snapshot.get(name), at):
+            blockers.append('زمان قیمت یا دریافت عمق بازار تازه تأیید نشده است')
+            break
+    try:
+        keys = ('price_limit_down', 'price_limit_up', 'ask_price_1', 'ask_vol_1',
+                'ask_count_1', 'bid_price_1', 'bid_vol_1', 'bid_count_1', 'last_price', 'value', 'volume')
+        numbers = {key: finite_number(snapshot.get(key)) for key in keys}
+        lower, upper, ask, bid = [numbers[key] for key in ('price_limit_down', 'price_limit_up', 'ask_price_1', 'bid_price_1')]
+        if not lower <= bid <= ask <= upper or not lower <= entry_rial <= upper or not lower <= numbers['last_price'] <= upper:
+            blockers.append('مظنه یا قیمت ورود با دامنه مجاز امروز سازگار نیست')
+        if entry_rial < ask:
+            blockers.append('در قیمت ورود انتخابی عرضه قابل مشاهده وجود ندارد')
+        caps['displayed_ask'] = math.floor(numbers['ask_vol_1'])
+        participation = min(0.05, settings.BACKTEST_CONFIG['max_volume_participation_pct'])
+        participation_price = max(entry_rial, finite_number(buy_price_rial) if buy_price_rial is not None else entry_rial)
+        caps['intraday_value'] = math.floor(numbers['value'] * participation / participation_price)
+        caps['intraday_volume'] = math.floor(numbers['volume'] * participation)
+        for key in ('buy_queue_volume', 'sell_queue_volume'):
+            if finite_number(snapshot.get(key), positive=False) > 0:
+                blockers.append('صف در داده تازه مشاهده شد؛ امکان اجرای برنامه درون‌روزی تأیید نشده است')
+                break
+    except ValueError:
+        blockers.append('عرضه، تقاضا یا دامنه/ارزش معاملات امروز نامعلوم یا نامعتبر است')
+    return blockers, caps
+
+
 def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, target_rial: float,
                trade_loss_budget_rial: float, available_cash_rial: float, equity_rial: float,
                daily_value_rial: Optional[float], reserved_risk_rial: float = 0,
                requested_quantity: Optional[int] = None, data_current: bool = False,
                account_complete: bool = False, slippage_bps: Optional[float] = None,
-               locked_up: bool = False, locked_down: bool = False) -> dict:
+               locked_up: bool = False, locked_down: bool = False,
+               intraday: bool = False, intraday_snapshot: Optional[dict] = None, at=None) -> dict:
     """Size an explicitly user-specified plan under cash, total-loss and participation constraints.
 
     Stop execution is a scenario, not a bound on real losses. Unknown liquidity/freshness/account
@@ -58,6 +102,11 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
         raise ValueError("لغزش باید کمتر از صد درصد باشد")
     buy, sell = settings.FEES["buy"], settings.FEES["sell"]
     buy_price, exit_stop, exit_target = entry * (1 + slip), stop * (1 - slip), target * (1 - slip)
+    if intraday and intraday_snapshot:
+        try:
+            buy_price = min(buy_price, finite_number(intraday_snapshot.get('price_limit_up')))
+        except ValueError:
+            pass  # The live guard below blocks an unknown/invalid band.
     cost = buy_price * (1 + buy)
     loss = cost - exit_stop * (1 - sell)
     reward = exit_target * (1 - sell) - cost
@@ -67,7 +116,7 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
         blockers.append("داده قیمت/نقدشوندگی به‌روز تأیید نشده است")
     if not account_complete:
         blockers.append("کامل بودن نقدینگی و پوزیشن‌های این دفتر تأیید نشده است")
-    if locked_up or locked_down:
+    if not intraday and (locked_up or locked_down):
         blockers.append("قفل صف در آخرین داده مشاهده شده است؛ امکان ورود/خروج تأیید نشده است")
     if remaining <= 0:
         blockers.append("سقف زیان کل یا بودجه ریسک باقیمانده مصرف شده است")
@@ -79,6 +128,18 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
         blockers.append("ارزش معاملات معتبر برای کنترل نقدشوندگی موجود نیست")
     caps = {"cash": math.floor(cash / cost), "loss_budget": math.floor(min(budget, remaining) / loss),
             "liquidity": math.floor(daily_value * participation / buy_price) if daily_value else 0}
+    if intraday:
+        live_blockers, live_caps = intraday_entry_constraints(intraday_snapshot, entry, at=at, buy_price_rial=buy_price)
+        blockers.extend(live_blockers)
+        caps.update(live_caps)
+        if intraday_snapshot:
+            try:
+                lower = finite_number(intraday_snapshot.get('price_limit_down'))
+                upper = finite_number(intraday_snapshot.get('price_limit_up'))
+                if not lower <= stop < entry < target <= upper:
+                    blockers.append('حد خروج یا هدف در دامنه مجاز امروز نیست؛ برنامه همان‌روز قابل محاسبه نیست')
+            except ValueError:
+                pass
     if requested_quantity is not None:
         qty = finite_number(requested_quantity)
         if not qty.is_integer():
@@ -94,4 +155,5 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
             "fee_only_breakeven_pct": breakeven_move(), "participation_cap": participation,
             "fees": {"buy": buy, "sell": sell}, "slippage_bps": slip * 10000,
             "equity_floor_rial": profile.equity_floor_rial, "capital_at_risk_rial": quantity * cost,
-            "stop_guaranteed": False, "calculation_version": "manual-plan-v1"}
+            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v2",
+            "intraday_evidence": dict(intraday_snapshot) if intraday and intraday_snapshot else None}

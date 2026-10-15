@@ -27,7 +27,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-DIP_VERSION = "dip-v2"
+DIP_VERSION = "dip-v3"
 THROUGH_MARGIN = 0.001   # حالت محافظه‌کار: کف روز باید این مقدار از قیمت سفارش پایین‌تر رفته باشد
 
 
@@ -42,8 +42,8 @@ class DipRule:
     def __post_init__(self):
         if not np.isfinite(self.dip) or not 0 < self.dip < 1 or not np.isfinite(self.take_profit) or self.take_profit <= 0:
             raise ValueError("افت خرید و هدف باید محدود و مثبت باشند؛ افت خرید کمتر از یک است")
-        if isinstance(self.hold, bool) or not isinstance(self.hold, (int, np.integer)) or self.hold < 0:
-            raise ValueError("افق نگهداری باید تعداد صحیح و نامنفی جلسه باشد")
+        if isinstance(self.hold, bool) or not isinstance(self.hold, (int, np.integer)) or self.hold < 1:
+            raise ValueError("افق نگهداری باید تعداد صحیح و مثبت جلسه باشد؛ افق صفر با OHLC روزانه پشتیبانی نمی‌شود")
         if self.stop_loss is not None and (not np.isfinite(self.stop_loss) or not 0 < self.stop_loss < 1):
             raise ValueError("فاصله حد زیان باید بین صفر و یک باشد")
         if not isinstance(self.conservative, bool):

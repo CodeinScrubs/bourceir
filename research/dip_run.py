@@ -21,6 +21,7 @@ from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.db import DatabaseManager
 from features.daily import FEATURE_SET_VERSION
+from features.provenance import assert_compatible_inputs
 from features.store import _git_commit, load_feature_snapshot
 from research.baselines import STRATEGIES, pick_top, tolerant_t
 from research.dip import DIP_VERSION, THROUGH_MARGIN, DipRule, simulate
@@ -106,10 +107,12 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
     cfg = settings.RESEARCH_CONFIG
     code_sha = research_code_fingerprint()
     cutoff, start, k = cfg["holdout_start"], cfg["dev_start"], cfg["top_k"]
+    features, feature_manifest = load_feature_snapshot(filters=[("date", ">=", start), ("date", "<", cutoff)])
     own_snapshot = not db.conn.in_transaction
     if own_snapshot:
         db.conn.execute("BEGIN")
     try:
+        assert_compatible_inputs(db, feature_manifest, end_exclusive=cutoff)
         prices = load_prices_until(db, cutoff)
         schema_version = db.schema_version()
     finally:
@@ -118,7 +121,6 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
     if prices.empty:
         raise ValueError("داده قیمت موجود نیست؛ ابتدا به‌روزرسانی داده‌ها را اجرا کنید")
     calendar = market_calendar(prices)
-    features, feature_manifest = load_feature_snapshot(filters=[("date", ">=", start), ("date", "<", cutoff)])
     if features.empty:
         raise ValueError("انبار فیچر خالی است؛ ابتدا python brs.py features را اجرا کنید")
     features = features.loc[(features["date"] >= start) & (features["date"] < cutoff)]
@@ -240,7 +242,7 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
         "(یا دو روز بعد) نرسید، فروش به میانگین قیمت همان روز. کارمزد خرید ۰.۳۷۱۲٪ و فروش ۰.۸۸٪ کسر شده است.",
         "",
         "**محافظه‌کار / خوش‌بینانه:** داده روزانه نمی‌گوید سقف روز قبل از کف آمده یا بعد از آن. «محافظه‌کار» فرض می‌کند "
-        "هدف در همان روز خرید (بعد از افت) نمی‌رسد و لمس دقیق قیمت سفارش کافی نیست؛ «خوش‌بینانه» برعکس. واقعیت بین این دو است.",
+        "هدف در همان روز خرید (بعد از افت) نمی‌رسد و لمس دقیق قیمت سفارش کافی نیست؛ «خوش‌بینانه» برعکس. این دو فرض، کران تضمینی واقعیت نیستند.",
         "",
         "ستون‌ها: «خرید شد» = درصد نامزدهایی که به قیمت سفارش رسیدند؛ «میانگین معامله» = سود خالص هر خرید؛ «هدف» = درصد "
         "معامله‌هایی که به هدف رسیدند؛ «روزانه» = میانگین گروه تصمیم‌ها (سرمایه بیکار لحاظ شده؛ بازده سبد نیست)؛ "

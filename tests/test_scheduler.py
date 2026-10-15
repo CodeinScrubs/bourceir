@@ -102,7 +102,7 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
     assert (row["close_final_raw"], row["ref_price_raw"], row["high_raw"]) == (4180.0, 4100.0, 4220.0)
 
 
-def test_incremental_client_types_request_only_new_days(db):
+def test_incremental_client_types_refresh_recent_sessions_without_ancient_holes(db):
     """
     فقط روزهای بعد از آخرین آمار درخواست می‌شوند. حفره‌های قدیمی TSETMC (۳۶۲ روز-نماد) در هیچ‌کدام از دو سرویس
     موجود نیستند و درخواست روزانه‌شان در اجرای واقعی ۴۴ دقیقه خطای ۵۰۰ و ۴۰ «نماد ناموفق» کاذب ساخت.
@@ -118,7 +118,7 @@ def test_incremental_client_types_request_only_new_days(db):
                               close_final_raw=100, ref_price_raw=100)
     db.upsert_client_types_df(sym_id, pd.DataFrame({"date": [days[2], days[3], days[5], days[7]], "buy_i_volume": 1.0}))
     missing = DataCollector(db=db, provider=TsetmcProvider(session=FakeSession({})))._missing_client_type_dates(sym_id)
-    assert missing == [days[8], days[9]]
+    assert missing == days[-5:]
 
 
 def test_one_failing_client_type_day_does_not_drop_the_others():

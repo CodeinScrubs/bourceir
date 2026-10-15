@@ -14,10 +14,11 @@ from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.workbench import WorkbenchRepository
 from research.baselines import STRATEGIES, _cohort_returns, pick_top
+from research.dip import DIP_VERSION, DipRule
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
 from research.walkforward import time_folds
 
-WALKFORWARD_VERSION = "expanding-portfolio-v1"
+WALKFORWARD_VERSION = "expanding-portfolio-v2"
 
 
 def verified_baseline_inputs(root, experiment_id=None):
@@ -26,10 +27,14 @@ def verified_baseline_inputs(root, experiment_id=None):
     if not re.fullmatch(r"EXP-\d{4}-\d{2}-\d{2}-BASELINES-[a-f0-9]{32}", experiment_id):
         raise ValueError("شناسه پژوهش پایه معتبر نیست")
     payload = json.loads((root / f"{experiment_id}.json").read_text(encoding="utf-8"))
+    if not payload['params'].get('raw_feature_inputs_verified'):
+        raise ValueError('منشأ خام/فیچر پژوهش پایه قدیمی تأیید نشده است؛ پژوهش پایه را دوباره اجرا کنید')
     if payload["params"].get("holdout_selection") or "holdout" in payload["results"]:
         raise ValueError("پژوهش دارای دوره نهایی در انتخاب روش استفاده نمی‌شود")
     folder = root / experiment_id
     label_manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    if label_manifest.get('fees') != dict(settings.FEES):
+        raise ValueError('کارمزد منبع پژوهش پایه با تنظیمات فعلی ناسازگار است')
     digests = dict(features=payload["params"]["features"]["sha256"],
                    labels=label_manifest["parquet_sha256"], prices=label_manifest["raw_prices_sha256"])
     cutoff = settings.RESEARCH_CONFIG["holdout_start"]
@@ -115,6 +120,8 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
                            participation=min(0.05, settings.BACKTEST_CONFIG["max_volume_participation_pct"]),
                            slippage_bps=settings.BACKTEST_CONFIG["default_slippage_bps"])
     code_sha = research_code_fingerprint()
+    # Fixed before examining DIP portfolio outcomes. No DIP parameter/selector search here.
+    dip_rule = DipRule(dip=0.02, take_profit=0.03, hold=1, conservative=True)
     experiment_id = f"EXP-{now_tehran_iso()[:10]}-PORTFOLIO-{uuid.uuid4().hex}"
     artifacts = root / experiment_id
     artifacts.mkdir(parents=True)
@@ -127,6 +134,10 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
                     config=asdict(base), horizons=list(horizons), random_seed=random_seed, folds=[asdict(f) for f in folds],
                     selection="highest positive past cohort mean, otherwise idle cash; fixed eight existing baselines",
                     purge="actual exit before train boundary; unknown rank rows retained", holdout_start=cfg["holdout_start"],
+                    dip=dict(version=DIP_VERSION, rule=asdict(dip_rule), selector='buyer_power',
+                             entry_day_exit=False,
+                             selection='fixed existing rule; no DIP fitting; same picks in DIP and its VWAP control',
+                             stress='no favorable opening improvement; no targets; exit at due-session low'),
                     prospective_independence=False, code_sha256=code_sha, source_files=archive_research_code(artifacts / "code"))
     registered = db.log_experiment(experiment_id=experiment_id + "-PROTOCOL", strategy_name="portfolio-protocol",
         symbols_tested="universe", parameters_json=json.dumps(_json_safe(protocol), ensure_ascii=False, allow_nan=False),
@@ -135,7 +146,7 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
     if registered is None:
         raise RuntimeError("ثبت پروتکل پیش از ارزیابی ناموفق بود")
     (artifacts / "protocol.json").write_text(json.dumps(_json_safe(protocol), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-    results, accumulated = [], {mode: [] for mode in ("selected", "stress", "random", "baseline")}
+    results, accumulated = [], {mode: [] for mode in ("selected", "stress", "random", "baseline", 'dip', 'dip_stress', 'dip_random', 'dip_vwap')}
     capitals = {mode: float(capital) for mode in accumulated}
     for index, fold in enumerate(folds):
         selected, training = select_from_past(panel, fold, horizons, cfg["top_k"])
@@ -154,10 +165,15 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
         mode_picks = dict(selected=selections, stress=selections,
                           random=_picks(test.loc[test.date < selection_end], None, cfg["top_k"], random_seed + index),
                           baseline=_picks(test.loc[test.date < selection_end], "buyer_power", cfg["top_k"]))
+        mode_picks.update(dip=mode_picks['baseline'], dip_stress=mode_picks['baseline'],
+                          dip_random=mode_picks['random'], dip_vwap=mode_picks['baseline'])
         for mode, picked in mode_picks.items():
-            configuration = replace(base, initial_capital_rial=capitals[mode], horizon=horizon, stress=mode == "stress")
+            is_dip = mode in {'dip', 'dip_stress', 'dip_random'}
+            configuration = replace(base, initial_capital_rial=capitals[mode],
+                                    horizon=dip_rule.hold if mode.startswith('dip') else horizon,
+                                    stress=mode in {'stress', 'dip_stress'})
             replay = replay_portfolio(replay_prices, picked, calendar, configuration,
-                                      start=fold.test_start, end=fold.test_end_exclusive)
+                                      start=fold.test_start, end=fold.test_end_exclusive, dip_rule=dip_rule if is_dip else None)
             prefix = f"fold-{index:02d}-{mode}"
             for name, frame in (("equity", replay.equity), ("executions", replay.executions), ("decisions", replay.decisions), ("picks", picked)):
                 frame.to_parquet(artifacts / f"{prefix}-{name}.parquet", index=False, compression="zstd")
@@ -171,7 +187,8 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
     for mode, metrics in accumulated.items():
         returns = [m["total_return"] for m in metrics if m["total_return"] is not None]
         summaries[mode] = dict(folds=len(metrics), valid_folds=len(returns),
-            all_folds_financially_known=len(returns) == len(metrics), mean_of_valid_folds_only=True,
+            all_folds_proxy_known=len(returns) == len(metrics), mean_of_valid_folds_only=True,
+            actual_corporate_entitlements_verified=all(m['actual_corporate_entitlements_verified'] for m in metrics),
             positive_folds=sum(r > 0 for r in returns), mean_fold_return=float(np.mean(returns)) if returns else None,
             worst_fold_drawdown=max((m["max_drawdown"] for m in metrics if m["max_drawdown"] is not None), default=None),
             folds_with_open_positions=sum(m["open_positions"] > 0 for m in metrics),
@@ -209,6 +226,8 @@ def format_portfolio_report(payload):
              "| حالت | برش معتبر | برش مثبت | میانگین بازده برش‌های معتبر | بیشترین افت برش معتبر | برش دارای پوزیشن باز |",
              "| --- | ---: | ---: | ---: | ---: | ---: |"]
     labels = dict(selected="انتخاب با گذشته", stress="خرید سقف / فروش کف", random="انتخاب تصادفی", baseline="قدرت خریدار پایه")
+    labels.update(dip='اصلاح ۲٪ / هدف ۳٪ / یک جلسه', dip_stress='اصلاح با فشار اجرا',
+                  dip_random='اصلاح با انتخاب تصادفی', dip_vwap='خرید VWAP همان نامزدها / یک جلسه')
     for mode, value in payload["summary"].items():
         def pct(number):
             return "نامعلوم" if number is None else f"{number:+.2%}"
@@ -219,4 +238,7 @@ def format_portfolio_report(payload):
               "پس از رسیدن به سقف زیان، خرید جدید متوقف می‌شود؛ امکان فروش دارایی موجود یا محدود ماندن زیان تضمین نمی‌شود.",
               "سرمایه مشترک در هر برش رعایت شده، اما زنجیره CAGR سالانه ساخته نشده است؛ پوزیشن باز در مرز برش پنهان نشده است."]
     lines.append("برش نامعتبر وارد میانگین نمی‌شود و صفر هم فرض نمی‌شود؛ تا تمام برش‌های مقایسه معلوم نباشند، رتبه مالی قطعی اعلام نمی‌شود.")
+    lines.append('قاعده DIP و انتخاب قدرت خریدار پیش از اجرا ثابت شده‌اند؛ نتیجه هدف‌دار، فشار اجرا، انتخاب تصادفی و کنترل VWAP با نقد مشترک مقایسه می‌شوند. OHLC ترتیب معاملات و نوبت سفارش را اثبات نمی‌کند.')
+    lines.append('سهم کسری اقدام شرکتی فروخته نمی‌شود و وجه خرید نیست؛ ارزش مصنوعی آن جدا و غیرنقدی باقی می‌ماند. حقوق واقعی سهامدار تأیید نشده‌اند.')
+    lines.append('در اجرای ثابت سرمایه مشترک، فروش در جلسه ورود غیرفعال است؛ اعتبار ترتیب معاملات و مجوز فروش همان‌روز برای تمام تاریخچه تأیید نشده است. این قید پژوهشی، ادعای ممنوعیت فروش همان‌روز در بازار امروز نیست.')
     return "\n".join(lines) + "\n"

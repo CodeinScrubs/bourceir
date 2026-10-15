@@ -64,6 +64,11 @@ jobs:
         python -m venv venv
         call SETUP.bat --ci
 
+    - name: Install standalone Farabi capture runtime and launch Chromium offline
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: call SETUP_FARABI.bat --ci
+
     - name: Windows setup must propagate a database failure
       if: runner.os == 'Windows'
       shell: pwsh

@@ -20,6 +20,7 @@ import pandas as pd
 from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.db import DatabaseManager
+from features.provenance import assert_compatible_inputs
 from features.store import _code_fingerprint, _git_commit, load_feature_snapshot
 from research.baselines import STRATEGIES, run_baselines
 from research.labels import LABEL_SET_VERSION, compute_labels
@@ -40,7 +41,7 @@ def _sha256(path: Path) -> str:
 
 def archive_research_code(target: Path) -> dict:
     """Keep the actual dirty-tree research source and locked dependencies, excluding runtime secrets/data."""
-    files = [settings.BASE_DIR / "requirements.lock.txt"]
+    files = [settings.BASE_DIR / "requirements.lock.txt", settings.BASE_DIR / 'pyproject.toml']
     for folder in ("core", "features", "database", "config", "research", "backtest"):
         files.extend(p for p in sorted((settings.BASE_DIR / folder).rglob("*")) if p.suffix in (".py", ".yaml", ".sql"))
     hashes = {}
@@ -87,7 +88,7 @@ def load_raw_prices(db: DatabaseManager, end_date: Optional[str] = None) -> pd.D
         return pd.DataFrame(columns=["symbol", "date"])
     placeholders = ",".join("?" * len(ids))
     return pd.read_sql_query(
-        f"""SELECT s.symbol_fa AS symbol, dp.date, dp.low_raw, dp.high_raw, dp.close_raw, dp.close_final_raw,
+        f"""SELECT s.symbol_fa AS symbol, dp.date, dp.open_raw, dp.low_raw, dp.high_raw, dp.close_raw, dp.close_final_raw,
                    dp.ref_price_raw, dp.volume, dp.value
             FROM daily_prices dp JOIN symbols s ON s.id = dp.symbol_id
             WHERE dp.source = 'tsetmc' AND dp.symbol_id IN ({placeholders})
@@ -207,7 +208,15 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
         except FileExistsError as exc:
             raise ValueError("دوره مهر و موم‌شده قبلاً باز شده است؛ نتیجه آن برای انتخاب مدل استفاده نشود") from exc
     cutoff = None if unseal_holdout else cfg["holdout_start"]
-    label_manifest = build_label_store(db, end_date=cutoff, include_holdout=unseal_holdout)
+    own_snapshot = not db.conn.in_transaction
+    if own_snapshot:
+        db.conn.execute('BEGIN')
+    try:
+        assert_compatible_inputs(db, feature_manifest, end_exclusive=cutoff)
+        label_manifest = build_label_store(db, end_date=cutoff, include_holdout=unseal_holdout)
+    finally:
+        if own_snapshot:
+            db.conn.rollback()
     label_dir = Path(label_manifest["path"])
     for name in ("labels.parquet", "prices.parquet"):
         _deduplicate_input(label_dir / name, RESEARCH_ROOT / "objects")
@@ -256,6 +265,7 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
                                 "feature_manifest": feature_manifest, "artifact_dir": str(artifact_dir),
                                 "source_files_sha256": source_hashes},
         "portfolio_simulated": False,
+        "raw_feature_inputs_verified": True,
         "holdout_selection": {"strategy": holdout_strategy, "horizon": holdout_horizon} if unseal_holdout else None,
     }
     RESEARCH_ROOT.mkdir(parents=True, exist_ok=True)

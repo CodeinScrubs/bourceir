@@ -33,6 +33,7 @@ INCREMENTAL_LOOKBACK_ROWS = 30
 # داده دیده‌بان بعد از این ساعت (به وقت تهران) برای کندل روز نهایی فرض می‌شود
 SESSION_FINAL_AFTER = "13:00"
 INCREMENTAL_MAX_GAP_DAYS = 25
+CLIENT_TYPE_REFRESH_SESSIONS = 5
 
 ProgressFn = Callable[[int, int, str], None]
 
@@ -93,7 +94,7 @@ class DataCollector:
 
     def _finish(self, collection_type: str, started_at: str, requested: int, succeeded: int,
                 failed: int, errors: List[str], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        status = "success" if failed == 0 else ("partial" if succeeded > 0 else "failed")
+        status = "success" if failed == 0 else ("partial" if succeeded > 0 or (extra or {}).get("partial_symbols") else "failed")
         finished_at = now_tehran_iso()
         self.db.log_collection(
             started_at=started_at, finished_at=finished_at, collection_type=collection_type,
@@ -136,7 +137,7 @@ class DataCollector:
 
     def _missing_client_type_dates(self, symbol_id: int) -> Optional[List[str]]:
         """
-        روزهای معاملاتی که قیمت دارند ولی حقیقی/حقوقی ندارند (برای به‌روزرسانی سبک).
+        روزهای جدید و پنج جلسه اخیر، شامل رکورد موجود و شکاف پشت آخرین تاریخ.
         None یعنی کل تاریخچه دریافت شود (اولین بار یا فاصله زیاد).
         """
         row = self.db.conn.execute(
@@ -147,14 +148,15 @@ class DataCollector:
         last = row["d"]
         if (now_tehran().date() - date.fromisoformat(last)).days > INCREMENTAL_MAX_GAP_DAYS:
             return None
-        # فقط روزهای بعد از آخرین آمار ثبت‌شده. «حفره»های قدیمی (۳۶۲ روز-نماد در ۱۳۹۳ تا ۱۴۰۰) در هر دو سرویس
-        # TSETMC (کل تاریخچه و روزبه‌روز با خطای ۵۰۰) موجود نیستند — بررسی ۲۰ مهر ۱۴۰۵ — و درخواست روزانه‌شان
-        # فقط ۴۰ دقیقه کندی می‌آورد. فیچرها این روزها را «نامعلوم» (NaN) می‌بینند.
-        new_days = self.db.conn.execute(
-            "SELECT date FROM daily_prices WHERE symbol_id = ? AND source = 'tsetmc' AND date > ? ORDER BY date;",
-            (symbol_id, last),
+        # بازخوانی محدود، اصلاح آمار اخیر را می‌گیرد؛ حفره‌های بسیار قدیمی هر روز درخواست نمی‌شوند.
+        recent = self.db.conn.execute(
+            "SELECT date FROM daily_prices WHERE symbol_id=? AND source='tsetmc' AND date<=? "
+            "ORDER BY date DESC LIMIT ?", (symbol_id, now_tehran().date().isoformat(), CLIENT_TYPE_REFRESH_SESSIONS),
         ).fetchall()
-        return [r["date"] for r in new_days]
+        threshold = min([r['date'] for r in recent] + [last])
+        return [r['date'] for r in self.db.conn.execute(
+            "SELECT date FROM daily_prices WHERE symbol_id=? AND source='tsetmc' AND date>=? AND date<=? ORDER BY date",
+            (symbol_id, threshold, now_tehran().date().isoformat()))]
 
     def collect_history(self, symbols: Optional[List[str]] = None, full: bool = False,
                         progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
@@ -237,20 +239,28 @@ class DataCollector:
         targets = self.target_symbols(symbols)
         started_at = now_tehran_iso()
         succeeded = failed = rows_saved = 0
+        partial_symbols = 0
         errors: List[str] = []
         for i, sym in enumerate(targets, start=1):
             if progress:
                 progress(i, len(targets), sym)
             meta = self._resolve(sym)
-            df = self.provider.get_client_types_history(meta["ins_code"], dates=self._missing_client_type_dates(meta["id"])) if meta else None
-            if df is None:
+            dates = self._missing_client_type_dates(meta['id']) if meta else None
+            df = self.provider.get_client_types_history(meta["ins_code"], dates=dates) if meta else None
+            if df is None or (df.empty and dates != []):
                 errors.append(f"عدم دریافت حقیقی/حقوقی «{sym}»")
                 failed += 1
                 continue
             rows_saved += self.db.upsert_client_types_df(meta["id"], df)
-            succeeded += 1
+            missing = sorted(set(dates or []) - set(df['date'].dropna().astype(str)))
+            if missing:
+                failed += 1
+                partial_symbols += int(not df.empty)
+                errors.append(f"حقیقی/حقوقی «{sym}»: {len(missing)} روز درخواست‌شده دریافت نشد: {', '.join(missing)}")
+            else:
+                succeeded += 1
         return self._finish("client_types", started_at, len(targets), succeeded, failed, errors,
-                            {"rows_inserted": rows_saved})
+                            {"rows_inserted": rows_saved, "partial_symbols": partial_symbols})
 
     # ═══════════════════════════════════════════════
     # اسنپ‌شات لحظه‌ای

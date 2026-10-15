@@ -226,7 +226,8 @@ def format_report(report: DoctorReport) -> str:
         if c.hint and c.status != OK:
             lines.append(f"   💡 {c.hint}")
     lines.append("=" * 60)
-    summary = {OK: "همه چیز آماده است ✅", WARN: "سامانه کار می‌کند ولی چند هشدار دارد ⚠️",
+    summary = {OK: "بررسی‌های فنی اجراشده موفق بودند ✅", WARN: "در بررسی‌های فنی چند هشدار وجود دارد ⚠️",
                ERROR: "مشکل جدی وجود دارد؛ راه‌حل‌های بالا را انجام دهید ❌"}
     lines.append(summary[report.worst])
+    lines.append('این گزارش، سودآوری، کامل بودن حساب یا امکان اجرای سفارش را تأیید نمی‌کند.')
     return "\n".join(lines)

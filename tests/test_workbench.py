@@ -174,3 +174,32 @@ def test_workbench_ui_stale_data_blocks_and_records_manual_fill(dashboard_db):
     with DatabaseManager(db_path=dashboard_db, read_only=True) as db:
         assert len(WorkbenchRepository(db).executions("paper")) == 1
         assert WorkbenchRepository(db).executions("actual") == []
+
+
+def test_workbench_intraday_queue_uses_the_live_book_in_the_ui(dashboard_db, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from core import risk, screening
+    from database.db import DatabaseManager
+    from tests.test_audit_followup import live_book
+    from tests.test_dashboard import DASHBOARD
+    clock, snapshot = live_book(buy_queue_volume=500000, bid_price_1=1030,
+                                bid_vol_1=500000, ask_price_1=0, ask_vol_1=0, ask_count_1=0)
+    monkeypatch.setattr(risk, 'now_tehran', lambda: clock)
+    monkeypatch.setattr(screening, 'now_tehran', lambda: clock)
+    with DatabaseManager(db_path=dashboard_db) as db:
+        WorkbenchRepository(db).save_profile(RiskProfile(1_000_000, 100_000))
+        sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
+        db.insert_daily_price(sid, '2026-10-13', 1000, 1050, 950, 1000, volume=1000, value=1_000_000,
+                              close_final_raw=1000, ref_price_raw=1000)
+        db.insert_snapshot(sid, snapshot)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🛡️ برنامه و دفتر معاملات').run()
+    by_label = {widget.label: widget for widget in at.number_input}
+    by_label['قیمت سناریوی خروج با زیان (تومان)'].set_value(95.)
+    by_label['قیمت هدف خودت (تومان)'].set_value(110.)
+    by_label['بودجه زیان همین معامله (تومان)'].set_value(1000)
+    at.run()
+    assert not at.exception
+    assert not any(button.label == 'ثبت برنامه دستی' for button in at.button)
+    assert any('عرضه' in warning.value or 'صف' in warning.value for warning in at.warning)

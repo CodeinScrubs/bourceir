@@ -80,7 +80,7 @@ def test_synthetic_action_preserves_value_and_does_not_hide_assumption():
     result = replay_portfolio(prices, picks(calendar[:1], ('a',)), calendar, config(max_positions=1))
     assert result.metrics['corporate_action_events'] == 1
     assert -.03 < result.metrics['total_return'] < 0
-    assert result.assumptions['corporate_action_model'] == 'synthetic_fractional_share_multiplier'
+    assert result.assumptions['corporate_action_model'] == 'synthetic_whole_shares_plus_noncash_fraction'
 
 
 def test_unknown_reference_on_open_holding_invalidates_financial_return():
@@ -223,6 +223,9 @@ def test_registered_walkforward_end_to_end_stays_development_only(db, pinned_bas
     assert result['protocol']['source_id'] == source['experiment_id']
     assert not result['accepted_for_signals'] and not (root/'research'/'holdout-unsealed.json').exists()
     assert len(result['results']) == 2
+    assert {'dip', 'dip_stress', 'dip_random', 'dip_vwap'} <= set(result['summary'])
+    assert result['protocol']['dip']['rule']['dip'] == .02
+    assert result['protocol']['dip']['selector'] == 'buyer_power'
     experiments = {e['experiment_id'] for e in db.get_experiments()}
     assert result['experiment_id'] in experiments and result['experiment_id']+'-PROTOCOL' in experiments
     folder = root/'research'/result['experiment_id']
