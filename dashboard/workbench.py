@@ -12,6 +12,7 @@ from core.journal import summarize_executions
 from core.risk import RiskProfile, plan_trade
 from core.screening import current_daily_row, current_snapshot, descriptive_screen
 from core.timeutils import now_tehran_iso, to_jalali
+from database.broker import BrokerRepository
 from database.db import DatabaseManager
 from database.workbench import WorkbenchRepository
 
@@ -22,20 +23,38 @@ def _toman(value):
     return "نامعلوم" if value is None else f"{value / 10:,.0f} تومان"
 
 
+def _account_metric_style():
+    st.markdown('<style>[data-testid="stMetricValue"] > div {direction:ltr; unicode-bidi:isolate; text-align:right; '
+                'white-space:normal; overflow:visible; text-overflow:clip; font-size:clamp(1.1rem,2.3vw,2rem);}</style>',
+                unsafe_allow_html=True)
+
+
 def page_workbench():
+    _account_metric_style()
     st.title("🛡️ برنامه و دفتر معاملات")
     st.caption("برنامه‌های ورود و خروج را خودت تعیین می‌کنی؛ سامانه هزینه و ریسک را محاسبه می‌کند. همه مبالغ ورودی تومان هستند.")
     with DatabaseManager(read_only=True) as db:
         repo = WorkbenchRepository(db)
         saved = repo.profile()
         rows = repo.market_rows()
+        broker_snapshot = BrokerRepository(db).latest('portfolio')
+        broker_baseline = BrokerRepository(db).baseline()
     with st.expander("سرمایه و سقف زیان کل", expanded=saved is None):
         with st.form("risk-profile"):
-            capital = st.number_input("سرمایه مبنا (تومان)", min_value=1, value=saved["capital_rial"] // 10 if saved else 1)
-            limit = st.number_input("سقف زیان کل (تومان)", min_value=1, value=saved["max_loss_rial"] // 10 if saved else 1)
+            capital = st.number_input("سرمایه مبنا (تومان)", min_value=0.1 if broker_baseline else 1,
+                                      value=saved['capital_rial'] / 10 if broker_baseline else saved["capital_rial"] // 10 if saved else 1,
+                                      disabled=broker_baseline is not None)
+            limit = st.number_input("سقف زیان کل (تومان)", min_value=0.1 if broker_baseline else 1,
+                                    value=saved['max_loss_rial'] / 10 if broker_baseline else saved["max_loss_rial"] // 10 if saved else 1,
+                                    disabled=broker_baseline is not None)
             complete = st.checkbox("همه معاملات، دارایی‌ها و نقدینگی واقعی مربوط به این سرمایه را در دفتر ثبت کرده‌ام",
-                                   value=bool(saved and saved["actual_history_complete"]))
-            if st.form_submit_button("ذخیره تنظیمات"):
+                                   value=bool(saved and saved["actual_history_complete"] and not broker_snapshot),
+                                   disabled=broker_snapshot is not None)
+            if broker_snapshot:
+                st.caption('گزارش واردشده کارگزاری در صفحه حساب دیده می‌شود؛ تأیید دفتر واقعی پس از بازسازی و تطبیق موجودی ممکن می‌شود.')
+            if broker_baseline:
+                st.caption('مبنای دقیق مرحله فارابی در صفحه حساب ثبت شده و با این فرم یا ورود گزارش تازه تغییر نمی‌کند.')
+            if st.form_submit_button("ذخیره تنظیمات", disabled=broker_baseline is not None):
                 try:
                     profile = RiskProfile(capital * 10, limit * 10)
                     with DatabaseManager() as db:
@@ -54,17 +73,24 @@ def page_workbench():
         events, plans = repo.executions(mode), repo.plans(mode)
     marks = dict(zip(rows["symbol_fa"], market_rules.official_close(rows))) if not rows.empty else {}
     state = summarize_executions(events, profile, marks)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("نقدینگی دفتر", _toman(state["cash_rial"]))
-    c2.metric("سود/زیان تحقق‌یافته خالص", _toman(state["realized_net_rial"]))
-    c3.metric("ارزش برآوردی دفتر", _toman(state["equity_rial"]))
+    actual_incomplete = mode == 'actual' and (broker_snapshot is not None or not saved['actual_history_complete'])
+    display_cash = state['cash_rial']
+    display_equity = state['equity_rial']
+    if actual_incomplete:
+        display_cash = broker_snapshot['summary']['buying_power_rial'] if broker_snapshot else None
+        display_equity = broker_snapshot['summary']['net_assets_rial'] if broker_snapshot else None
+    c1, c2 = st.columns(2)
+    c3, c4 = st.columns(2)
+    c1.metric("قدرت خرید آخرین گزارش" if actual_incomplete else "نقدینگی دفتر", _toman(display_cash))
+    c2.metric("سود/زیان تحقق‌یافته خالص", _toman(None if actual_incomplete else state["realized_net_rial"]))
+    c3.metric("ارزش آخرین گزارش" if actual_incomplete else "ارزش برآوردی دفتر", _toman(display_equity))
     c4.metric("سقف زیان کل", _toman(profile.max_loss_rial))
     st.caption("ارزش دفتر از آخرین قیمت آرشیو و کارمزد فروش برآورد می‌شود؛ تازگی قیمت و امکان فروش جدا بررسی می‌شوند.")
     if state["estimated_fee_events"]:
         st.info(f"کارمزد {state['estimated_fee_events']} اجرا از تنظیمات برآورد شده است؛ با کارمزد گزارش کارگزاری فرق دارد.")
     if state["loss_limit_reached"]:
         st.error("سقف زیان کل رسیده است: برنامه جدید متوقف است؛ روش و دفتر را بازبینی کن.")
-    if mode == "actual" and not saved["actual_history_complete"]:
+    if actual_incomplete:
         st.warning("تا کامل بودن دفتر واقعی تأیید نشود، اندازه معامله جدید محاسبه نمی‌شود.")
     account_current = not state["unknown_marks"]
     risk_reserved = 0.0
@@ -114,7 +140,7 @@ def page_workbench():
                                          equity_rial=state["equity_rial"] or 0, reserved_risk_rial=risk_reserved,
                                          daily_value_rial=source["value"], data_current=bool(data_current),
                                          locked_up=bool(locks["locked_up"]), locked_down=bool(locks["locked_down"]),
-                                         account_complete=mode == "paper" or bool(saved["actual_history_complete"]))
+                                         account_complete=mode == "paper" or not actual_incomplete)
                 if calculation["blockers"]:
                     st.warning("؛ ".join(calculation["blockers"]))
                 else:

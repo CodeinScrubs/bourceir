@@ -21,6 +21,7 @@ from config import settings  # noqa: E402
 from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
+from dashboard.broker import page_broker  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
@@ -521,6 +522,7 @@ PAGES = {
     "🏠 خانه": page_home,
     "🔎 فهرست بررسی": page_shortlist,
     "🛡️ برنامه و دفتر معاملات": page_workbench,
+    "🏦 حساب و تطبیق فارابی": page_broker,
     "📊 بررسی نماد": page_symbol,
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,

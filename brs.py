@@ -116,6 +116,58 @@ def cmd_audit(args) -> int:
     return 1 if report["overall"] == "error" else 0
 
 
+def cmd_broker_import(args) -> int:
+    import json
+
+    from data_collector.farabi import import_report
+    from database.broker import BrokerRepository, broker_report
+    from database.db import DatabaseManager
+
+    output = Path(args.report).resolve()
+    if not output.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+        raise ValueError('گزارش حساب خصوصی فقط در data/private ذخیره می‌شود')
+    with DatabaseManager() as db:
+        repo = BrokerRepository(db)
+        portfolio_key = None
+        for filename in args.files:
+            path = Path(filename)
+            key = import_report(repo, path.read_bytes(), path.name)
+            row = db.conn.execute('SELECT kind FROM broker_imports WHERE id=?', (key,)).fetchone()
+            if row['kind'] == 'portfolio':
+                portfolio_key = key
+            print(f"گزارش {row['kind']} وارد شد؛ شناسه {key[:12]}")
+        if args.adopt_baseline:
+            if not portfolio_key:
+                raise ValueError('برای شروع مرحله جدید، فایل سبد را نیز مشخص کن')
+            repo.adopt_baseline(portfolio_key)
+        report = broker_report(db)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
+    print('گزارش تطبیق در پوشه خصوصی ذخیره شد؛ دفتر واقعی خودکار تأیید نمی‌شود.')
+    return 0
+
+
+def cmd_broker_quotes(args) -> int:
+    import json
+
+    from data_collector.account_quotes import refresh_account_quotes
+    from data_collector.tsetmc import TsetmcProvider
+    from database.broker import broker_report
+    from database.db import DatabaseManager
+
+    output = Path(args.report).resolve()
+    if not output.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+        raise ValueError('گزارش حساب خصوصی فقط در data/private ذخیره می‌شود')
+    with DatabaseManager() as db:
+        refresh = refresh_account_quotes(db, TsetmcProvider(), progress=_progress)
+        report = broker_report(db)
+        report['quote_refresh'] = refresh
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
+    print(f"قیمت عمومی: {refresh['succeeded']} موفق، {refresh['failed']} ناموفق؛ گزارش خصوصی ذخیره شد.")
+    return 0 if not refresh['failed'] else 1
+
+
 def cmd_update(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -281,6 +333,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("audit", help="گزارش فقط‌خواندنی کیفیت آرشیو واقعی، بدون اتصال اینترنت")
     p.add_argument("--json", default="logs/data-audit.json", help="مسیر گزارش کیفیت داده")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser('broker-import', help='ورود محلی گزارش فارابی بدون اتصال به حساب یا ثبت سفارش')
+    p.add_argument('files', nargs='+', help='فایل سبد JSON و خروجی‌های رسمی XLSX')
+    p.add_argument('--report', default=str(settings.DATA_DIR / 'private' / 'farabi-reconciliation.json'))
+    p.add_argument('--adopt-baseline', action='store_true', help='شروع صریح مرحله جدید با سرمایه اسنپ‌شات و سقف زیان ۱۰٪')
+    p.set_defaults(func=cmd_broker_import)
+
+    p = sub.add_parser('broker-refresh-quotes', help='تازه‌سازی قیمت عمومی همه دارایی‌های واردشده، بدون اتصال به کارگزاری')
+    p.add_argument('--report', default=str(settings.DATA_DIR / 'private' / 'farabi-reconciliation.json'))
+    p.set_defaults(func=cmd_broker_quotes)
 
     p = sub.add_parser("update", help="به‌روزرسانی همه داده‌ها")
     p.add_argument("--symbols", default="", help="نمادها با کاما (پیش‌فرض: کل سهام بورس و فرابورس)")

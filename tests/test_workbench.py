@@ -133,7 +133,7 @@ def test_migration_eight_is_repeatable_and_keeps_existing_prices(db):
     from database.migrator import MIGRATIONS_DIR, _run_sql_migration
     _run_sql_migration(db.conn, MIGRATIONS_DIR / "008_personal_workbench.sql")
     db.conn.commit()
-    assert db.schema_version() == 8
+    assert db.schema_version() >= 8
     assert {"personal_profile", "trade_plans", "journal_executions"} <= set(db.table_counts())
 
 
