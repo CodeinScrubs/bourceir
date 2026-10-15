@@ -371,8 +371,9 @@ class DataCollector:
         requested = symbols or self.symbols
         if requested:
             # درخواست «فقط قاسم» نباید به سه صفحه آخر کل بازار تبدیل شود.
+            codal_started_at = now_tehran_iso()
             parts = [self.collect_announcements(pages=3, symbol_fa=s) for s in dict.fromkeys(requested)]
-            reports['codal'] = self._finish('codal_targeted', now_tehran_iso(), len(parts),
+            reports['codal'] = self._finish('codal_targeted', codal_started_at, len(parts),
                 sum(r['status'] == 'success' for r in parts), sum(r['status'] != 'success' for r in parts),
                 [e for r in parts for e in r['errors']], dict(per_symbol=parts, coverage_proven=False))
         else:

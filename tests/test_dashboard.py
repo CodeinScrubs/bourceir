@@ -104,6 +104,7 @@ def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dash
     assert mode.value == 'تعدیل نمایشی بر مبنای مرجع'
     assert any(m.label == 'رویداد شرکتی ثبت‌شده' and str(m.value) == '0' for m in at.metric)
     assert any('افزایش سرمایه یا مجمع تأییدشده نیست' in c.value for c in at.caption)
+    assert any('نبود پرچم نیز اثبات امکان خروج نیست' in c.value for c in at.caption)
     mode.set_value('قیمت خام روز').run()
     assert not at.exception
     assert next(r for r in at.radio if r.label == 'نوع قیمت نمودار').value == 'قیمت خام روز'
