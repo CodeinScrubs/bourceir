@@ -39,6 +39,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `core/stock_study.py` + `ops/stock_study.py` | مطالعه توصیفی با ورودی و کد محفوظ، همتای منتخب فقط از اطلاعات پیشین و رتبه ارزش بازار مشاهده؛ `stock-study-v1`. نمونه و دوره بررسی‌شده برای فرضیه مشتق‌شده مستقل نیست؛ مجوز سیگنال ندارد. راهنما `docs/research/stock-study.md`. فیلتر جریان `flow-filters-v3` / `flow-portfolio-v3` است؛ کنترل سازگاری آن با `daily-v6` در `core/client_quality.py` مشترک است. |
 | `core/codal_documents.py` + `ops/codal_documents.py` | آرشیو متن/PDF عمومی کدال، نسخه مستقل و هش محتوا/کد؛ زمان دسترسی زودتر از دریافت/حفظ نیست. تأیید عددی/هویت/انتشار تاریخی یا ورودی خودکار مدل ندارد. راهنما `docs/codal-documents.md`. |
 | `database/capture.py` + `ops/capture_audit.py` | پروتکل فقط‌افزودنی دامنه/کد پیش از دریافت و شروع/نتیجه چرخه‌ها؛ `intraday-quality-v2` فاصله تغییرات ذخیره‌شده را از فاصله دریافت مستقل جدا می‌کند. ثبت پایش، ثبت تصمیم پیش از نتیجه نیست. |
+| `core/forward_observations.py` + `database/forward_observations.py` + `dashboard/forward_observations.py` | دفتر مشاهده دستی آینده با دامنه/پنجره ثابت و کپی کد/قیمت (`forward-observation-v1`، migration 012). ثبت محلی است، اجرا/سود مالی یا آزمون مستقل را اثبات نمی‌کند. راهنما `docs/research/forward-observations.md`. |
 | `docs/phase1_design.md` | طراحی و نقشه راه فاز ۱ — قبل از شروع قابلیت جدید بخوان |
 
 ## قواعد کار
