@@ -32,7 +32,7 @@ def live_book(**changes):
 def test_intraday_buy_queue_blocks_sizing_despite_unlocked_daily_candle():
     at, snapshot = live_book(bid_price_1=1030, bid_vol_1=500000, buy_queue_volume=500000,
                              ask_price_1=0, ask_vol_1=0, ask_count_1=0)
-    result = quote(intraday=True, intraday_snapshot=snapshot, at=at)
+    result = quote(intraday=True, intraday_snapshot=snapshot, at=at, stop_rial=980, target_rial=1020)
     assert result['quantity'] == 0 and result['blockers']
 
 
@@ -62,7 +62,7 @@ def test_intraday_exit_levels_outside_todays_band_are_blocked():
                                     dict(ask_price_1=1001), dict(sell_queue_volume=50000)])
 def test_incomplete_or_unavailable_live_execution_blocks_plan(changes):
     at, snapshot = live_book(**changes)
-    assert quote(intraday=True, intraday_snapshot=snapshot, at=at)['quantity'] == 0
+    assert quote(intraday=True, intraday_snapshot=snapshot, at=at, stop_rial=980, target_rial=1020)['quantity'] == 0
 
 
 def test_recent_client_types_revisions_and_holes_are_refetched(db):

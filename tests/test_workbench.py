@@ -196,8 +196,8 @@ def test_workbench_intraday_queue_uses_the_live_book_in_the_ui(dashboard_db, mon
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.sidebar.radio[0].set_value('🛡️ برنامه و دفتر معاملات').run()
     by_label = {widget.label: widget for widget in at.number_input}
-    by_label['قیمت سناریوی خروج با زیان (تومان)'].set_value(95.)
-    by_label['قیمت هدف خودت (تومان)'].set_value(110.)
+    by_label['قیمت سناریوی خروج با زیان (تومان)'].set_value(98.)
+    by_label['قیمت هدف خودت (تومان)'].set_value(102.)
     by_label['بودجه زیان همین معامله (تومان)'].set_value(1000)
     at.run()
     assert not at.exception

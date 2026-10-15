@@ -43,6 +43,9 @@ jobs:
     - name: Lint (ruff)
       run: ruff check .
 
+    - name: Check displayed and package versions agree
+      run: python -c "import tomllib; from pathlib import Path; from config import settings; assert settings.VERSION == tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version']"
+
     - name: Set up Node for read-only capture checks
       uses: actions/setup-node@v4
       with:
