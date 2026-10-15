@@ -145,12 +145,12 @@ def test_mae_includes_the_days_spent_waiting_for_an_actual_exit():
     assert row['exit_delay_1d'] == 3
     assert row['mae_1d'] == pytest.approx(expected)
 
-def test_missing_official_close_does_not_automatically_make_factors_nan():
+def test_missing_previous_official_close_makes_the_action_factor_unknown():
     frame = prices(3)
     frame.loc[1, 'close_final_raw'] = np.nan
     frame.loc[2, 'ref_price_raw'] = 50.0
     factor = market_rules.corporate_action_factors(frame).iloc[2]
-    assert factor == pytest.approx(0.5)
+    assert math.isnan(factor)  # A last trade cannot establish the official/reference bridge.
 
 def test_dip_does_not_complete_a_return_through_an_unknown_reference():
     frame = prices()

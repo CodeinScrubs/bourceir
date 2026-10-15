@@ -66,6 +66,18 @@ class WorkbenchRepository:
             (self._symbol_id(symbol),)).fetchone()
         return dict(row) if row else None
 
+    def latest_snapshots(self, symbols):
+        """Read all requested holdings/candidate quotes in one SQLite statement."""
+        symbols = sorted({normalize_symbol(s) for s in symbols})
+        if not symbols:
+            return {}
+        rows = self.db.conn.execute(
+            "SELECT s.symbol_fa, q.* FROM symbols s JOIN snapshots q ON q.id=("
+            "SELECT p.id FROM snapshots p WHERE p.symbol_id=s.id AND p.source='tsetmc' "
+            "ORDER BY p.captured_at DESC, p.id DESC LIMIT 1) "
+            f"WHERE s.symbol_fa IN ({','.join('?' for _ in symbols)})", symbols)
+        return {row['symbol_fa']: dict(row) for row in rows}
+
     @staticmethod
     def _check_mode(mode):
         if mode not in ("paper", "actual"):

@@ -47,10 +47,11 @@ def breakeven_move(buy_fee: float = BUY_FEE, sell_fee: float = SELL_FEE) -> floa
 # ═══════════════════════════════════════════════
 
 def official_close(df: pd.DataFrame) -> pd.Series:
-    """قیمت پایانی رسمی؛ در نبود آن، قیمت آخرین معامله."""
-    if "close_final_raw" in df.columns:
-        return df["close_final_raw"].fillna(df.get("close_raw"))
-    return df["close_raw"]
+    """قیمت پایانی رسمی؛ آخرین معامله جایگزین داده رسمی نامعلوم نمی‌شود."""
+    if "close_final_raw" not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    close = pd.to_numeric(df['close_final_raw'], errors='coerce')
+    return close.where(np.isfinite(close) & (close > 0))
 
 
 def reference_price(df: pd.DataFrame) -> pd.Series:

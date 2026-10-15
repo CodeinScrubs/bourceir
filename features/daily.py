@@ -18,7 +18,7 @@ import pandas as pd
 
 from core import market_rules
 
-FEATURE_SET_VERSION = "daily-v4"  # paired observations; see docs/features.md
+FEATURE_SET_VERSION = "daily-v5"  # official close never falls back to last trade
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",

@@ -27,7 +27,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-DIP_VERSION = "dip-v3"
+DIP_VERSION = "dip-v4"
 TIME_EXIT_PRICE_BASIS = 'last_trade_raw_at_session_end_minus_slippage'
 THROUGH_MARGIN = 0.001   # حالت محافظه‌کار: کف روز باید این مقدار از قیمت سفارش پایین‌تر رفته باشد
 

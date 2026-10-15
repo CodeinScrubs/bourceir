@@ -10,7 +10,7 @@ from config import settings
 from core import market_rules
 from core.risk import finite_number
 
-PORTFOLIO_VERSION = "portfolio-v2"
+PORTFOLIO_VERSION = "portfolio-v3"
 
 
 @dataclass(frozen=True)

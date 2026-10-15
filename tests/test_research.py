@@ -140,14 +140,15 @@ def test_research_end_to_end_with_sealed_holdout(db, tmp_path, monkeypatch):
     assert run_mod.run_research(db, random_trials=3, unseal_holdout=True, holdout_strategy="momentum_5d", holdout_horizon=1)["results"].keys() == {"development", "holdout"}
 
 
-def test_t_statistic_survives_a_few_unknown_days():
-    """روی داده واقعی ۷ تا ۳۱ روز از ~۳۰۰۰ روز نامعلوم‌اند؛ آماره نباید برای همه روش‌ها خالی شود."""
+def test_t_statistic_is_unknown_if_calendar_gaps_cannot_be_modelled():
+    """Unknown sessions cannot be deleted to make the next observed session adjacent."""
     from research.baselines import tolerant_t
 
     x = pd.Series(np.random.default_rng(5).normal(0.002, 0.01, 1000))
+    assert np.isfinite(tolerant_t(x, lag=3))
     with_gaps = x.copy()
     with_gaps.iloc[[10, 500, 900]] = np.nan
-    assert np.isfinite(tolerant_t(with_gaps, lag=3))
+    assert np.isnan(tolerant_t(with_gaps, lag=3))
     mostly_unknown = x.copy()
     mostly_unknown.iloc[:100] = np.nan                     # ۱۰٪ نامعلوم ← آماره اعلام نمی‌شود
     assert np.isnan(tolerant_t(mostly_unknown, lag=3))

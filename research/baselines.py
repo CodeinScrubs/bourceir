@@ -65,18 +65,12 @@ def newey_west_t(series: pd.Series, lag: int) -> float:
     return float(x.mean() / np.sqrt(var / n))
 
 
-UNKNOWN_DAYS_TOLERANCE = 0.05
-
-
 def tolerant_t(series: pd.Series, lag: int) -> float:
     """
-    آماره t با چند روز نامعلوم: اگر حداکثر ۵٪ روزها نامعلوم باشند، روی روزهای معلوم محاسبه می‌شود (و تعداد نامعلوم
-    جدا گزارش می‌شود)؛ بیشتر از آن، آماره اعلام نمی‌شود. روی داده واقعی فقط ۷ تا ۳۱ روز از ~۳۰۰۰ روز نامعلوم‌اند و
-    نسخه سخت‌گیر قبلی آماره همه روش‌ها را خالی می‌کرد.
+    سازگاری نام قدیمی: روز نامعلوم حذف یا صفر نمی‌شود و فاصله تقویمی فشرده نمی‌شود.
+    بدون مدل استنباط معتبر برای داده گمشده، آماره مجهول می‌ماند؛ آمار توصیفی جدا گزارش می‌شود.
     """
-    if len(series) == 0 or series.isna().mean() > UNKNOWN_DAYS_TOLERANCE:
-        return float("nan")
-    return newey_west_t(series.dropna().reset_index(drop=True), lag)
+    return newey_west_t(series, lag)
 
 
 def pick_top(panel: pd.DataFrame, score: pd.Series, k: int) -> pd.DataFrame:

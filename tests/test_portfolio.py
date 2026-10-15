@@ -194,6 +194,12 @@ def pinned_baseline(db, tmp_path, monkeypatch):
     from tests.test_features import synthetic_history
     for i, symbol in enumerate(('a', 'b', 'c')):
         frame, client = synthetic_history(seed=i)
+        # Queue candidates must exist in the *test* folds, not only in training.
+        for index in (112, 145):
+            price = frame.loc[index, 'ref_price_raw'] * 1.03
+            frame.loc[index, ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw']] = price
+            frame.loc[index, 'value'] = frame.loc[index, 'volume'] * price
+            frame.loc[index + 1, 'ref_price_raw'] = price
         sid = db.upsert_symbol(dict(symbol_fa=symbol, ins_code=str(i), instrument_type_code=300))
         db.upsert_daily_prices_df(sid, frame)
         db.upsert_client_types_df(sid, client)
@@ -213,23 +219,36 @@ def pinned_baseline(db, tmp_path, monkeypatch):
     return source, root
 
 
-def test_registered_walkforward_end_to_end_stays_development_only(db, pinned_baseline):
+@pytest.mark.parametrize('selector', ['buyer_power', 'buy_queue'])
+def test_registered_walkforward_end_to_end_stays_development_only(db, pinned_baseline, selector):
     import json
 
     from research.portfolio_run import run_portfolio_research
     from research.run import _sha256
     source, root = pinned_baseline
-    result = run_portfolio_research(db, min_train_sessions=104, test_sessions=30)
+    result = run_portfolio_research(db, min_train_sessions=104, test_sessions=30, dip_selector=selector)
     assert result['protocol']['source_id'] == source['experiment_id']
     assert not result['accepted_for_signals'] and not (root/'research'/'holdout-unsealed.json').exists()
     assert len(result['results']) == 2
     assert {'dip', 'dip_stress', 'dip_random', 'dip_vwap'} <= set(result['summary'])
     assert result['protocol']['dip']['rule']['dip'] == .02
-    assert result['protocol']['dip']['selector'] == 'buyer_power'
+    assert result['protocol']['dip']['selector'] == selector
     experiments = {e['experiment_id'] for e in db.get_experiments()}
     assert result['experiment_id'] in experiments and result['experiment_id']+'-PROTOCOL' in experiments
     folder = root/'research'/result['experiment_id']
     assert (folder/'code'/'backtest'/'portfolio.py').exists()
+    observed_candidates = 0
+    for picks_file in folder.glob('fold-*-dip-picks.parquet'):
+        primary = pd.read_parquet(picks_file)
+        observed_candidates += len(primary)
+        control = pd.read_parquet(picks_file.with_name(picks_file.name.replace('-dip-picks', '-dip_vwap-picks')))
+        random = pd.read_parquet(picks_file.with_name(picks_file.name.replace('-dip-picks', '-dip_random-picks')))
+        pd.testing.assert_frame_equal(primary, control)
+        pd.testing.assert_series_equal(primary.groupby('date').size(), random.groupby('date').size())
+        if selector == 'buy_queue' and not primary.empty:
+            source_features = pd.read_parquet(folder/'features.parquet')
+            assert primary.merge(source_features, on=['date', 'symbol'])['locked_up'].eq(1).all()
+    assert observed_candidates > 0
     for name, digest in result['artifacts_sha256'].items():
         assert _sha256(folder/name) == digest
     assert json.loads((root/'research'/'latest-portfolio.json').read_text())['experiment_id'] == result['experiment_id']
@@ -247,3 +266,16 @@ def test_tampered_or_holdout_source_is_rejected(pinned_baseline):
         verified_baseline_inputs(root/'research')
     with pytest.raises(ValueError, match='شناسه'):
         verified_baseline_inputs(root/'research', '../other')
+
+
+def test_previous_price_contract_cannot_feed_a_new_portfolio_evaluation(pinned_baseline):
+    import json
+
+    from research.portfolio_run import verified_baseline_inputs
+    source, root = pinned_baseline
+    path = root/'research'/f"{source['experiment_id']}.json"
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    payload['params']['research_provenance']['feature_manifest']['version'] = 'daily-v4'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    with pytest.raises(ValueError, match='قرارداد'):
+        verified_baseline_inputs(root/'research')

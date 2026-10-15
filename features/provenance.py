@@ -2,6 +2,9 @@
 
 import hashlib
 import json
+import platform
+import re
+from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
 import pandas as pd
@@ -12,6 +15,44 @@ from database.db import CLIENT_TYPE_COLUMNS
 INPUT_VERSION = 'raw-inputs-v1'
 PRICE_COLUMNS = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw',
                  'ref_price_raw', 'volume', 'value', 'trade_count']
+COMPUTATION_PACKAGES = ('numpy', 'pandas', 'pyarrow')
+
+
+def feature_environment():
+    """Strict lock identity plus versions actually executing numeric/Parquet computation.
+
+    The full project lock must match: a changed lock requires a new feature generation.
+    Unrelated installed tools are excluded; their presence/version alone is not a rejection.
+    Python patch/OS are recorded but compatibility requires the supported Python minor only.
+    """
+    lock = settings.BASE_DIR / 'requirements.lock.txt'
+    if not lock.is_file():
+        raise ValueError('فایل وابستگی قفل‌شده برای ساخت/پژوهش فیچر موجود نیست')
+    content = lock.read_bytes().replace(b'\r\n', b'\n')
+    text = content.decode('utf-8')
+    packages = {}
+    for name in COMPUTATION_PACKAGES:
+        pin = re.search(rf'^{re.escape(name)}==([^\s;]+)\s*$', text, flags=re.MULTILINE)
+        try:
+            installed = version(name)
+        except PackageNotFoundError as exc:
+            raise ValueError(f'وابستگی محاسباتی {name} نصب نشده است') from exc
+        if not pin or installed != pin.group(1):
+            raise ValueError(f'نسخه نصب‌شده {name} با وابستگی قفل‌شده یکسان نیست؛ محیط را همگام کنید')
+        packages[name] = installed
+    python_minor = '.'.join(platform.python_version_tuple()[:2])
+    if python_minor != '3.11':
+        raise ValueError('محیط محاسبه فیچر باید Python 3.11 باشد')
+    return dict(version='feature-environment-v1', requirements_lock_sha256=hashlib.sha256(content).hexdigest(),
+                python_minor=python_minor, packages=packages)
+
+
+def assert_compatible_environment(manifest):
+    provenance = manifest.get('provenance') or {}
+    environment = feature_environment()
+    if (provenance.get('requirements_lock_sha256') != environment['requirements_lock_sha256']
+            or provenance.get('feature_environment') != environment):
+        raise ValueError('منشأ وابستگی/محیط فیچر ناسازگار است؛ ابتدا محیط را همگام و فیچر را دوباره بسازید')
 
 
 def feature_logic_fingerprint():
@@ -70,6 +111,7 @@ def raw_input_snapshot(db, *, symbols=None, end_exclusive=None):
 def assert_compatible_inputs(db, manifest, *, end_exclusive=None):
     """Reject stale raw values, changed membership or changed feature logic before research."""
     provenance = manifest.get('provenance') or {}
+    assert_compatible_environment(manifest)
     expected = provenance.get('raw_inputs')
     if not expected or expected.get('version') != INPUT_VERSION:
         raise ValueError('منشأ داده خام انبار فیچر موجود نیست؛ ابتدا ساخت فیچر را دوباره اجرا کنید')

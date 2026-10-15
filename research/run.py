@@ -20,7 +20,7 @@ import pandas as pd
 from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.db import DatabaseManager
-from features.provenance import assert_compatible_inputs
+from features.provenance import assert_compatible_inputs, feature_environment
 from features.store import _code_fingerprint, _git_commit, load_feature_snapshot
 from research.baselines import STRATEGIES, run_baselines
 from research.labels import LABEL_SET_VERSION, compute_labels
@@ -56,7 +56,9 @@ def archive_research_code(target: Path) -> dict:
 
 
 def research_code_fingerprint() -> str:
-    return _code_fingerprint(("core", "features", "database", "config", "research", "backtest"))
+    digest = hashlib.sha256(_code_fingerprint(("core", "features", "database", "config", "research", "backtest")).encode())
+    digest.update(json.dumps(feature_environment(), sort_keys=True).encode())
+    return digest.hexdigest()
 
 
 def _deduplicate_input(path: Path, objects: Path) -> str:

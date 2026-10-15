@@ -370,7 +370,10 @@ class BacktestEngine:
                 df[f"{col}_raw"] = df[col]
         if "close_raw" not in df.columns:
             raise ValueError("دیتافریم قیمت باید ستون close_raw یا close داشته باشد")
-        df["_mark"] = market_rules.official_close(df)
+        # Explicit compatibility for the old date/close API; raw research always requires
+        # a verified official close. Never relabel a raw last trade as official data.
+        raw_mode = any(col.endswith('_raw') for col in prices_df.columns)
+        df["_mark"] = market_rules.official_close(df) if raw_mode else df['close_raw']
         has_range = {"high_raw", "low_raw"}.issubset(df.columns)
         if has_range and {"value", "volume"}.issubset(df.columns):
             df["_fill"] = market_rules.daily_vwap(df)
