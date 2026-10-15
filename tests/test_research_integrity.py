@@ -64,9 +64,11 @@ def test_rolling_buyer_power_uses_paired_observations():
 def test_rolling_buyer_power_keeps_a_known_day_without_real_buys():
     frame = prices(6)
     ct = client_types(frame)
-    ct.loc[2, ['buy_i_count', 'buy_i_value']] = 0
+    ct.loc[2, ['buy_i_count', 'buy_i_value', 'buy_i_volume']] = 0
+    ct.loc[2, 'buy_n_volume'] = 1000
+    ct.loc[2, 'sell_i_count'] = 20
     result = compute_daily_features(frame, ct)['buyer_power_5d'].iloc[-1]
-    assert result == pytest.approx((4 * 60000 / 40) / (5 * 40000 / 50))
+    assert result == pytest.approx((4 * 60000 / 40) / (5 * 40000 / 60))
 
 
 def test_code_change_during_dip_run_never_publishes_success(db, dip_runner, monkeypatch):
@@ -247,6 +249,8 @@ def test_dashboard_and_feature_table_use_consistent_buyer_power_units():
     frame = prices()
     ct = client_types(frame)
     ct.loc[:, 'buy_i_value'] = 66000.0
+    ct.loc[:, 'buy_i_volume'] = 660.0
+    ct.loc[:, 'buy_n_volume'] = 340.0
     feature_value = compute_daily_features(frame, ct)['buyer_power'].iloc[-1]
     dashboard_value = dashboard_symbol_daily(frame, ct)['buyer_power'].iloc[-1]
     assert dashboard_value == pytest.approx(feature_value)

@@ -7,12 +7,12 @@
 """
 
 import logging
-import math
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from core.client_quality import snapshot_buyer_power
 from core.timeutils import TEHRAN_TZ, now_tehran
 
 logger = logging.getLogger(__name__)
@@ -23,15 +23,8 @@ def buyer_power(snapshot: Dict[str, Any]) -> Optional[float]:
     قدرت خریدار حقیقی = سرانه خرید حقیقی ÷ سرانه فروش حقیقی.
     بزرگ‌تر از ۱ یعنی خریداران حقیقی به‌طور میانگین حجم بیشتری می‌خرند (ورود پول درشت حقیقی).
     """
-    try:
-        rb_vol, rb_cnt, rs_vol, rs_cnt = [float(snapshot.get(key)) for key in
-                                        ("real_buy_volume", "real_buy_count", "real_sell_volume", "real_sell_count")]
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not all(math.isfinite(v) and v > 0 for v in (rb_cnt, rs_vol, rs_cnt)) or not math.isfinite(rb_vol) or rb_vol < 0:
-        return None
-    power = (rb_vol / rb_cnt) / (rs_vol / rs_cnt)
-    return round(power, 2) if math.isfinite(power) else None
+    power = snapshot_buyer_power(snapshot)
+    return round(power, 2) if power is not None else None
 
 
 def _to_tehran(value: Any) -> Optional[datetime]:

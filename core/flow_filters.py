@@ -1,6 +1,6 @@
 """Causal, descriptive flow diagnostics. A filter match is never a trading signal.
 
-This is a separately versioned research sidecar; it does not modify daily-v5.
+This is a separately versioned research sidecar; daily features share its consistency checks.
 Windows count recorded symbol sessions, include observed zero-volume sessions,
 and never bridge a missing client-type observation by dropping that session.
 """
@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from core import market_rules
+from core.client_quality import coherent_side as _coherent_side
+from core.client_quality import finite_number as _number
 from core.symbol_review import volume_comparability
 from core.text import normalize_symbol
 
@@ -22,61 +24,8 @@ FILTER_NAMES = {
 }
 
 
-def _number(frame, name, *, allow_boolean=False):
-    raw = frame.get(name, pd.Series(np.nan, index=frame.index))
-    if not allow_boolean:
-        raw = raw.mask(raw.map(lambda value: isinstance(value, (bool, np.bool_))))
-    values = pd.to_numeric(raw, errors='coerce')
-    return values.where(np.isfinite(values))
-
-
 def _divide(a, b):
     return (a / b.where(b > 0)).replace([np.inf, -np.inf], np.nan)
-
-
-def _participant_side(frame, side):
-    """An observed zero/zero is known; positive value/volume with zero count is invalid."""
-    count = _number(frame, f'{side}_i_count')
-    volume = _number(frame, f'{side}_i_volume')
-    value = _number(frame, f'{side}_i_value')
-    valid_count = (count >= 0) & (count == np.floor(count))
-    vol_known = valid_count & (volume >= 0) & ((count > 0) == (volume > 0))
-    val_known = valid_count & (value >= 0) & ((count > 0) == (value > 0))
-    return count, volume.where(vol_known), value.where(val_known)
-
-
-def _coherent_side(prices, clients, side):
-    """خام حفظ می‌شود؛ حدود هر سمت و میانگین قیمت از واحد ریال مستقل کنترل می‌شوند.
-
-    تحمل جمع: یک ریال یا یک میلیونیم کل؛ تحمل قیمت ضمنی: یک ریال.
-    نبود حقوقی، جمع کامل را تأیید نمی‌کند اما کنترل مستقل حقیقی را حذف نمی‌کند.
-    """
-    count, retail_volume, retail_value = _participant_side(clients, side)
-    total_volume, total_value = _number(prices, 'volume'), _number(prices, 'value')
-    legal_volume, legal_value = _number(clients, f'{side}_n_volume'), _number(clients, f'{side}_n_value')
-    vol_tol, value_tol = np.maximum(1., total_volume.abs()*1e-6), np.maximum(1., total_value.abs()*1e-6)
-    volume_ok = (total_volume >= 0) & (retail_volume <= total_volume + vol_tol)
-    legal_vol_present = legal_volume.notna()
-    volume_ok &= (~legal_vol_present | ((legal_volume >= 0)
-                  & ((retail_volume + legal_volume - total_volume).abs() <= vol_tol)))
-    low, high = _number(prices, 'low_raw'), _number(prices, 'high_raw')
-    range_ok = (low > 0) & (high >= low)
-    implied = _divide(retail_value, retail_volume)
-    price_ok = ((retail_volume == 0) & (retail_value == 0)) | (range_ok & implied.between(low-1., high+1.))
-    market_price = _divide(total_value, total_volume)
-    market_ok = ((total_value == 0) & (total_volume == 0)) | (range_ok & market_price.between(low-1., high+1.))
-    value_ok = volume_ok & market_ok & (total_value >= 0) & (retail_value <= total_value + value_tol) & price_ok
-    legal_present = legal_value.notna()
-    value_ok &= (~legal_present | ((legal_value >= 0)
-                 & ((retail_value + legal_value - total_value).abs() <= value_tol)))
-    legal_price = _divide(legal_value, legal_volume)
-    legal_price_ok = ((legal_volume == 0) & (legal_value == 0)) | (range_ok & legal_price.between(low-1., high+1.))
-    value_ok &= (~(legal_present & legal_vol_present) | legal_price_ok)
-    known = retail_value.notna() & retail_volume.notna() & total_value.notna() & total_volume.notna()
-    reason = pd.Series(np.where(value_ok, 'verified_component',
-                       np.where(known, 'inconsistent_totals_or_implied_price', 'missing')), index=prices.index)
-    reason.loc[value_ok & legal_present & legal_vol_present] = 'verified_side_total'
-    return count, retail_volume.where(volume_ok), retail_value.where(value_ok), reason
 
 
 def _one_symbol(prices, clients):

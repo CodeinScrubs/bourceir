@@ -17,8 +17,9 @@ import numpy as np
 import pandas as pd
 
 from core import market_rules
+from core.client_quality import validated_client_data
 
-FEATURE_SET_VERSION = "daily-v5"  # official close never falls back to last trade
+FEATURE_SET_VERSION = "daily-v6"  # آمار متناقض حقیقی/حقوقی در تمام مسیرها نامعلوم است
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -114,7 +115,7 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
 
     # ─── پول هوشمند (حقیقی/حقوقی) ───
     if client_types is not None and not client_types.empty:
-        ct = df[["date", "value", "volume"]].merge(client_types, on="date", how="left")
+        ct = validated_client_data(df, client_types)
         net_real = ct["buy_i_value"] - ct["sell_i_value"]
         out["real_flow_ratio"] = _safe_div(net_real, ct["value"])
         flow_known = np.isfinite(net_real) & np.isfinite(ct["value"]) & (ct["value"] > 0)

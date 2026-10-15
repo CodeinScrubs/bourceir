@@ -14,6 +14,8 @@
 
 import pandas as pd
 
+from core.client_quality import finite_number
+
 MARKET_FEATURES = [
     "mkt_breadth", "mkt_breadth_5d", "mkt_ret_median", "mkt_locked_up_ratio", "mkt_locked_down_ratio",
     "mkt_real_flow_ratio", "mkt_symbols",
@@ -36,10 +38,12 @@ def compute_market_features(panel: pd.DataFrame) -> pd.DataFrame:
     })
     if {"real_net_value", "value"}.issubset(panel.columns):
         # صورت و مخرج از یک مجموعه نماد: نمادهای بدون آمار حقیقی/حقوقی نباید فقط مخرج را بزرگ کنند
-        matched = panel[panel["real_net_value"].notna() & panel["value"].notna()]
+        net, value = finite_number(panel, 'real_net_value'), finite_number(panel, 'value')
+        known = net.notna() & (value > 0) & (net.abs() <= value + value.abs()*1e-6 + 1.)
+        matched = panel[['date']].assign(real_net_value=net, value=value).loc[known]
         flows = matched.groupby("date")[["real_net_value", "value"]].sum()
         flows["value"] = flows["value"].where(flows["value"] > 0)
-        covered = grouped["real_net_value"].count()
+        covered = known.groupby(panel['date']).sum()
         # روزهایی که داده حقیقی/حقوقی کمتر از نیمی از نمادها منتشر شده، نامعتبر حساب می‌شوند
         market["mkt_real_flow_ratio"] = (flows["real_net_value"] / flows["value"]).where(covered >= 0.5 * market["mkt_symbols"])
     else:

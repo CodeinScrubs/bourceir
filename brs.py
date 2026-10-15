@@ -312,6 +312,16 @@ def cmd_stock_study(args) -> int:
     return 0
 
 
+def cmd_codal_document(args) -> int:
+    import json
+
+    from ops.codal_documents import capture_codal_document
+
+    result = capture_codal_document(args.url)
+    print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+    return 0 if result['status'] == 'captured' else 1
+
+
 def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
@@ -504,6 +514,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--judge", action="store_true", help="ارزیابی اطلاعیه‌ها با هوش مصنوعی Jev")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_codal)
+
+    p = sub.add_parser('codal-document', help='حفظ نسخه متن/PDF عمومی کدال؛ بدون استخراج سیگنال')
+    p.add_argument('--url', required=True, help='پیوند عمومی Decision/Attachment/DownloadFile کدال')
+    p.set_defaults(func=cmd_codal_document)
     return parser
 
 

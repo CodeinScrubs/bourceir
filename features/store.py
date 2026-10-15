@@ -25,6 +25,7 @@ from typing import Callable, List, Optional
 import pandas as pd
 
 from config import settings
+from core.client_quality import validated_client_data
 from core.timeutils import now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
@@ -51,7 +52,7 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
     for i, symbol in enumerate(targets, start=1):
         if progress:
             progress(i, len(targets), symbol)
-        prices = db.get_daily_prices_df(symbol)
+        prices = db.get_daily_prices_df(symbol).sort_values('date').reset_index(drop=True)
         if prices.empty:
             continue
         client_types = db.get_client_types_df(symbol)
@@ -60,7 +61,7 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
         # ستون‌های کمکی برای فیچر بازار (بعداً حذف می‌شوند)
         feats["value"] = prices["value"].to_numpy()
         if not client_types.empty:
-            merged = prices[["date"]].merge(client_types[["date", "buy_i_value", "sell_i_value"]], on="date", how="left")
+            merged = validated_client_data(prices, client_types)
             feats["real_net_value"] = (merged["buy_i_value"] - merged["sell_i_value"]).to_numpy()
         else:
             feats["real_net_value"] = float("nan")
