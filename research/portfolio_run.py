@@ -225,9 +225,12 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
         features_version="pinned-baseline", model_version=WALKFORWARD_VERSION)
     if logged is None:
         raise RuntimeError("ثبت پژوهش ناموفق بود؛ آخرین نتیجه موفق تغییر نکرد")
-    temporary = root / f"latest-portfolio-{uuid.uuid4().hex}.tmp"
-    temporary.write_text(json.dumps(dict(experiment_id=experiment_id)), encoding="utf-8")
-    os.replace(temporary, root / "latest-portfolio.json")
+    # Each hypothesis has its own latest successful report. The compatibility pointer
+    # remains the last publication overall; choosing a view must not relabel its results.
+    for pointer in (f'latest-portfolio-{dip_selector}.json', 'latest-portfolio.json'):
+        temporary = root / f"latest-portfolio-{uuid.uuid4().hex}.tmp"
+        temporary.write_text(json.dumps(dict(experiment_id=experiment_id)), encoding="utf-8")
+        os.replace(temporary, root / pointer)
     payload["report_path"] = str(report_path)
     return payload
 

@@ -115,6 +115,38 @@ def test_legacy_research_reports_are_marked_as_archived(dashboard_db, tmp_path, 
     assert any('گزارش قدیمی' in item.value for item in at.markdown)
 
 
+def test_portfolio_hypothesis_selection_shows_its_own_latest_report(dashboard_db, tmp_path, monkeypatch):
+    import json
+
+    from backtest.portfolio import PORTFOLIO_VERSION
+    from research.dip import TIME_EXIT_PRICE_BASIS
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    folder = tmp_path/'research'
+    folder.mkdir()
+    for selector, text in [('buy_queue', 'Synthetic queue hypothesis result'), ('buyer_power', 'Synthetic buyer-power hypothesis result')]:
+        (folder/f'latest-portfolio-{selector}.json').write_text(json.dumps(dict(experiment_id=selector)), encoding='utf-8')
+        payload = dict(protocol=dict(portfolio_version=PORTFOLIO_VERSION,
+            dip=dict(selector=selector, time_exit_price_basis=TIME_EXIT_PRICE_BASIS)))
+        (folder/f'{selector}.json').write_text(json.dumps(payload), encoding='utf-8')
+        (folder/f'{selector}.md').write_text(text, encoding='utf-8')
+    (folder/'latest-portfolio.json').write_text(json.dumps(dict(experiment_id='buyer_power')), encoding='utf-8')
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔬 پژوهش').run()
+    assert not at.exception
+    assert any('Synthetic queue hypothesis result' in item.value for item in at.markdown)
+    assert not any('Synthetic buyer-power hypothesis result' in item.value for item in at.markdown)
+    next(w for w in at.selectbox if w.label == 'فرضیه انتخاب نامزدهای خرید در اصلاح').set_value('قدرت خریدار').run()
+    assert not at.exception
+    assert any('Synthetic buyer-power hypothesis result' in item.value for item in at.markdown)
+    assert not any('Synthetic queue hypothesis result' in item.value for item in at.markdown)
+    # A mislabeled pointer must not display another hypothesis under the selected name.
+    (folder/'latest-portfolio-buy_queue.json').write_text(json.dumps(dict(experiment_id='buyer_power')), encoding='utf-8')
+    next(w for w in at.selectbox if w.label == 'فرضیه انتخاب نامزدهای خرید در اصلاح').set_value('صف خرید قفل در روز تصمیم').run()
+    assert not at.exception
+    assert any('با فرضیه انتخابی سازگار نیست' in item.value for item in at.markdown)
+    assert not any('Synthetic buyer-power hypothesis result' in item.value for item in at.markdown)
+
+
 def test_research_page_while_job_is_running(dashboard_db, monkeypatch):
     from ops import jobs
     monkeypatch.setattr(jobs, 'job_status', lambda name: dict(running=name == 'research', started_at=None,
