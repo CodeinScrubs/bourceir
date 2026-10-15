@@ -285,6 +285,24 @@ def cmd_intraday_audit(args) -> int:
     return 0 if report['rows'] or report['capture']['protocols'] else 1
 
 
+def cmd_research_review(args) -> int:
+    import json
+
+    from database.db import DatabaseManager
+    from ops.research_review import format_review, review_research
+
+    with DatabaseManager(read_only=True) as db:
+        report = review_research(db, args.experiment)
+    if args.json:
+        target = Path(args.json).resolve()
+        if not target.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+            raise ValueError('گزارش پژوهش را در data/private/ ذخیره کنید')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+    print(format_review(report))
+    return 0  # موفقیت بازبینی فایل‌ها، تأیید سودآوری نیست.
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -482,6 +500,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--source', default=None, help='شناسه پژوهش پایه محفوظ و سازگار با داده خام')
     p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی به ریال؛ پیش‌فرض تنظیمات بکتست')
     p.set_defaults(func=cmd_research_flow)
+
+    p = sub.add_parser('research-review', help='بازبینی شواهد پژوهش محفوظ؛ بدون صدور سیگنال یا بازکردن holdout')
+    p.add_argument('--experiment', required=True, help='شناسه صریح آزمایش PORTFOLIO یا FLOW')
+    p.add_argument('--json', default='', help='مسیر خروجی اختیاری در data/private/')
+    p.set_defaults(func=cmd_research_review)
 
     p = sub.add_parser('intraday-audit', help='بررسی محلی کیفیت ثبت داده درون‌روزی؛ بدون تحلیل سود')
     p.add_argument('--date', default=None, help='روز میلادی؛ پیش‌فرض آخرین روز ثبت اسنپ‌شات')
