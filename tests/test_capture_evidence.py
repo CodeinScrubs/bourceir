@@ -337,6 +337,20 @@ def test_explicit_inactive_instrument_is_retained_and_alias_is_normalized(db, ma
     assert run['scope_kind'] == 'explicit' and run['per_symbol'][0]['symbol'] == 'خزامیا'
 
 
+@pytest.mark.parametrize('requested', ['شرکت فولاد مبارکه اصفهان', 'شرکت فولاد مبارکه اصفهان,فولاد'])
+def test_company_alias_and_symbol_share_one_frozen_instrument(db, market_watch_rows, monkeypatch, clock, requested):
+    import brs
+    db.upsert_symbol(dict(symbol_fa='فولاد', name_fa='شرکت فولاد مبارکه اصفهان',
+                          ins_code=FOOLAD_INS, instrument_type_code=300))
+    source = collector(db, market_watch_rows)
+    monkeypatch.setattr('data_collector.scheduler.DataCollector', lambda **kw: source)
+    assert brs.cmd_live(SimpleNamespace(symbols=requested, interval=30, cycles=1, force=True)) == 0
+    with DatabaseManager(db_path=db.db_path, read_only=True) as reader:
+        run = audit_intraday(reader)['capture']['runs'][0]
+    assert run['expected_instruments'] == 1 and run['complete_scope_polls'] == 1
+    assert run['per_symbol'][0]['symbol'] == 'فولاد'
+
+
 def test_provider_age_uses_independent_finish_instead_of_a_stale_capture_clock(db, market_watch_rows, clock):
     db.upsert_symbol(dict(symbol_fa='فولاد', ins_code=FOOLAD_INS, instrument_type_code=300))
     repo, run_id = start_run(db)

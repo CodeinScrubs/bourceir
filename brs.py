@@ -321,6 +321,7 @@ def cmd_live(args) -> int:
             instruments = [collector._resolve(symbol) for symbol in selected]
             if any(row is None for row in instruments):
                 raise ValueError('حداقل یک نماد درخواستی با شناسه معتبر داخل دامنه شناسایی نشد؛ پایش آغاز نشد')
+            instruments = list({str(row['ins_code']): row for row in instruments}.values())
         else:
             instruments = collector.db.get_universe_symbols()
         calendar = collector.db.get_market_calendar()
@@ -340,7 +341,7 @@ def cmd_live(args) -> int:
             else:
                 journal.append(run_id, cycle, 'poll_started')
                 try:
-                    report = collector.collect_market_snapshot(symbols=selected, instruments=instruments)
+                    report = collector.collect_market_snapshot(instruments=instruments)
                 except Exception as exc:
                     journal.append(run_id, cycle, 'poll_finished', dict(status='error', error_type=type(exc).__name__,
                                    elapsed_seconds=time.monotonic() - started, coverage=None))
