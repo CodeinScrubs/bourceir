@@ -119,7 +119,8 @@ def page_workbench():
             st.caption(f"آخرین روز داده: {to_jalali(source['date'])} — ورود، حد زیان و هدف را خودت وارد کن.")
             archived_price = marks.get(symbol)
             entry = st.number_input("قیمت ورود (تومان برای هر سهم)", min_value=0.1,
-                                    value=float(archived_price) / 10 if pd.notna(archived_price) and archived_price > 0 else 0.1)
+                                    value=float(archived_price) / 10 if pd.notna(archived_price) and archived_price >= 1 else None,
+                                    placeholder='قیمت ورود دلخواهت را وارد کن')
             stop = st.number_input("قیمت سناریوی خروج با زیان (تومان)", min_value=0.1, value=0.1)
             target = st.number_input("قیمت هدف خودت (تومان)", min_value=0.1, value=0.1)
             budget = st.number_input("بودجه زیان همین معامله (تومان)", min_value=1, value=1)
@@ -149,9 +150,11 @@ def page_workbench():
             else:
                 data_current &= account_current
             try:
+                if entry is None:
+                    raise ValueError('قیمت ورود را خودت وارد کن؛ قیمت آرشیو نامعلوم یا خارج از حد ورودی است')
                 calculation = plan_trade(profile=profile, entry_rial=entry * 10, stop_rial=stop * 10, target_rial=target * 10,
                                          trade_loss_budget_rial=budget * 10, available_cash_rial=sizing_state["cash_rial"],
-                                         equity_rial=sizing_state["equity_rial"] or 0, reserved_risk_rial=sizing_reserved or 0,
+                                         equity_rial=sizing_state["equity_rial"], reserved_risk_rial=sizing_reserved,
                                          daily_value_rial=source["value"], data_current=bool(data_current),
                                          intraday=intraday, intraday_snapshot=snapshot,
                                          at=at, calendar=calendar,

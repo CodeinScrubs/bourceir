@@ -460,6 +460,7 @@ def latest_research_report(pointer: str = "latest.json") -> str:
         report = (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
         params = payload.get('params') or {}
         from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS
+        from research.dip_run import DIP_SUMMARY_VERSION
         if pointer == 'latest-flow.json':
             from backtest.portfolio import PORTFOLIO_VERSION
             from core.flow_filters import FLOW_FILTER_VERSION
@@ -494,7 +495,8 @@ def latest_research_report(pointer: str = "latest.json") -> str:
                 # Keep the sign and percent with the number inside Persian table cells.
                 report = re.sub(r'[+-]?\d+(?:\.\d+)?%', lambda m: '\u2066'+m.group(0)+'\u2069', report)
         elif pointer == 'latest-dip.json':
-            current = params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
+            current = (params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
+                       and params.get('summary_version') == DIP_SUMMARY_VERSION)
         elif pointer in {'latest-portfolio.json', 'latest-portfolio-buy_queue.json', 'latest-portfolio-buyer_power.json'}:
             from backtest.portfolio import PORTFOLIO_VERSION
             protocol = payload.get('protocol') or {}

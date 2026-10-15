@@ -20,7 +20,7 @@ def summarize_executions(events: list, profile: RiskProfile, marks: dict) -> dic
         if event["side"] == "buy":
             if gross + fee > cash + 1e-6:
                 raise ValueError("خرید ثبت‌شده از نقدینگی دفتر بیشتر است")
-            cash -= gross + fee
+            cash = max(0.0, cash - (gross + fee))
             pos["quantity"] += int(quantity)
             pos["cost_rial"] += gross + fee
             if event.get("plan_id") not in pos["plan_ids"]:

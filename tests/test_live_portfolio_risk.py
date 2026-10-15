@@ -76,7 +76,7 @@ def test_intraday_ui_sizes_against_all_existing_positions(dashboard_db, monkeypa
         assert set(evidence['observations']) == {'ب'}
         assert evidence['equity_rial'] == pytest.approx(989990.4)
         assert evidence['observations']['ب']['snapshot']['last_price'] == 1000
-        assert calculation['calculation_version'] == 'manual-plan-v4'
+        assert calculation['calculation_version'] == 'manual-plan-v5'
 
 
 def test_feature_research_rejects_a_different_recorded_lock(db, tmp_path):
