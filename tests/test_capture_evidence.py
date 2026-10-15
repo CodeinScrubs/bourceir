@@ -257,17 +257,17 @@ def test_migration_from_v10_preserves_records_and_backs_up_before_changes(tmp_pa
     path = tmp_path / 'legacy.db'
     migrations = migrator.discover_migrations()
     with monkeypatch.context() as old:
-        old.setattr(migrator, 'discover_migrations', lambda: migrations[:-1])
+        old.setattr(migrator, 'discover_migrations', lambda: [m for m in migrations if m[0] <= 10])
         with DatabaseManager(db_path=path) as database:
             database.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
             assert database.schema_version() == 10
     with DatabaseManager(db_path=path, read_only=True) as database:
         assert audit_intraday(database)['capture']['status'] == 'schema_unavailable'
     with DatabaseManager(db_path=path) as database:
-        assert database.schema_version() == 11 and database.get_symbol('آزمون')
+        assert database.schema_version() == 12 and database.get_symbol('آزمون')
         assert migrator.apply_migrations(database.conn) == []
         # The migration itself also tolerates being executed twice.
-        migrator._run_sql_migration(database.conn, migrations[-1][2])
+        migrator._run_sql_migration(database.conn, next(m[2] for m in migrations if m[0] == 11))
         database.conn.commit()
         assert database.conn.execute('SELECT COUNT(*) FROM capture_runs').fetchone()[0] == 0
     backups = list((tmp_path / 'backups').glob('*-v10.db'))
