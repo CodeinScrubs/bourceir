@@ -53,8 +53,8 @@
 برای توسعه:
 
 ```powershell
-.venv\Scripts\python.exe brs.py broker-import data/private/farabi/capture-X/portfolio-dom.json data/private/farabi/capture-X/account-turnover.xlsx data/private/farabi/capture-X/orders-history.xlsx --report data/private/farabi/reconciliation.json
-.venv\Scripts\python.exe brs.py broker-refresh-quotes --report data/private/farabi/reconciliation.json
+venv\Scripts\python.exe brs.py broker-import data/private/farabi/capture-X/portfolio-dom.json data/private/farabi/capture-X/account-turnover.xlsx data/private/farabi/capture-X/orders-history.xlsx --report data/private/farabi/reconciliation.json
+venv\Scripts\python.exe brs.py broker-refresh-quotes --report data/private/farabi/reconciliation.json
 ```
 
 پذیرش مرحله جدید فقط با درخواست صریح مالک و افزودن `--adopt-baseline` انجام می‌شود؛ در استفاده روزانه این گزینه را ندهید. محاسبات پژوهشی و دوره نهایی مهر و موم مستقل از گزارش خصوصی حساب هستند.

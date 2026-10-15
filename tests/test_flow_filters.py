@@ -15,19 +15,20 @@ def history(n=85):
         close_raw=1000., close_final_raw=1000., ref_price_raw=1000., volume=100_000_000.,
         value=100_000_000_000., trade_count=200.))
     c = pd.DataFrame(dict(symbol='کیان', date=dates, buy_i_volume=80_000_000., buy_n_volume=20_000_000.,
-        sell_i_volume=50_000_000., buy_i_count=50., sell_i_count=400., buy_i_value=60_000_000_000.,
-        sell_i_value=20_000_000_000.))
+        sell_i_volume=50_000_000., buy_i_count=50., sell_i_count=400., buy_i_value=80_080_000_000.,
+        sell_i_value=49_950_000_000.))
     return p, c
 
 
 def test_exact_daily_mean_is_not_pooled_and_does_not_round_before_comparison():
     p, c = history()
-    c.loc[c.index[-3:], ['buy_i_value', 'buy_i_count']] = [[100., 1.], [200., 2.], [900., 3.]]
+    c.loc[c.index[-3:], ['buy_i_value', 'buy_i_count', 'buy_i_volume']] = [[100_100., 1., 100.], [200_200., 2., 200.], [900_900., 3., 900.]]
+    c.loc[c.index[-3:],'buy_n_volume'] = p.loc[p.index[-3:], 'volume']-c.loc[c.index[-3:], 'buy_i_volume']
     row = flow_metrics(p, c).iloc[-1]
-    assert row.per_capita_buy_mean_3d_rial == pytest.approx(500/3)
-    assert row.per_capita_buy_pooled_3d_rial == pytest.approx(1200/6)
+    assert row.per_capita_buy_mean_3d_rial == pytest.approx(500_500/3)
+    assert row.per_capita_buy_pooled_3d_rial == pytest.approx(1_201_200/6)
     assert row.buyer_power_volume != row.buyer_power_value
-    assert row.per_capita_buy_rial == 300
+    assert row.per_capita_buy_rial == 300_300
 
 
 def test_prior_volume_windows_exclude_today_and_require_full_observations():
@@ -186,5 +187,6 @@ def test_loader_filters_scope_and_exclusive_boundary_in_sql(db):
 def test_power_and_positive_net_flow_are_different_conditions():
     p, c = history()
     c['buy_i_value'], c['sell_i_value'] = 10_000_000_000., 20_000_000_000.
+    c['buy_i_volume'],c['sell_i_volume'],c['buy_n_volume'] = 10_000_000.,20_000_000.,90_000_000.
     row = flow_metrics(p, c).iloc[-1]
     assert row.buyer_power_value > 2 and row.net_real_value_rial < 0

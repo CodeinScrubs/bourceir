@@ -59,7 +59,9 @@ jsonschema-specifications==2025.9.1
 markupsafe==3.0.4
     # via jinja2
 narwhals==2.27.1
-    # via altair
+    # via
+    #   altair
+    #   plotly
 numpy==2.4.6
     # via
     #   -r requirements.txt
@@ -69,6 +71,7 @@ numpy==2.4.6
 packaging==26.3
     # via
     #   altair
+    #   plotly
     #   pytest
     #   streamlit
     #   typesafe-sdk
@@ -78,6 +81,8 @@ pandas==3.0.6
     #   streamlit
 pillow==12.3.0
     # via streamlit
+plotly==6.9.0
+    # via -r requirements.txt
 pluggy==1.6.0
     # via pytest
 protobuf==7.36.2

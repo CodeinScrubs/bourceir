@@ -26,7 +26,7 @@ from research.portfolio_run import _picks, select_from_past, verified_baseline_i
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
 from research.walkforward import time_folds
 
-FLOW_RESEARCH_VERSION = 'flow-portfolio-v2'
+FLOW_RESEARCH_VERSION = 'flow-portfolio-v3'
 
 
 def ranked_matches(metrics, name, k):

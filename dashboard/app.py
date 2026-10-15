@@ -23,6 +23,7 @@ from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from dashboard.broker import page_broker  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
+from dashboard.stock_study import page_stock_study  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
 from database.db import DatabaseManager  # noqa: E402
@@ -671,6 +672,7 @@ PAGES = {
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,
     "🔬 پژوهش": page_research,
+    "📚 مطالعه رشد نمادها": page_stock_study,
     "🩺 سلامت سامانه": page_health,
     "ℹ️ راهنما": page_guide,
 }
