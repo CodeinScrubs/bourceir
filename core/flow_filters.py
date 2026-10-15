@@ -9,9 +9,10 @@ import numpy as np
 import pandas as pd
 
 from core import market_rules
+from core.symbol_review import volume_comparability
 from core.text import normalize_symbol
 
-FLOW_FILTER_VERSION = 'flow-filters-v1'
+FLOW_FILTER_VERSION = 'flow-filters-v2'
 RESEARCH_FILTERS = ('retail_acceleration', 'volume_breakout', 'daily_pressure')
 FILTER_NAMES = {
     'retail_acceleration': 'تقویت سرانه حقیقی — فرضیه روزانه',
@@ -77,8 +78,11 @@ def _one_symbol(prices, clients):
     out['per_capita_buy_prior_20d_ratio'] = _divide(buy_cap, buy_cap.shift(1).rolling(20, min_periods=20).mean())
     for n in (20, 30):
         prior = volume.shift(1).rolling(n, min_periods=n).mean()
+        comparable = volume_comparability(p, n)
         out[f'volume_prior_{n}d_mean'] = prior
-        out[f'volume_ratio_{n}d'] = _divide(volume, prior)
+        out[f'volume_comparable_{n}d'] = comparable
+        # شکاف مرجع نوع اقدام شرکتی را ثابت نمی‌کند؛ تعداد سهم را از آن حدس نمی‌زنیم.
+        out[f'volume_ratio_{n}d'] = _divide(volume, prior).where(comparable)
     out['value_prior_20d_mean_rial'] = value.shift(1).rolling(20, min_periods=20).mean()
     # Normalize each raw high/last to a causal return index. Never compare pre/post-action raw prices.
     ret = market_rules.pit_daily_returns(p)

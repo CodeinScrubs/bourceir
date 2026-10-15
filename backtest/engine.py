@@ -258,6 +258,10 @@ class BacktestEngine:
             gross_pnl=round(trip['sell_gross'] - buy_gross, 2),
             commissions=round((cost - buy_gross) + (trip['sell_gross'] - trip['proceeds']), 2),
             net_pnl=round(pnl, 2), return_pct=round(pnl / cost * 100, 4), is_winner=pnl > 0,
+            entry_quantity=int(trip['bought']), allocated_entry_notional_rial=buy_gross,
+            allocated_entry_price_rial=buy_gross / trip['sold'],
+            exit_notional_rial=trip['sell_gross'],
+            corporate_action_events=int(trip.get('corporate_action_events', 0)),
         ))
 
     # ═══════════════════════════════════════════════
@@ -293,6 +297,7 @@ class BacktestEngine:
         if symbol_fa in self._round_trips:
             trip = self._round_trips[symbol_fa]
             trip['receivable_cost'] = trip.get('receivable_cost', 0.0) + fraction_cost
+            trip['corporate_action_events'] = trip.get('corporate_action_events', 0) + 1
         self.corporate_action_events += 1
         logger.info("اقدام شرکتی «%s» در %s: تعداد سهم %d → %d (ضریب %.4f).",
                     symbol_fa, date, pos.quantity, new_quantity, ratio)

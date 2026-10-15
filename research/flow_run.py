@@ -26,7 +26,7 @@ from research.portfolio_run import _picks, select_from_past, verified_baseline_i
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
 from research.walkforward import time_folds
 
-FLOW_RESEARCH_VERSION = 'flow-portfolio-v1'
+FLOW_RESEARCH_VERSION = 'flow-portfolio-v2'
 
 
 def ranked_matches(metrics, name, k):
@@ -99,6 +99,7 @@ def run_flow_research(db, *, source_id=None, initial_capital_rial=None, min_trai
         definitions={name: list(filter_conditions(pd.DataFrame(), name).columns) for name in FILTER_NAMES},
         ranking='fixed descending decision-day value; symbol tie-break; top-k; no outcome tuning',
         windows='3/5 per-capita arithmetic daily means include today; 20/30 volume/value windows exclude today; full windows',
+        volume_comparability='all n reference transitions between today and the n previous volumes must be known and equal to 1; otherwise ratio unknown; no share-count inference',
         unavailable='original nine-condition filter, free-float history, market-mean definition, historical actual price limits, intraday book',
         benchmark='best of the existing eight baselines chosen using only purged, embargoed past labels; otherwise cash',
         random_control='one seed; same daily candidate count; liquid universe; descriptive, not a significance test',

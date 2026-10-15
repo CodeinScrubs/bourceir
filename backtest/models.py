@@ -63,13 +63,18 @@ class ClosedTrade:
     entry_date: str
     exit_date: str
     quantity: int
-    entry_price: float                 # میانگین قیمت ورود (بدون کارمزد)
+    entry_price: float                 # میانگین قیمت اجرای خرید اصلی؛ در واحد تعداد خرید، قبل از تعدیل
     exit_price: float                  # قیمت خروج
     gross_pnl: float                   # سود ناخالص (ریال)
     commissions: float                 # مجموع کارمزدهای خرید و فروش (ریال)
     net_pnl: float                     # سود یا زیان خالص نهایی (ریال)
     return_pct: float                  # درصد بازدهی خالص معامله
     is_winner: bool                    # آیا معامله سودده بود؟
+    entry_quantity: int = 0            # مجموع تعداد خرید اصلی؛ با تعداد فروش پس از مجمع یکی نیست
+    allocated_entry_notional_rial: float = 0.0  # اصل خرید تخصیص‌یافته به فروش، بدون بهای طلب کسری
+    allocated_entry_price_rial: float = 0.0  # اصل خرید تخصیص‌یافته ÷ تعداد فروش؛ مبنای مقایسه با خروج
+    exit_notional_rial: float = 0.0    # اصل فروش دقیق؛ میانگین گرد‌شده × تعداد ممکن است اختلاف گرد کردن داشته باشد
+    corporate_action_events: int = 0
 
 
 @dataclass

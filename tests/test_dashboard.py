@@ -90,6 +90,25 @@ def test_root_app_renders_on_every_run(dashboard_db):
         assert any("BRS" in t.value for t in at.title)
 
 
+def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dashboard_db):
+    from tests.test_flow_filters import history
+    p, _ = history(45)
+    p.loc[25:, [col for col in p if col.endswith('_raw')]] *= .5
+    with DatabaseManager(db_path=dashboard_db) as db:
+        sid = db.upsert_symbol(dict(symbol_fa='کیان', ins_code='1', instrument_type_code=300))
+        db.upsert_daily_prices_df(sid, p.drop(columns='symbol'))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('📊 بررسی نماد').run()
+    assert not at.exception
+    mode = next(r for r in at.radio if r.label == 'نوع قیمت نمودار')
+    assert mode.value == 'تعدیل نمایشی بر مبنای مرجع'
+    assert any(m.label == 'رویداد شرکتی ثبت‌شده' and str(m.value) == '0' for m in at.metric)
+    assert any('افزایش سرمایه یا مجمع تأییدشده نیست' in c.value for c in at.caption)
+    mode.set_value('قیمت خام روز').run()
+    assert not at.exception
+    assert next(r for r in at.radio if r.label == 'نوع قیمت نمودار').value == 'قیمت خام روز'
+
+
 def test_flow_lab_explains_incomplete_original_filter(dashboard_db, closing_price_daily):
     db = DatabaseManager(db_path=dashboard_db)
     provider = TsetmcProvider(session=FakeSession({'GetClosingPriceDailyList': {'closingPriceDaily': closing_price_daily}}))
