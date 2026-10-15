@@ -36,6 +36,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |
+| `core/research_review.py` + `ops/research_review.py` | بازبینی فقط‌خواندنی آرشیو سرمایه مشترک/جریان: تطبیق ثبت/هش و محاسبه دوباره آمار منحنی، مخرج نامعلوم و مقایسه زوجی. بازاجرای موتور یا مجوز سیگنال نیست؛ راهنما `docs/research/research-review.md` و قرارداد/۷۶ پرسش `docs/research/builder-brief-fa.md`. |
 | `core/stock_study.py` + `ops/stock_study.py` | مطالعه توصیفی با ورودی و کد محفوظ، همتای منتخب فقط از اطلاعات پیشین و رتبه ارزش بازار مشاهده؛ `stock-study-v1`. نمونه و دوره بررسی‌شده برای فرضیه مشتق‌شده مستقل نیست؛ مجوز سیگنال ندارد. راهنما `docs/research/stock-study.md`. فیلتر جریان `flow-filters-v3` / `flow-portfolio-v3` است؛ کنترل سازگاری آن با `daily-v6` در `core/client_quality.py` مشترک است. |
 | `core/codal_documents.py` + `ops/codal_documents.py` | آرشیو متن/PDF عمومی کدال، نسخه مستقل و هش محتوا/کد؛ زمان دسترسی زودتر از دریافت/حفظ نیست. تأیید عددی/هویت/انتشار تاریخی یا ورودی خودکار مدل ندارد. راهنما `docs/codal-documents.md`. |
 | `database/capture.py` + `ops/capture_audit.py` | پروتکل فقط‌افزودنی دامنه/کد پیش از دریافت و شروع/نتیجه چرخه‌ها؛ `intraday-quality-v2` فاصله تغییرات ذخیره‌شده را از فاصله دریافت مستقل جدا می‌کند. ثبت پایش، ثبت تصمیم پیش از نتیجه نیست. |
