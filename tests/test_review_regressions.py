@@ -285,16 +285,17 @@ def test_market_end_is_exclusive_even_in_utc_environment():
     assert not is_market_open(datetime(2026,10,12,12,30))
 
 
-def test_live_honors_recorded_holiday_and_finishes_requested_cycle(monkeypatch):
+def test_live_honors_recorded_holiday_and_finishes_requested_cycle(db, monkeypatch):
     import brs
     from core import timeutils
     from data_collector import scheduler
     calls = []
-    database = SimpleNamespace(get_universe_symbols=lambda: [{'id':1}], close=lambda: None,
-                               is_trading_day=lambda day: False)
-    collector = SimpleNamespace(db=database, collect_market_snapshot=lambda **kw: calls.append(True))
+    db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
+    db.insert_market_calendar('2026-10-14', False, holiday_reason='synthetic closure')
+    collector = SimpleNamespace(db=db, provider=SimpleNamespace(name='test_only'),
+                                collect_market_snapshot=lambda **kw: calls.append(True))
     monkeypatch.setattr(scheduler, 'DataCollector', lambda **kw: collector)
-    monkeypatch.setattr(timeutils, 'is_market_open', lambda at=None: True)
+    monkeypatch.setattr(timeutils, 'now_tehran', lambda: datetime(2026,10,14,10,tzinfo=timeutils.TEHRAN_TZ))
     monkeypatch.setattr(brs.time, 'sleep', lambda seconds: pytest.fail('requested cycle must terminate'))
     assert brs.cmd_live(SimpleNamespace(symbols='', interval=30, cycles=1, force=False)) == 0
     assert not calls

@@ -558,7 +558,9 @@ def page_research() -> None:
 def page_health() -> None:
     st.title("🩺 سلامت سامانه")
     with st.expander('کیفیت ثبت داده درون‌روزی'):
-        st.caption('این گزارش فقط داده ثبت‌شده را توصیف می‌کند؛ زمان مستقل عمق بازار، وضعیت مجاز معاملات و پرشدن سفارش خودمان هنوز تأیید نشده‌اند.')
+        st.caption('فاصله اسنپ‌شات‌ها، فاصله تغییرات ذخیره‌شده است؛ پاسخ بدون تغییر دوباره ذخیره نمی‌شود. '
+                   'ثبت مستقل چرخه‌ها کیفیت دریافت را جدا نشان می‌دهد. زمان مستقل عمق بازار، وضعیت مجاز معاملات '
+                   'و پرشدن سفارش خودمان هنوز تأیید نشده‌اند.')
         if st.button('بررسی کیفیت آخرین جلسه ثبت‌شده'):
             from ops.intraday_audit import audit_intraday
             with ro_db() as db:
@@ -566,10 +568,52 @@ def page_health() -> None:
             if quality['rows']:
                 st.write(f"روز: {to_jalali(quality['session_date'])} | {quality['rows']:,} اسنپ‌شات | {quality['symbols']} نماد")
                 st.write(f"زمان قیمت نامعلوم: {quality['timestamp_unknown_rows']:,} | قیمت قدیمی هنگام دریافت: {quality['provider_stale_rows']:,}")
-                st.dataframe(pd.DataFrame(quality['per_symbol']).rename(columns={'symbol': 'نماد', 'rows': 'تعداد مشاهده',
-                    'gap_p95_seconds': 'صدک ۹۵ فاصله دریافت (ثانیه)', 'max_gap_seconds': 'بیشترین فاصله دریافت (ثانیه)'}), hide_index=True)
+                snapshots = pd.DataFrame(quality['per_symbol'])
+                for field in ('observed_start', 'observed_end'):
+                    snapshots[field] = snapshots[field].map(lambda value: to_jalali(value, with_time=True) if value else 'نامعلوم')
+                for field in ('gap_p95_seconds', 'max_gap_seconds', 'provider_age_p95_seconds'):
+                    snapshots[field] = snapshots[field].map(lambda value: 'نامعلوم' if pd.isna(value) else f'{value:,.1f}')
+                st.dataframe(snapshots.rename(columns={'symbol': 'نماد', 'rows': 'تغییر ذخیره‌شده',
+                    'observed_start': 'شروع مشاهده', 'observed_end': 'پایان مشاهده',
+                    'gap_p95_seconds': 'صدک ۹۵ فاصله تغییر (ثانیه)', 'max_gap_seconds': 'بیشترین فاصله تغییر (ثانیه)',
+                    'gaps_over_45_seconds': 'فاصله تغییر بیش از ۴۵ ثانیه',
+                    'provider_age_p95_seconds': 'صدک ۹۵ سن زمان قیمت (ثانیه)',
+                    'observable_ask_rows': 'مظنه واجد کنترل عددی'}), hide_index=True)
             else:
                 st.info('هنوز اسنپ‌شات واقعی برای بررسی وجود ندارد.')
+            capture = quality['capture']
+            if capture['protocols']:
+                st.write(f"ثبت مستقل دریافت: {capture['attempted_polls']:,} شروع | {capture['completed_polls']:,} نتیجه | "
+                         f"{capture['pending_polls']:,} شروع بدون نتیجه | {capture['complete_scope_polls']:,} پاسخ با همه نمادهای هدف")
+                st.caption('شروع بدون نتیجه می‌تواند دریافتِ در حال اجرا یا قطع برنامه باشد؛ نبود ثبت پایان، ادامه پایش را ثابت نمی‌کند. '
+                           'پوشش کل جلسه و اعتبار تصمیم معاملاتی همچنان تأیید نشده‌اند.')
+                stop_labels = {'cycles_completed': 'چرخه‌های تعیین‌شده تمام شدند',
+                               'user_interrupted': 'توقف دستی', 'error': 'خطا', None: 'پایان ثبت نشده'}
+                runs = [{'شروع پایش': to_jalali(run['started_at'], with_time=True),
+                         'نمادهای هدف': run['expected_instruments'], 'شروع دریافت': run['attempted_polls'],
+                         'نتیجه نامعلوم': run['pending_polls'], 'پاسخ معتبر همه نمادها': run['complete_scope_polls'],
+                         'بیشترین فاصله شروع دریافت (ثانیه)': ('نامعلوم' if run['max_poll_start_gap_seconds'] is None
+                                                               else f"{run['max_poll_start_gap_seconds']:,.1f}"),
+                         'اجرای اجباری': 'بله' if run['forced'] else 'خیر', 'پایان': stop_labels[run['stop_reason']]}
+                        for run in capture['runs']]
+                st.dataframe(pd.DataFrame(runs), hide_index=True)
+                for run in capture['runs']:
+                    with st.expander(f"کیفیت دریافت نمادها — {run['id']}"):
+                        fields = ('symbol', 'valid', 'unchanged', 'missing', 'duplicate', 'rejected',
+                                  'outcome_unknown', 'price_time_fresh', 'price_time_stale', 'price_time_future',
+                                  'price_time_unknown', 'max_valid_poll_gap_seconds')
+                        instruments = pd.DataFrame(run['per_symbol'])[list(fields)]
+                        instruments['max_valid_poll_gap_seconds'] = instruments['max_valid_poll_gap_seconds'].map(
+                            lambda value: 'نامعلوم' if pd.isna(value) else f'{value:,.1f}')
+                        st.dataframe(instruments.rename(columns={
+                            'symbol': 'نماد', 'valid': 'پاسخ معتبر', 'unchanged': 'بدون تغییر', 'missing': 'غایب',
+                            'duplicate': 'شناسه تکراری', 'rejected': 'رد شده', 'outcome_unknown': 'نتیجه نامعلوم',
+                            'price_time_fresh': 'زمان قیمت تازه', 'price_time_stale': 'زمان قیمت قدیمی',
+                            'price_time_future': 'زمان قیمت در آینده',
+                            'price_time_unknown': 'زمان قیمت نامعلوم',
+                            'max_valid_poll_gap_seconds': 'بیشترین فاصله دریافت معتبر (ثانیه)'}), hide_index=True)
+            else:
+                st.info('ثبت مستقل چرخه برای این روز موجود نیست؛ فاصله اسنپ‌شات‌های قدیمی، قطع دریافت را ثابت نمی‌کند.')
     if st.button("اجرای عیب‌یابی کامل (اینترنت، پروکسی، دیتابیس، هوش مصنوعی)", type="primary"):
         from ops.doctor import run_doctor
 
