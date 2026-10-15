@@ -15,13 +15,9 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+from core.data_quality import quant_anomaly_flags
+
 logger = logging.getLogger(__name__)
-
-# جهش قیمت بزرگ‌تر از این مقدار نسبت به قیمت مرجع مشکوک است (دامنه نوسان عادی ±۳ تا ±۵ درصد است؛
-# فقط روز بازگشایی بعد از توقف طولانی می‌تواند بدون دامنه باشد)
-PRICE_JUMP_THRESHOLD = 0.105
-VOLUME_SPIKE_MULTIPLIER = 10.0
-
 
 def _pick(record: Dict[str, Any], *keys: str) -> Any:
     for key in keys:
@@ -156,13 +152,7 @@ class DataValidator:
         - price_anomaly: تغییر قیمت پایانی نسبت به قیمت مرجع بیش از ۱۰.۵٪
         - volume_anomaly: حجم بیش از ۱۰ برابر میانه حجم ۳۰ روز قبل
         """
-        from core.market_rules import pit_daily_returns
-
-        flags = pd.DataFrame(index=df.index)
-        flags["price_anomaly"] = pit_daily_returns(df).abs() > PRICE_JUMP_THRESHOLD
-        prior_median = df["volume"].shift(1).rolling(30, min_periods=10).median()
-        flags["volume_anomaly"] = (df["volume"] > VOLUME_SPIKE_MULTIPLIER * prior_median).fillna(False)
-        return flags
+        return quant_anomaly_flags(df)
 
     @staticmethod
     def validate_snapshot(snapshot: Dict[str, Any]) -> Tuple[bool, List[str]]:

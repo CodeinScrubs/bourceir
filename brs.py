@@ -336,14 +336,18 @@ def cmd_codal(args) -> int:
     from data_collector.scheduler import DataCollector
 
     collector = DataCollector()
-    report = collector.collect_announcements(pages=args.pages, symbol_fa=args.symbol)
-    _print_report("کدال", report)
-    if args.judge:
-        from ai.codal_judge import judge_pending_announcements
+    try:
+        report = collector.collect_announcements(pages=args.pages, symbol_fa=args.symbol)
+        _print_report("کدال", report)
+        if report.get('pagination'):
+            print(f"   • وضعیت صفحه‌ها: {report['pagination']} — پوشش کامل تاریخی تأیید نشده است")
+        if args.judge:
+            from ai.codal_judge import judge_pending_announcements
 
-        result = judge_pending_announcements(collector.db, limit=args.limit)
-        print(f"\n🤖 ارزیابی هوش مصنوعی: {result}")
-    collector.db.close()
+            result = judge_pending_announcements(collector.db, limit=args.limit)
+            print(f"\n🤖 ارزیابی هوش مصنوعی: {result}")
+    finally:
+        collector.db.close()
     return 0 if report.get('status') == 'success' else 1
 
 

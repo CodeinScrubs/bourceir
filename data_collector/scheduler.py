@@ -334,14 +334,26 @@ class DataCollector:
     def collect_announcements(self, pages: int = 3, symbol_fa: Optional[str] = None) -> Dict[str, Any]:
         """دریافت جدیدترین اطلاعیه‌های کدال؛ فقط اطلاعیه‌های نمادهای داخل دامنه ذخیره می‌شوند."""
         started_at = now_tehran_iso()
-        letters = self.codal.get_latest(pages=pages, symbol_fa=symbol_fa)
-        if not letters:
-            return self._finish("codal", started_at, 0, 0, 1, ["اطلاعیه‌ای از کدال دریافت نشد"])
-        tracked = {s["symbol_fa"] for s in self.db.get_universe_symbols()}
-        in_scope = [letter for letter in letters if letter["symbol_fa"] in tracked]
+        if symbol_fa:
+            meta = self._resolve(symbol_fa)
+            if not meta:
+                return self._finish('codal', started_at, 1, 0, 1, ['نماد دقیق داخل دامنه شناسایی نشد'])
+            symbol_fa = meta['symbol_fa']
+        if hasattr(self.codal, 'get_latest_report'):
+            page_report = dict(self.codal.get_latest_report(pages=pages, symbol_fa=symbol_fa))
+            letters = page_report.pop('letters')
+        else:
+            # رابط قدیمی تأمین‌کننده وضعیت خطا/پایان فهرست را اثبات نمی‌کند.
+            letters = self.codal.get_latest(pages=pages, symbol_fa=symbol_fa)
+            page_report = dict(errors=[], failed_page=None, pagination_status_unknown=True)
+        tracked = {s["symbol_fa"] for s in self.db.get_universe_symbols(include_inactive=bool(symbol_fa))}
+        in_scope = [letter for letter in letters if letter["symbol_fa"] in tracked
+                    and (not symbol_fa or letter['symbol_fa'] == symbol_fa)]
         inserted = self.db.upsert_announcements(in_scope)
-        return self._finish("codal", started_at, len(letters), len(in_scope), 0, [],
-                            {"new_announcements": inserted})
+        errors = page_report.pop('errors')
+        return self._finish("codal", started_at, len(letters), len(in_scope), int(bool(errors)), errors,
+                            dict(new_announcements=inserted, symbol_fa=symbol_fa,
+                                 coverage_proven=False, pagination=page_report))
 
     # ═══════════════════════════════════════════════
     # به‌روزرسانی کامل روزانه
@@ -356,7 +368,16 @@ class DataCollector:
             reports["session_candles"] = self.collect_session_candles()
         reports["history"] = self.collect_history(symbols, full=full, progress=progress)
         reports["client_types"] = self.collect_client_types(symbols, progress=progress)
-        reports["codal"] = self.collect_announcements(pages=3)
+        requested = symbols or self.symbols
+        if requested:
+            # درخواست «فقط قاسم» نباید به سه صفحه آخر کل بازار تبدیل شود.
+            codal_started_at = now_tehran_iso()
+            parts = [self.collect_announcements(pages=3, symbol_fa=s) for s in dict.fromkeys(requested)]
+            reports['codal'] = self._finish('codal_targeted', codal_started_at, len(parts),
+                sum(r['status'] == 'success' for r in parts), sum(r['status'] != 'success' for r in parts),
+                [e for r in parts for e in r['errors']], dict(per_symbol=parts, coverage_proven=False))
+        else:
+            reports["codal"] = self.collect_announcements(pages=3)
         return reports
 
     def get_collection_report(self) -> Dict[str, Any]:

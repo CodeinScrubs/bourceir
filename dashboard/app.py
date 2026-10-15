@@ -288,15 +288,25 @@ def page_symbol() -> None:
         m[1].metric("قدرت خریدار حقیقی", fa_num(last["buyer_power"], 2),
                     help="سرانه خرید حقیقی ÷ سرانه فروش حقیقی؛ بزرگ‌تر از ۱ یعنی خریداران درشت‌ترند")
     if last["locked_up"]:
-        st.success("🟢 آخرین روز: صف خرید قفل (کل روز در سقف دامنه)")
+        st.info("آخرین روز: الگوی تک‌قیمتی صعودی — تقریب روزانه صف خرید")
     elif last["locked_down"]:
-        st.error("🔴 آخرین روز: صف فروش قفل (کل روز در کف دامنه)")
+        st.info("آخرین روز: الگوی تک‌قیمتی نزولی — تقریب روزانه صف فروش")
+    st.caption('پرچم روزانه از تک‌قیمتی بودن معاملات نسبت به مرجع به دست می‌آید؛ سقف/کف مجاز تاریخی '
+               'و وضعیت صف پایان جلسه را اثبات نمی‌کند. نبود پرچم نیز اثبات امکان خروج نیست.')
 
+    chart_mode = st.radio('نوع قیمت نمودار', ['تعدیل نمایشی بر مبنای مرجع', 'قیمت خام روز'], horizontal=True)
+    # تعدیل روی کل تاریخچه، پیش از برش بازه نمودار؛ مصرف آن در فیچر ممنوع است.
+    view = view.copy()
+    view['chart_close'] = (market_rules.backward_adjusted_close(df).loc[view.index]
+                          if chart_mode == 'تعدیل نمایشی بر مبنای مرجع' else view['close_final_raw'])
+    if chart_mode == 'تعدیل نمایشی بر مبنای مرجع':
+        st.caption('تعدیل رو به عقب فقط برای نمایش پیوستگی قیمت است؛ با مرجع‌های جدید تغییر می‌کند '
+                   'و بازده واقعی حساب، وصول سود یا قابل فروش بودن سهام جایزه را ثابت نمی‌کند.')
     base = alt.Chart(view).encode(x=alt.X("jalali:O", title=None, sort=None,
                                           axis=alt.Axis(labelOverlap=True, labelAngle=0)))
     price = base.mark_line(strokeWidth=2).encode(
-        y=alt.Y("close_final_raw:Q", title="قیمت پایانی (ریال)", scale=alt.Scale(zero=False)),
-        tooltip=[alt.Tooltip("jalali:O", title="تاریخ"), alt.Tooltip("close_final_raw:Q", title="پایانی", format=",.0f"),
+        y=alt.Y("chart_close:Q", title="قیمت نمودار (ریال)", scale=alt.Scale(zero=False)),
+        tooltip=[alt.Tooltip("jalali:O", title="تاریخ"), alt.Tooltip("chart_close:Q", title="قیمت نمودار", format=",.0f"),
                  alt.Tooltip("change_pct:Q", title="تغییر ٪", format="+.2f")],
     )
     st.altair_chart(price.properties(height=320), width="stretch")
@@ -316,11 +326,14 @@ def page_symbol() -> None:
         "کمترین": table["low_raw"],
         "بیشترین": table["high_raw"],
         "حجم": table["volume"],
-        "وضعیت": table.apply(lambda r: "صف خرید قفل" if r["locked_up"] else ("صف فروش قفل" if r["locked_down"] else ""), axis=1),
+        "الگوی روزانه": table.apply(lambda r: "تک‌قیمتی صعودی؛ تقریب صف" if r["locked_up"] else (
+            "تک‌قیمتی نزولی؛ تقریب صف" if r["locked_down"] else ""), axis=1),
     })
     if "real_flow" in table.columns:
         out["پول حقیقی (م.ت)"] = (table["real_flow"] / 1e10).round(1)
     st.dataframe(out, hide_index=True, width="stretch")
+    from dashboard.symbol_review import symbol_review_panel
+    symbol_review_panel(settings.DB_PATH, symbol)
     feature_panel(symbol)
 
 

@@ -216,10 +216,20 @@ class DatabaseManager:
         })
 
     def get_symbol(self, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        """نماد دقیق مقدم است؛ نام شرکت یا شناسه فقط با تطبیق یکتا پذیرفته می‌شود."""
+        key = normalize_symbol(symbol_fa)
         row = self.conn.execute(
-            "SELECT * FROM symbols WHERE symbol_fa = ? LIMIT 1;", (normalize_symbol(symbol_fa),)
+            "SELECT * FROM symbols WHERE symbol_fa = ? LIMIT 1;", (key,)
         ).fetchone()
-        return dict(row) if row else None
+        if row:
+            return dict(row)
+        matches = [dict(r) for r in self.conn.execute("SELECT * FROM symbols;").fetchall()
+                   if key and (normalize_symbol(r['name_fa']) == key or key in (r['ins_code'], r['tse_code']))]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            logger.warning('نام یا شناسه «%s» مبهم است؛ نماد دقیق را وارد کنید.', key)
+        return None
 
     def get_symbol_id(self, symbol_fa: str) -> Optional[int]:
         """یافتن شناسه نماد بر اساس نام فارسی (با یکسان‌سازی ی/ک عربی)."""

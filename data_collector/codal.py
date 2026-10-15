@@ -54,28 +54,57 @@ class CodalProvider:
 
     def get_letters(self, page: int = 1, symbol_fa: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """یک صفحه (۲۰ مورد) از جدیدترین اطلاعیه‌ها؛ با تعیین نماد فقط اطلاعیه‌های همان نماد."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError('شماره صفحه کدال باید عدد صحیح مثبت باشد')
         url = f"{SEARCH_URL}?&PageNumber={int(page)}"
         if symbol_fa:
             url += f"&Symbol={quote(normalize_symbol(symbol_fa))}"
         try:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
-            letters = response.json().get("Letters", [])
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get('Letters'), list):
+                raise ValueError('ساختار پاسخ کدال معتبر نیست')
+            letters = payload['Letters']
         except Exception as e:
             logger.error("خطا در دریافت اطلاعیه‌های کدال (صفحه %s): %s", page, e)
             return None
-        return [n for n in (self.normalize_letter(letter) for letter in letters) if n]
+        normalized = [n for n in (self.normalize_letter(letter) for letter in letters) if n]
+        return normalized if normalized or not letters else None
 
-    def get_latest(self, pages: int = 3, symbol_fa: Optional[str] = None) -> List[Dict[str, Any]]:
-        """چند صفحه از جدیدترین اطلاعیه‌ها."""
-        collected: List[Dict[str, Any]] = []
+    def get_latest_report(self, pages: int = 3, symbol_fa: Optional[str] = None) -> Dict[str, Any]:
+        """صفحه ناموفق با پایان فهرست یکی نیست؛ خروجی سقف‌دار ادعای پوشش کامل ندارد."""
+        if isinstance(pages, bool) or not isinstance(pages, int) or not 1 <= pages <= 100:
+            raise ValueError('تعداد صفحات کدال باید بین ۱ و ۱۰۰ باشد')
+        collected, seen, fetched = [], set(), 0
+        report = dict(letters=collected, pages_requested=pages, pages_fetched=0, failed_page=None,
+                      reached_end=False, page_limit_reached=False, errors=[])
         for page in range(1, pages + 1):
             letters = self.get_letters(page=page, symbol_fa=symbol_fa)
-            if not letters:
+            if letters is None:
+                report['failed_page'] = page
+                report['errors'].append(f'دریافت صفحه {page} کدال ناموفق بود؛ نبود اطلاعیه تأیید نشده است')
                 break
-            collected.extend(letters)
+            fetched += 1
+            if not letters:
+                report['reached_end'] = True
+                break
+            if symbol_fa and any(x['symbol_fa'] != normalize_symbol(symbol_fa) for x in letters):
+                report['failed_page'] = page
+                report['errors'].append('پاسخ کدال با نماد درخواستی تطبیق ندارد')
+                break
+            for letter in letters:
+                if letter['tracing_no'] not in seen:
+                    collected.append(letter)
+                    seen.add(letter['tracing_no'])
             time.sleep(settings.RATE_LIMIT_DELAY)
-        return collected
+        report['pages_fetched'] = fetched
+        report['page_limit_reached'] = fetched == pages and not report['reached_end'] and report['failed_page'] is None
+        return report
+
+    def get_latest(self, pages: int = 3, symbol_fa: Optional[str] = None) -> List[Dict[str, Any]]:
+        """رابط سازگار؛ گردآورنده از گزارش وضعیت صفحه‌ها استفاده می‌کند."""
+        return self.get_latest_report(pages=pages, symbol_fa=symbol_fa)['letters']
 
     def test_connection(self) -> bool:
         letters = self.get_letters(page=1)
