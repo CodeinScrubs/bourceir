@@ -21,9 +21,10 @@ from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.db import DatabaseManager
 from features.daily import FEATURE_SET_VERSION
+from features.provenance import assert_compatible_inputs
 from features.store import _git_commit, load_feature_snapshot
 from research.baselines import STRATEGIES, pick_top, tolerant_t
-from research.dip import DIP_VERSION, THROUGH_MARGIN, DipRule, simulate
+from research.dip import DIP_VERSION, THROUGH_MARGIN, TIME_EXIT_PRICE_BASIS, DipRule, simulate
 from research.labels import market_calendar
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
 
@@ -106,10 +107,12 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
     cfg = settings.RESEARCH_CONFIG
     code_sha = research_code_fingerprint()
     cutoff, start, k = cfg["holdout_start"], cfg["dev_start"], cfg["top_k"]
+    features, feature_manifest = load_feature_snapshot(filters=[("date", ">=", start), ("date", "<", cutoff)])
     own_snapshot = not db.conn.in_transaction
     if own_snapshot:
         db.conn.execute("BEGIN")
     try:
+        assert_compatible_inputs(db, feature_manifest, end_exclusive=cutoff)
         prices = load_prices_until(db, cutoff)
         schema_version = db.schema_version()
     finally:
@@ -118,7 +121,6 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
     if prices.empty:
         raise ValueError("داده قیمت موجود نیست؛ ابتدا به‌روزرسانی داده‌ها را اجرا کنید")
     calendar = market_calendar(prices)
-    features, feature_manifest = load_feature_snapshot(filters=[("date", ">=", start), ("date", "<", cutoff)])
     if features.empty:
         raise ValueError("انبار فیچر خالی است؛ ابتدا python brs.py features را اجرا کنید")
     features = features.loc[(features["date"] >= start) & (features["date"] < cutoff)]
@@ -189,6 +191,7 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
               "min_daily_value_rial": cfg["min_daily_value_rial"], "fees": dict(settings.FEES),
               "rules": [r.name for r in rules], "rule_definitions": {r.name: r.__dict__ for r in rules},
               "slippage_bps_time_exit": settings.BACKTEST_CONFIG["default_slippage_bps"],
+              "time_exit_price_basis": TIME_EXIT_PRICE_BASIS,
               "lock_min_move_pct": settings.BACKTEST_CONFIG["lock_min_move_pct"], "through_margin": THROUGH_MARGIN,
               "random_seed": 11, "inputs": pinned_inputs, "outcomes": outcome_files,
               "feature_source_manifest": feature_manifest,
@@ -237,10 +240,10 @@ def format_dip_report(payload: Dict[str, Any]) -> str:
         "",
         "**روش:** پایان روز نامزدها انتخاب می‌شوند. فردا سفارش خرید در «قیمت مرجع منهای d٪» گذاشته می‌شود؛ اگر سهم به آن "
         "رسید خرید (اگر پایین‌تر باز شد، به قیمت گشایش). فروش با سفارش در «قیمت خرید به‌علاوه هدف»؛ اگر تا پایان روز بعد "
-        "(یا دو روز بعد) نرسید، فروش به میانگین قیمت همان روز. کارمزد خرید ۰.۳۷۱۲٪ و فروش ۰.۸۸٪ کسر شده است.",
+        "(یا دو روز بعد) نرسید، خروج با قیمت آخرین معامله همان روز منهای لغزش مدل می‌شود؛ میانگین کل روز پس از انتظار تا پایان روز قابل ادعا نیست. کارمزد خرید ۰.۳۷۱۲٪ و فروش ۰.۸۸٪ کسر شده است.",
         "",
         "**محافظه‌کار / خوش‌بینانه:** داده روزانه نمی‌گوید سقف روز قبل از کف آمده یا بعد از آن. «محافظه‌کار» فرض می‌کند "
-        "هدف در همان روز خرید (بعد از افت) نمی‌رسد و لمس دقیق قیمت سفارش کافی نیست؛ «خوش‌بینانه» برعکس. واقعیت بین این دو است.",
+        "هدف در همان روز خرید (بعد از افت) نمی‌رسد و لمس دقیق قیمت سفارش کافی نیست؛ «خوش‌بینانه» برعکس. این دو فرض، کران تضمینی واقعیت نیستند.",
         "",
         "ستون‌ها: «خرید شد» = درصد نامزدهایی که به قیمت سفارش رسیدند؛ «میانگین معامله» = سود خالص هر خرید؛ «هدف» = درصد "
         "معامله‌هایی که به هدف رسیدند؛ «روزانه» = میانگین گروه تصمیم‌ها (سرمایه بیکار لحاظ شده؛ بازده سبد نیست)؛ "

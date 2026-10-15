@@ -28,6 +28,7 @@ from core.timeutils import now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
 from features.market import MARKET_FEATURES, RELATIVE_FEATURES, add_relative_features, compute_market_features
+from features.provenance import feature_logic_fingerprint, raw_input_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,12 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     if own_snapshot:
         db.conn.execute("BEGIN")
     try:
+        logic_sha = feature_logic_fingerprint()
         panel = build_feature_panel(db, symbols=symbols, progress=progress)
+        raw_inputs = raw_input_snapshot(db, symbols=symbols)
+        schema_version = db.schema_version()
+        if feature_logic_fingerprint() != logic_sha:
+            raise RuntimeError('منطق فیچر هنگام ساخت تغییر کرد؛ انبار منتشر نشد')
     finally:
         if own_snapshot:
             db.conn.rollback()
@@ -137,10 +143,14 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     target.mkdir(parents=True, exist_ok=True)
     # float32 برای فیچرها کاملاً کافی است و حجم فایل را نصف می‌کند
     compact = panel.astype({f: "float32" for f in ALL_FEATURES})
-    tmp_parquet = target / f"daily-{uuid.uuid4().hex}.parquet.tmp"
+    generation = target / 'snapshots' / uuid.uuid4().hex
+    generation.mkdir(parents=True)
+    tmp_parquet = generation / 'daily.parquet.tmp'
     compact.to_parquet(tmp_parquet, index=False, compression="zstd")
     manifest = {
         "version": FEATURE_SET_VERSION,
+        "manifest_format": 2,
+        "data_file": (generation.relative_to(target) / 'daily.parquet').as_posix(),
         "created_at": now_tehran_iso(),
         "rows": int(len(panel)),
         "symbols": int(panel["symbol"].nunique()) if len(panel) else 0,
@@ -150,9 +160,15 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "coverage": {f: round(float(panel[f].notna().mean()), 4) for f in ALL_FEATURES} if len(panel) else {},
         "provenance": _provenance(db, tmp_parquet),
     }
+    manifest['provenance'].update(raw_inputs=raw_inputs, feature_logic_sha256=logic_sha,
+                                  database_schema_version=schema_version)
     tmp_manifest = target / f"manifest-{uuid.uuid4().hex}.json.tmp"
     tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp_parquet, target / "daily.parquet")
+    if feature_logic_fingerprint() != logic_sha:
+        raise RuntimeError('منطق فیچر هنگام انتشار تغییر کرد؛ انبار منتشر نشد')
+    os.replace(tmp_parquet, generation / "daily.parquet")
+    # Publish only one pointer. Existing readers retain an immutable generation, even if
+    # another build commits a newer manifest while they are reading their Parquet.
     os.replace(tmp_manifest, target / "manifest.json")
     logger.info("انبار فیچر %s ساخته شد: %d ردیف، %d نماد.", FEATURE_SET_VERSION, manifest["rows"], manifest["symbols"])
     return manifest
@@ -161,17 +177,27 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
 def load_feature_snapshot(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None,
                           filters: Optional[list] = None) -> tuple:
     """خروجی و manifest یکسان با کنترل hash؛ تغییر هم‌زمان فایل، نتیجه مخلوط تولید نمی‌کند."""
-    path = store_dir(version, root) / "daily.parquet"
     manifest = load_manifest(version, root)
-    if not path.exists() or not manifest:
+    if not manifest:
         return pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES), {}
+    path = feature_data_path(manifest, version, root)
+    if not path.exists():
+        raise ValueError('فایل انبار فیچر موجود نیست؛ ساخت فیچر را دوباره اجرا کنید')
     digest = (manifest.get("provenance") or {}).get("parquet_sha256")
     if not digest or _sha256(path) != digest:
         raise ValueError("اثر انگشت انبار فیچر با manifest یکسان نیست؛ ساخت فیچر را دوباره اجرا کنید")
     frame = pd.read_parquet(path, filters=filters)
-    if _sha256(path) != digest or load_manifest(version, root) != manifest:
+    if _sha256(path) != digest:
         raise ValueError("انبار فیچر هنگام خواندن تغییر کرد؛ پژوهش را دوباره اجرا کنید")
     return frame, manifest
+
+
+def feature_data_path(manifest, version=FEATURE_SET_VERSION, root=None):
+    base = store_dir(version, root).resolve()
+    path = (base / manifest.get('data_file', 'daily.parquet')).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError('مسیر فایل انبار فیچر نامعتبر است')
+    return path
 
 
 def load_feature_store(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -> pd.DataFrame:

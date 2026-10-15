@@ -188,7 +188,7 @@ def feature_root(db, tmp_path):
     return root
 
 def tamper_feature_file(root):
-    target = store.store_dir(root=root) / 'daily.parquet'
+    target = store.feature_data_path(store.load_manifest(root=root), root=root)
     data = pd.read_parquet(target)
     data.loc[:, 'ret_1d'] = 0.9
     data.to_parquet(target, index=False)

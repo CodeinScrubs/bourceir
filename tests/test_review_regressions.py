@@ -93,12 +93,11 @@ def test_backup_names_do_not_overwrite_within_one_second(db):
 
 def test_update_feature_publication_policy(monkeypatch):
     """
-    یک نماد ناموفق (قطعی لحظه‌ای) فیچر کل بازار را کهنه نمی‌گذارد ولی کد خروج هشدار (۱) می‌دهد؛
-    شکست کامل یک بخش اصلی (مثلاً تاریخچه) مانع ساخت فیچر است. شکست کدال به فیچر ربطی ندارد.
+    نقص هر بخش اصلی مانع انتشار فیچر تازه است. شکست کدال به این فیچرها ربطی ندارد.
     """
     import brs
     from data_collector import scheduler
-    cases = [({'history': {'status': 'partial', 'symbols_failed': 1}}, True, 1),
+    cases = [({'history': {'status': 'partial', 'symbols_failed': 1}}, False, 1),
              ({'history': {'status': 'failed', 'symbols_failed': 594}}, False, 1),
              ({'history': {'status': 'success'}, 'codal': {'status': 'failed'}}, True, 1),
              ({'history': {'status': 'success'}}, True, 0)]
@@ -200,7 +199,7 @@ def test_feature_output_checksum_is_enforced(db, tmp_path, monkeypatch):
     sid = db.upsert_symbol({'symbol_fa':'فولاد','ins_code':'1','instrument_type_code':300})
     db.upsert_daily_prices_df(sid, prices)
     store.build_feature_store(db, root=tmp_path / 'features')
-    file = store.store_dir(root=tmp_path / 'features') / 'daily.parquet'
+    file = store.feature_data_path(store.load_manifest(root=tmp_path / 'features'), root=tmp_path / 'features')
     file.write_bytes(file.read_bytes() + b'tamper')
     with pytest.raises(ValueError, match='اثر انگشت'):
         store.load_feature_store(root=tmp_path / 'features')

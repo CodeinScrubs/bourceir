@@ -77,3 +77,4 @@ doctor-ci.json
 *.db-wal
 *.db-shm
 .ruff_cache/
+node_modules/

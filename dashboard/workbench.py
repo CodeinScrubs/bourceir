@@ -10,7 +10,7 @@ from config import settings
 from core import market_rules
 from core.journal import summarize_executions
 from core.risk import RiskProfile, plan_trade
-from core.screening import current_daily_row, current_snapshot, descriptive_screen
+from core.screening import current_daily_row, descriptive_screen
 from core.timeutils import now_tehran_iso, to_jalali
 from database.broker import BrokerRepository
 from database.db import DatabaseManager
@@ -130,15 +130,18 @@ def page_workbench():
             data_current = current_daily_row(source["date"]) and account_current
             locks = market_rules.lock_flags(pd.DataFrame([source])).iloc[0]
             data_current &= bool(market_rules.daily_vwap(pd.DataFrame([source])).notna().iloc[0])
-            if HORIZONS[horizon_label] == "intraday":
+            intraday = HORIZONS[horizon_label] == 'intraday'
+            snapshot = None
+            if intraday:
                 with DatabaseManager(read_only=True) as db:
                     snapshot = WorkbenchRepository(db).latest_snapshot(symbol)
-                data_current &= bool(snapshot and current_snapshot(snapshot["provider_timestamp"]))
+                st.caption('اندازه برنامه درون‌روزی به عرضه قابل مشاهده و داده تازه امروز محدود است؛ نوبت صف و اجرای سفارش تضمین نمی‌شود.')
             try:
                 calculation = plan_trade(profile=profile, entry_rial=entry * 10, stop_rial=stop * 10, target_rial=target * 10,
                                          trade_loss_budget_rial=budget * 10, available_cash_rial=state["cash_rial"],
                                          equity_rial=state["equity_rial"] or 0, reserved_risk_rial=risk_reserved,
                                          daily_value_rial=source["value"], data_current=bool(data_current),
+                                         intraday=intraday, intraday_snapshot=snapshot,
                                          locked_up=bool(locks["locked_up"]), locked_down=bool(locks["locked_down"]),
                                          account_complete=mode == "paper" or not actual_incomplete)
                 if calculation["blockers"]:
