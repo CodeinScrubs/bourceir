@@ -128,3 +128,21 @@ def test_unsupported_dip_stop_or_horizon_is_rejected_explicitly():
         replay(prices, calendar, rule=DipRule(hold=2))
     with pytest.raises(ValueError):
         replay(prices, calendar, rule=DipRule(stop_loss=.02))
+
+
+def test_time_exit_cannot_claim_full_day_vwap_after_waiting_for_the_target():
+    prices, calendar = dip_history()
+    prices.loc[1, ['high_raw', 'close_raw', 'close_final_raw', 'value']] = [100.5, 98., 98., 9800000.]
+    prices.loc[2, ['low_raw', 'high_raw', 'open_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'value']] = [90., 100.5, 100., 90.5, 99., 98., 9900000.]
+    result = replay(prices, calendar, max_positions=1)
+    sale = result.executions.loc[result.executions.side == 'sell'].iloc[0]
+    slip = result.assumptions['config']['slippage_bps'] / 10000
+    assert sale.price_rial == pytest.approx(90.5 * (1 - slip))
+
+
+def test_unknown_last_trade_at_time_exit_is_not_replaced_by_vwap():
+    prices, calendar = dip_history()
+    prices.loc[1, 'high_raw'] = 100.5
+    prices.loc[2, ['high_raw', 'close_raw']] = [100.5, np.nan]
+    result = replay(prices, calendar, max_positions=1)
+    assert result.metrics['status'] == 'invalid_data' and result.metrics['total_return'] is None

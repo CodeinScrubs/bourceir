@@ -226,7 +226,17 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                     price = max(opening, pos['target']) if not same_day else pos['target']
                     exit_kind = 'target'
                 elif index >= pos['due']:
-                    price = max(row['vwap'] * (1 - slip), row['low_raw'])
+                    try:
+                        last = finite_number(row['close_raw'])
+                    except ValueError:
+                        last = np.nan
+                    if not math.isfinite(last) or not row['low_raw'] <= last <= row['high_raw']:
+                        note(day, symbol, 'unknown_time_exit')
+                        invalid = True
+                        break
+                    # We waited for the target through the session. Its earlier full-session
+                    # VWAP is no longer an executable closing decision price.
+                    price = max(last * (1 - slip), row['low_raw'])
                     exit_kind = 'time' if index == pos['due'] else 'time_late'
                 else:
                     continue
@@ -296,6 +306,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                      "halting days retain stale marks", "daily volume is not proof of own fills", "no intraday stop execution"])
     if dip_rule is not None:
         assumptions.update(dip_rule=asdict(dip_rule),
+            time_exit_price_basis='last_trade_raw_at_session_end_minus_slippage',
             execution_model='dip_limit_daily_proxy' if not config.stress else 'dip_no_open_improvement_no_target_sell_low_stress',
             requested_quantity_basis='prior budget/volume/value and current session reference limit, before OHLC fill outcome',
             intraday_order_sequence_proven=False)

@@ -232,7 +232,7 @@ def cmd_research_dip(args) -> int:
 
     db = DatabaseManager()
     try:
-        print("🔬 آزمون روش «خرید در اصلاح» روی ۱۳ سال (چند دقیقه)...", flush=True)
+        print("🔬 آزمون روش «خرید در اصلاح» روی دوره توسعه (چند دقیقه)...", flush=True)
         out = run_dip_research(db)
         print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
     finally:

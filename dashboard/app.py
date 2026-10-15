@@ -438,7 +438,21 @@ def latest_research_report(pointer: str = "latest.json") -> str:
     folder = settings.DATA_DIR / "research"
     try:
         experiment_id = json.loads((folder / pointer).read_text(encoding="utf-8"))["experiment_id"]
-        return (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
+        payload = json.loads((folder / f'{experiment_id}.json').read_text(encoding='utf-8'))
+        report = (folder / f"{experiment_id}.md").read_text(encoding="utf-8")
+        params = payload.get('params') or {}
+        from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS
+        if pointer == 'latest-dip.json':
+            current = params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
+        elif pointer == 'latest-portfolio.json':
+            from backtest.portfolio import PORTFOLIO_VERSION
+            protocol = payload.get('protocol') or {}
+            current = protocol.get('portfolio_version') == PORTFOLIO_VERSION and (protocol.get('dip') or {}).get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
+        else:
+            current = params.get('raw_feature_inputs_verified') is True
+        if not current:
+            return '> ⚠️ گزارش قدیمی: با قرارداد فعلی داده/اجرا سازگار نیست؛ برای ارزیابی تازه پژوهش را دوباره اجرا کنید. اعداد زیر فقط سابقه آرشیوی‌اند.\n\n' + report
+        return report
     except (OSError, ValueError, KeyError):
         return ""
 

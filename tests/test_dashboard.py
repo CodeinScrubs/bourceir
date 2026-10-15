@@ -99,6 +99,20 @@ def test_running_portfolio_job_has_a_label_and_does_not_crash(dashboard_db, monk
     assert any('پرتفوی' in item.value for item in at.info)
 
 
+def test_legacy_research_reports_are_marked_as_archived(dashboard_db, tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    folder = tmp_path / 'research'
+    folder.mkdir()
+    (folder / 'latest-dip.json').write_text(json.dumps(dict(experiment_id='old-dip')), encoding='utf-8')
+    (folder / 'old-dip.json').write_text(json.dumps(dict(params=dict(version='dip-v2'))), encoding='utf-8')
+    (folder / 'old-dip.md').write_text('Historical research report', encoding='utf-8')
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔬 پژوهش').run()
+    assert not at.exception
+    assert any('گزارش قدیمی' in item.value for item in at.markdown)
+
+
 def test_research_page_while_job_is_running(dashboard_db, monkeypatch):
     from ops import jobs
     monkeypatch.setattr(jobs, 'job_status', lambda name: dict(running=name == 'research', started_at=None,

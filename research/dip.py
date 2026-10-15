@@ -4,7 +4,7 @@
 
 ایده: پایان روز t بهترین نامزدها انتخاب می‌شوند. روز t+1 سفارش خرید محدود (Limit) در «قیمت مرجع × (۱ − d)»
 گذاشته می‌شود؛ اگر سهم تا آنجا پایین آمد خریده می‌شود و با سفارش فروش در «قیمت خرید × (۱ + tp)» همان روز یا
-روزهای بعد فروخته می‌شود. اگر هدف تا پایان روز t+1+H نرسید، فروش به میانگین قیمت همان روز (خروج زمانی).
+روزهای بعد فروخته می‌شود. اگر هدف تا پایان روز t+1+H نرسید، خروج با آخرین معامله همان روز منهای لغزش مدل می‌شود.
 
 قواعد اجرا با داده روزانه (OHLC):
 - خرید: اگر قیمت اولین معامله (open) ≤ قیمت سفارش ← خرید به همان open (حراج گشایش)؛ وگرنه اگر کمترین قیمت روز
@@ -15,7 +15,7 @@
 - روزهای بعد: گشایش بالاتر از هدف ← فروش به open؛ وگرنه اگر سقف روز به هدف رسید ← فروش به هدف.
   حد ضرر (اختیاری) قرینه همین است؛ اگر در یک روز هم هدف و هم حد ضرر لمس شد، حالت محافظه‌کار اول حد ضرر را فرض می‌کند.
 - روز صف فروش قفل نمی‌توان فروخت (گیر افتادن)؛ روز اقدام شرکتی، سطح‌ها با ضریب قیمت مرجع تعدیل می‌شوند.
-- کارمزد خرید و فروش از config؛ سفارش محدود لغزش ندارد، خروج زمانی به میانگین قیمت روز − لغزش.
+- کارمزد خرید و فروش از config؛ سفارش محدود لغزش ندارد، خروج زمانی با آخرین معامله روز − لغزش.
 """
 
 from dataclasses import dataclass
@@ -28,6 +28,7 @@ from config import settings
 from core import market_rules
 
 DIP_VERSION = "dip-v3"
+TIME_EXIT_PRICE_BASIS = 'last_trade_raw_at_session_end_minus_slippage'
 THROUGH_MARGIN = 0.001   # حالت محافظه‌کار: کف روز باید این مقدار از قیمت سفارش پایین‌تر رفته باشد
 
 
@@ -79,6 +80,7 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
     lows = df["low_raw"].astype(float).tolist()
     refs = df["ref_price_raw"].astype(float).tolist()
     vwap = market_rules.daily_vwap(df).astype(float).tolist()
+    last_trades = df.get('close_raw', pd.Series(np.nan, index=df.index)).astype(float).tolist()
     locked_down = market_rules.lock_flags(df)["locked_down"].tolist()
     factors = market_rules.corporate_action_factors(df).to_numpy(dtype=float)
     cum = np.cumsum(np.log(np.where(factors > 0, factors, 1.0))).tolist()
@@ -159,11 +161,17 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
                     exit_price, exit_kind[i] = stp, "stop"
                 elif can_sell and highs[m] >= tgt:
                     exit_price, exit_kind[i] = tgt, "target"
-                elif dates[m] == planned_date and can_sell and isfinite(vwap[m]):
-                    exit_price, exit_kind[i] = max(vwap[m] * (1.0 - slip), lows[m]), "time"
-            elif not locked_down[m] and isfinite(vwap[m]):
+                elif dates[m] == planned_date and can_sell:
+                    if not (isfinite(vwap[m]) and isfinite(last_trades[m]) and lows[m] <= last_trades[m] <= highs[m]):
+                        status[i] = 'invalid'
+                        break
+                    exit_price, exit_kind[i] = max(last_trades[m] * (1.0 - slip), lows[m]), "time"
+            elif not locked_down[m]:
                 # روز برنامه‌ریزی‌شده گذشت (صف فروش یا توقف): اولین روز قابل فروش
-                exit_price, exit_kind[i] = max(vwap[m] * (1.0 - slip), lows[m]), "time_late"
+                if not (isfinite(vwap[m]) and isfinite(last_trades[m]) and lows[m] <= last_trades[m] <= highs[m]):
+                    status[i] = 'invalid'
+                    break
+                exit_price, exit_kind[i] = max(last_trades[m] * (1.0 - slip), lows[m]), "time_late"
             if exit_price is not None:
                 exit_row = m
                 break

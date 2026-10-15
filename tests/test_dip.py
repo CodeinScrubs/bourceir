@@ -85,3 +85,23 @@ def test_stop_loss_and_halted_entry_day():
     assert r["exit_kind"] == "stop" and r["net_ret"] == pytest.approx(0.97 * KEEP - 1)
     halted = [row for k, row in enumerate(_flat()) if k != 1]   # فردای تصمیم نماد معامله ندارد
     assert _result(halted, dip=0.02)["dip_status"] == "no_session"
+
+
+def test_time_exit_uses_last_trade_instead_of_hindsight_full_day_vwap():
+    rows = _flat()
+    rows[1] = (CAL[1], 100, 100.5, 97.5, 98, 100)
+    rows[2] = (CAL[2], 100, 100.5, 90, 90.5, 98)
+    frame = _frame(rows)
+    frame.loc[2, 'value'] = 99000  # VWAP 99; this price could precede the unfilled target.
+    row = simulate_symbol(frame, CAL, DipRule()).iloc[0]
+    assert row['exit_price_rial'] == pytest.approx(90.5 * (1 - SLIP))
+
+
+def test_missing_last_trade_at_time_exit_keeps_the_return_unknown():
+    rows = _flat()
+    rows[1] = (CAL[1], 100, 100.5, 97.5, 98, 100)
+    rows[2] = (CAL[2], 100, 100.5, 90, 90.5, 98)
+    frame = _frame(rows)
+    frame.loc[2, 'close_raw'] = np.nan
+    row = simulate_symbol(frame, CAL, DipRule()).iloc[0]
+    assert row['dip_status'] == 'invalid' and np.isnan(row['net_ret'])

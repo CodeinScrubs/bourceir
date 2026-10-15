@@ -14,7 +14,7 @@ from config import settings
 from core.timeutils import now_tehran_iso, to_jalali
 from database.workbench import WorkbenchRepository
 from research.baselines import STRATEGIES, _cohort_returns, pick_top
-from research.dip import DIP_VERSION, DipRule
+from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS, DipRule
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
 from research.walkforward import time_folds
 
@@ -136,6 +136,7 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
                     purge="actual exit before train boundary; unknown rank rows retained", holdout_start=cfg["holdout_start"],
                     dip=dict(version=DIP_VERSION, rule=asdict(dip_rule), selector='buyer_power',
                              entry_day_exit=False,
+                             time_exit_price_basis=TIME_EXIT_PRICE_BASIS,
                              selection='fixed existing rule; no DIP fitting; same picks in DIP and its VWAP control',
                              stress='no favorable opening improvement; no targets; exit at due-session low'),
                     prospective_independence=False, code_sha256=code_sha, source_files=archive_research_code(artifacts / "code"))
