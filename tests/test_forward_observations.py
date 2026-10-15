@@ -214,7 +214,7 @@ def test_migration_12_idempotent_and_upgrade_backs_up_existing_data(tmp_path, mo
             assert old.schema_version() == 11
             old.upsert_symbol(dict(symbol_fa='آزمون', ins_code='test', instrument_type_code=300))
     with DatabaseManager(path) as upgraded:
-        assert upgraded.schema_version() == 12 and upgraded.get_symbol('آزمون')
+        assert upgraded.schema_version() == max(m[0] for m in migrator.discover_migrations()) and upgraded.get_symbol('آزمون')
         migration = settings.BASE_DIR / 'database/migrations/012_forward_observations.sql'
         upgraded.conn.executescript(migration.read_text(encoding='utf-8'))
         assert upgraded.init_db() == []

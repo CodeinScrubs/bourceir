@@ -264,7 +264,7 @@ def test_migration_from_v10_preserves_records_and_backs_up_before_changes(tmp_pa
     with DatabaseManager(db_path=path, read_only=True) as database:
         assert audit_intraday(database)['capture']['status'] == 'schema_unavailable'
     with DatabaseManager(db_path=path) as database:
-        assert database.schema_version() == 12 and database.get_symbol('آزمون')
+        assert database.schema_version() == max(m[0] for m in migrations) and database.get_symbol('آزمون')
         assert migrator.apply_migrations(database.conn) == []
         # The migration itself also tolerates being executed twice.
         migrator._run_sql_migration(database.conn, next(m[2] for m in migrations if m[0] == 11))
