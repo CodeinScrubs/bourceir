@@ -73,8 +73,8 @@ class DatabaseManager:
 
     def __init__(self, db_path: Optional[Path | str] = None, read_only: bool = False):
         """
-        read_only=True: اتصال فقط‌خواندنی (برای داشبورد)؛ هیچ قفل نوشتنی نمی‌گیرد و مایگریشن اجرا نمی‌کند،
-        پس با پایش زنده یا به‌روزرسانی هم‌زمان تداخل ندارد.
+        read_only=True: اتصال فقط‌خواندنی (برای داشبورد)؛ مایگریشن و نوشتن اجرا نمی‌کند.
+        WAL تداخل خواندن/نوشتن را کم می‌کند، اما SQLITE_BUSY و رقابت نویسندگان همچنان ممکن است.
         """
         self.db_path = Path(db_path) if db_path is not None else Path(settings.DB_PATH)
         self.read_only = read_only

@@ -65,13 +65,15 @@ class CodalProvider:
         except ValueError:
             return None
 
-    def get_document(self, url, *, max_bytes=20*1024*1024):
+    def get_document(self, url, *, max_bytes=20*1024*1024, structured_tables=False):
         """یک سند عمومی با سقف حجم/زمان؛ کپچا شکست دریافت است و خودکار تکرار نمی‌شود.
 
         کوکی، سرآیند پاسخ و HTML دارای viewstate ذخیره نمی‌شوند. بدنه فقط در حافظه است.
         همه تغییرمسیرها پیش از درخواست بعدی کنترل می‌شوند؛ پیوندها خودکار دنبال نمی‌شوند.
         """
         source = public_document_url(url)
+        if not isinstance(structured_tables, bool):
+            raise ValueError('انتخاب دریافت جدول باید بولی باشد')
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 0 < max_bytes <= 20*1024*1024:
             raise ValueError('حد حجم سند باید عدد صحیح مثبت و حداکثر ۲۰ مگابایت باشد')
         result = dict(status='error', source_url=source, requested_at=now_tehran_iso())
@@ -106,6 +108,8 @@ class CodalProvider:
                     result.update(effective_url=current, observed_at=now_tehran_iso(),
                                   response_sha256=hashlib.sha256(body).hexdigest(), response_bytes=size)
                     if body.startswith(b'%PDF-'):
+                        if structured_tables:
+                            raise ValueError('دریافت جدول JSON از PDF پشتیبانی نمی‌شود')
                         if not pdf_has_valid_ending(body):
                             return dict(result, error_reason='invalid_pdf_ending',
                                         message='PDF پایان معتبر ندارد یا محتوای اضافی پس از پایان آن آمده است؛ محفوظ نشد')
@@ -120,7 +124,11 @@ class CodalProvider:
                     text, links = visible_document(html, current)
                     if not text.strip():
                         raise ValueError('متن قابل مشاهده‌ای در سند دریافت نشد')
-                    return dict(result, status='captured', format='text', content=text.encode('utf-8'), links=links)
+                    output = dict(result, status='captured', format='text', content=text.encode('utf-8'), links=links)
+                    if structured_tables:
+                        from core.codal_tables import extract_monthly_tables
+                        output['table_data'] = extract_monthly_tables(html)
+                    return output
                 finally:
                     response.close()
             raise ValueError('تعداد تغییرمسیرهای سند بیش از حد مجاز است')

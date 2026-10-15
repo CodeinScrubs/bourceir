@@ -340,6 +340,16 @@ def cmd_codal_document(args) -> int:
     return 0 if result['status'] == 'captured' else 1
 
 
+def cmd_codal_tables(args) -> int:
+    import json
+
+    from ops.codal_tables import capture_codal_tables
+
+    result = capture_codal_tables(args.url, args.expected_tracing_no)
+    print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+    return 0 if result['status'] == 'captured' else 1
+
+
 def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
@@ -541,6 +551,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('codal-document', help='حفظ نسخه متن/PDF عمومی کدال؛ بدون استخراج سیگنال')
     p.add_argument('--url', required=True, help='پیوند عمومی Decision/Attachment/DownloadFile کدال')
     p.set_defaults(func=cmd_codal_document)
+    p = sub.add_parser('codal-tables', help='حفظ سلول‌های JSON گزارش تولیدی ماهانه؛ اعداد هنوز تأیید مالی نشده‌اند')
+    p.add_argument('--url', required=True, help='پیوند رسمی گزارش یک‌ماهه نوع ۵۸')
+    p.add_argument('--expected-tracing-no', required=True, type=int, help='شماره پیگیری مستقل از فهرست اطلاعیه‌ها')
+    p.set_defaults(func=cmd_codal_tables)
     return parser
 
 
