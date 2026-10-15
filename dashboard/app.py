@@ -444,9 +444,13 @@ def latest_research_report(pointer: str = "latest.json") -> str:
         from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS
         if pointer == 'latest-dip.json':
             current = params.get('version') == DIP_VERSION and params.get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
-        elif pointer == 'latest-portfolio.json':
+        elif pointer in {'latest-portfolio.json', 'latest-portfolio-buy_queue.json', 'latest-portfolio-buyer_power.json'}:
             from backtest.portfolio import PORTFOLIO_VERSION
             protocol = payload.get('protocol') or {}
+            if pointer != 'latest-portfolio.json':
+                selector = pointer[len('latest-portfolio-'):-len('.json')]
+                if (protocol.get('dip') or {}).get('selector') != selector:
+                    return '> گزارش با فرضیه انتخابی سازگار نیست؛ نتیجه آن نمایش داده نمی‌شود. پژوهش همین فرضیه را دوباره اجرا کنید.'
             current = protocol.get('portfolio_version') == PORTFOLIO_VERSION and (protocol.get('dip') or {}).get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
         else:
             from features.daily import FEATURE_SET_VERSION
@@ -486,8 +490,8 @@ def page_research() -> None:
         job_panel("research-portfolio", ["research-portfolio", '--dip-selector', selectors[selector]], "اجرای پژوهش سرمایه مشترک",
                   "از ورودی محفوظ پژوهش پایه استفاده می‌کند؛ انتخاب روش فقط با گذشته و آزمون در برش بعد. "
                   "قاعده ثابت اصلاح ۲٪ با هدف ۳٪ هم با نقد مشترک و فشار اجرا مقایسه می‌شود. دوره نهایی بسته می‌ماند.")
-        report = latest_research_report("latest-portfolio.json")
-        st.markdown(report) if report else st.info("ابتدا پژوهش پایه و سپس پژوهش سرمایه مشترک را اجرا کنید.")
+        report = latest_research_report(f"latest-portfolio-{selectors[selector]}.json")
+        st.markdown(report) if report else st.info("برای این فرضیه گزارشی ثبت نشده است؛ ابتدا پژوهش پایه و سپس پژوهش همین فرضیه را اجرا کنید.")
 
 
 def page_health() -> None:
