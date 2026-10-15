@@ -206,7 +206,7 @@ def test_feature_reader_can_finish_its_generation_while_a_new_one_is_published(d
 
 
 @pytest.mark.parametrize('status, expected', [('success', 0), ('partial', 1), ('failed', 1)])
-def test_cli_collection_failures_propagate_to_exit_codes(monkeypatch, status, expected):
+def test_cli_universe_and_codal_failures_propagate_to_exit_codes(monkeypatch, status, expected):
     import brs
     from data_collector import scheduler
     report = dict(status=status, symbols_succeeded=1 if status != 'failed' else 0,
@@ -217,4 +217,4 @@ def test_cli_collection_failures_propagate_to_exit_codes(monkeypatch, status, ex
     monkeypatch.setattr(scheduler, 'DataCollector', lambda **kw: collector)
     assert brs.cmd_universe(SimpleNamespace()) == expected
     assert brs.cmd_codal(SimpleNamespace(pages=1, symbol=None, judge=False)) == expected
-    assert brs.cmd_live(SimpleNamespace(symbols='', force=True, interval=1, cycles=1)) == expected
+    # Live exit codes and independent event writes are covered with a real temporary DB in test_capture_evidence.

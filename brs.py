@@ -67,7 +67,9 @@ def setup_logging(verbose: bool = False, command: str = "brs") -> None:
 
 
 def _symbols(arg: str):
-    return [s.strip() for s in arg.split(",") if s.strip()] if arg else None
+    from core.text import normalize_symbol
+
+    return list(dict.fromkeys(normalize_symbol(s) for s in arg.split(',') if s.strip())) if arg else None
 
 
 def _progress(i: int, n: int, symbol: str) -> None:
@@ -280,7 +282,7 @@ def cmd_intraday_audit(args) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
     print(json.dumps({k: v for k, v in report.items() if k != 'per_symbol'}, ensure_ascii=False, indent=2, allow_nan=False))
-    return 0 if report['rows'] else 1
+    return 0 if report['rows'] or report['capture']['protocols'] else 1
 
 
 def cmd_universe(args) -> int:
@@ -298,6 +300,7 @@ def cmd_universe(args) -> int:
 def cmd_live(args) -> int:
     from core.timeutils import is_market_open, now_tehran
     from data_collector.scheduler import DataCollector
+    from database.capture import CaptureRepository
 
     if args.interval <= 0 or args.cycles < 0:
         raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
@@ -305,6 +308,8 @@ def cmd_live(args) -> int:
     collector = DataCollector(symbols=selected)
     cycles = 0
     returncode = 0
+    run_id = None
+    stop_reason = 'error'
     try:
         if not collector.db.get_universe_symbols() and not selected:
             print("⚠️ جامعه سهام هنوز ثبت نشده؛ ابتدا همگام‌سازی انجام می‌شود...", flush=True)
@@ -312,28 +317,56 @@ def cmd_live(args) -> int:
             if report.get('status') != 'success' or not collector.db.get_universe_symbols():
                 print('❌ جامعه سهام معتبر دریافت نشد؛ پایش آغاز نشد. اتصال را بررسی و دوباره اجرا کنید.', flush=True)
                 return 1
+        if selected:
+            instruments = [collector._resolve(symbol) for symbol in selected]
+            if any(row is None for row in instruments):
+                raise ValueError('حداقل یک نماد درخواستی با شناسه معتبر داخل دامنه شناسایی نشد؛ پایش آغاز نشد')
+        else:
+            instruments = collector.db.get_universe_symbols()
+        calendar = collector.db.get_market_calendar()
+        journal = CaptureRepository(collector.db)
+        run_id = journal.start(instruments, interval=args.interval, cycles=args.cycles, forced=args.force,
+                               provider=collector.provider.name, explicit_scope=bool(selected))
         print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
+        print(f'شناسه ثبت مستقل پایش: {run_id}', flush=True)
         while True:
             started = time.monotonic()
             clock = now_tehran()
             now = clock.strftime("%H:%M:%S")
-            if not args.force and (not is_market_open(clock) or not collector.db.is_trading_day(clock.date().isoformat())):
+            cycle = cycles + 1
+            if not args.force and not is_market_open(clock, calendar=calendar):
+                journal.append(run_id, cycle, 'market_closed', dict(clock=clock.isoformat()))
                 print(f"[{now}] ⏸️ بازار بسته است؛ منتظر ساعات معاملات...", flush=True)
             else:
-                report = collector.collect_market_snapshot(symbols=selected)
+                journal.append(run_id, cycle, 'poll_started')
+                try:
+                    report = collector.collect_market_snapshot(symbols=selected, instruments=instruments)
+                except Exception as exc:
+                    journal.append(run_id, cycle, 'poll_finished', dict(status='error', error_type=type(exc).__name__,
+                                   elapsed_seconds=time.monotonic() - started, coverage=None))
+                    raise
+                journal.append(run_id, cycle, 'poll_finished', dict(status=report['status'],
+                               elapsed_seconds=time.monotonic() - started, coverage=report['coverage']))
                 success = report.get('status') == 'success'
                 returncode = max(returncode, 0 if success else 1)
                 print(f"[{now}] {'✅' if success else '⚠️'} {report.get('status')} | ذخیره {report['symbols_succeeded']} اسنپ‌شات | بدون تغییر "
-                      f"{report.get('unchanged_skipped', 0)} | رد شده {report['symbols_failed']}", flush=True)
+                      f"{report.get('unchanged_skipped', 0)} | ناموفق/غایب {report['symbols_failed']}", flush=True)
             cycles += 1
             if args.cycles and cycles >= args.cycles:
+                stop_reason = 'cycles_completed'
                 break
             # فاصله واقعی بین دو دریافت = interval (زمان خود درخواست از انتظار کم می‌شود)
             time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
     except KeyboardInterrupt:
+        stop_reason = 'user_interrupted'
+        returncode = 130
         print("\n🛑 پایش زنده متوقف شد.")
     finally:
-        collector.db.close()
+        try:
+            if run_id:
+                journal.append(run_id, 0, 'run_stopped', dict(reason=stop_reason, completed_loop_cycles=cycles))
+        finally:
+            collector.db.close()
     return returncode
 
 

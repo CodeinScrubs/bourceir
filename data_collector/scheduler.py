@@ -12,12 +12,14 @@
 """
 
 import logging
+from collections import Counter, defaultdict
 from datetime import date
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
 from config import settings
+from core.text import normalize_symbol
 from core.timeutils import is_market_open, now_tehran, now_tehran_iso
 from data_collector.base import DAILY_COLUMNS, BaseDataProvider
 from data_collector.codal import CodalProvider
@@ -94,7 +96,8 @@ class DataCollector:
 
     def _finish(self, collection_type: str, started_at: str, requested: int, succeeded: int,
                 failed: int, errors: List[str], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        status = "success" if failed == 0 else ("partial" if succeeded > 0 or (extra or {}).get("partial_symbols") else "failed")
+        status = "success" if failed == 0 else ("partial" if succeeded > 0 or (extra or {}).get("partial_symbols")
+                                              or (extra or {}).get('valid_observations') else "failed")
         finished_at = now_tehran_iso()
         self.db.log_collection(
             started_at=started_at, finished_at=finished_at, collection_type=collection_type,
@@ -270,43 +273,66 @@ class DataCollector:
     # اسنپ‌شات لحظه‌ای
     # ═══════════════════════════════════════════════
 
-    def collect_market_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def collect_market_snapshot(self, symbols: Optional[List[str]] = None, *, instruments=None) -> Dict[str, Any]:
         """
         اسنپ‌شات لحظه‌ای کل سهام بازار با یک درخواست؛ فقط نمادهای ثبت‌شده در دیتابیس (یا لیست ورودی)
         ذخیره می‌شوند. اسنپ‌شات نامعتبر ذخیره نمی‌شود و در جدول کیفیت داده ثبت می‌شود.
         """
         started_at = now_tehran_iso()
+        wanted = {normalize_symbol(s) for s in symbols} if symbols else None
+        scope = instruments if instruments is not None else self.db.get_universe_symbols(include_inactive=bool(wanted))
+        known = {str(s['ins_code']): s for s in scope
+                 if s.get('ins_code') and (not wanted or s['symbol_fa'] in wanted)}
+        unresolved = wanted - {s['symbol_fa'] for s in known.values()} if wanted else set()
+        observations, errors, rows = [], [], []
         snapshots = self.provider.get_market_snapshots()
-        if not snapshots:  # پاسخ خالی هم خطاست، نه «موفق با صفر نماد»
-            return self._finish("snapshot", started_at, 0, 0, 1, ["دیده‌بان بازار از TSETMC دریافت نشد"])
-
-        wanted = set(symbols) if symbols else None
-        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
-        rows, errors = [], []
-        rejected = unchanged = 0
-        for snap in snapshots:
-            sym = known.get(snap["ins_code"])
-            if not sym or (wanted and sym["symbol_fa"] not in wanted):
+        grouped = defaultdict(list)
+        for snap in snapshots or []:
+            grouped[str(snap.get('ins_code'))].append(snap)
+        for ins_code, sym in known.items():
+            matches = grouped[ins_code]
+            item = dict(ins_code=ins_code, status='missing', provider_timestamp=None, captured_at=None)
+            observations.append(item)
+            if not matches:
+                errors.append(f"{sym['symbol_fa']}: در پاسخ دیده‌بان موجود نیست؛ علت توقف/حذف معلوم نیست")
                 continue
-            fingerprint = self._fingerprint(snap)
-            if self._last_fingerprints.get(snap["ins_code"]) == fingerprint:
-                unchanged += 1
+            if len(matches) > 1:
+                item['status'] = 'duplicate'
+                errors.append(f"{sym['symbol_fa']}: شناسه تکراری در پاسخ دیده‌بان")
                 continue
+            snap = matches[0]
             is_valid, snap_errors = DataValidator.validate_snapshot(snap)
             if not is_valid:
-                rejected += 1
+                item['status'] = 'rejected'
                 errors.append(f"{sym['symbol_fa']}: {'; '.join(snap_errors)}")
                 self.db.insert_quality_metric(sym["id"], started_at[:10], completeness_score=None,
                                               quality_score=None, notes="; ".join(snap_errors))
                 continue
+            item.update(provider_timestamp=snap.get('provider_timestamp'), captured_at=snap.get('captured_at'))
+            if self._last_fingerprints.get(ins_code) == self._fingerprint(snap):
+                item['status'] = 'unchanged'
+                continue
+            item['status'] = 'changed'
             rows.append((sym["id"], snap))
         saved = self.db.insert_snapshots_bulk(rows)
         # اثر انگشت فقط بعد از ذخیره موفق ثبت می‌شود تا خطای ذخیره، داده بعدی را «بدون تغییر» جا نزند
         for _, snap in rows:
-            self._last_fingerprints[snap["ins_code"]] = self._fingerprint(snap)
-        return self._finish("snapshot", started_at, saved + rejected, saved, rejected, errors,
-                            {"market_rows": len(snapshots), "unchanged_skipped": unchanged,
-                             "snapshots": [s for _, s in rows]})
+            self._last_fingerprints[str(snap["ins_code"])] = self._fingerprint(snap)
+        counts = Counter(item['status'] for item in observations)
+        valid = counts['changed'] + counts['unchanged']
+        failed = counts['missing'] + counts['rejected'] + counts['duplicate'] + len(unresolved)
+        if not snapshots:
+            errors.insert(0, 'دیده‌بان بازار از TSETMC دریافت نشد')
+        errors.extend(f'{name}: نماد در دامنه شناخته‌شده نیست' for name in sorted(unresolved))
+        if not known and not unresolved:
+            errors.append('دامنه پایش سهام عادی خالی است')
+        coverage = dict(expected=len(known) + len(unresolved), valid=valid, changed=counts['changed'],
+                        unchanged=counts['unchanged'], missing=counts['missing'] + len(unresolved),
+                        rejected=counts['rejected'], duplicate=counts['duplicate'],
+                        unresolved_symbols=sorted(unresolved), per_instrument=observations)
+        return self._finish("snapshot", started_at, coverage['expected'], saved, failed or (0 if known else 1), errors,
+                            {"market_rows": len(snapshots or []), "unchanged_skipped": counts['unchanged'],
+                             "valid_observations": valid, 'coverage': coverage, "snapshots": [s for _, s in rows]})
 
     def collect_snapshots(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         """سازگاری با نسخه قبلی: اسنپ‌شات نمادهای مشخص (از طریق دیده‌بان کل بازار)."""

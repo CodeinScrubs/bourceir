@@ -36,6 +36,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
 | `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |
+| `database/capture.py` + `ops/capture_audit.py` | پروتکل فقط‌افزودنی دامنه/کد پیش از دریافت و شروع/نتیجه چرخه‌ها؛ `intraday-quality-v2` فاصله تغییرات ذخیره‌شده را از فاصله دریافت مستقل جدا می‌کند. ثبت پایش، ثبت تصمیم پیش از نتیجه نیست. |
 | `docs/phase1_design.md` | طراحی و نقشه راه فاز ۱ — قبل از شروع قابلیت جدید بخوان |
 
 ## قواعد کار

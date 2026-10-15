@@ -7,6 +7,7 @@ import pandas as pd
 
 from core.risk import intraday_entry_constraints
 from core.timeutils import TEHRAN_TZ, now_tehran_iso
+from ops.capture_audit import read_capture_audit
 
 
 def audit_intraday(db, session_date=None):
@@ -17,6 +18,10 @@ def audit_intraday(db, session_date=None):
     try:
         if session_date is None:
             session_date = db.conn.execute("SELECT substr(MAX(captured_at),1,10) FROM snapshots WHERE source='tsetmc'").fetchone()[0]
+            if db.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='capture_events'").fetchone():
+                event_date = db.conn.execute('SELECT substr(MAX(stamp),1,10) FROM '
+                    '(SELECT MAX(recorded_at) AS stamp FROM capture_events UNION ALL SELECT MAX(started_at) FROM capture_runs)').fetchone()[0]
+                session_date = max(filter(None, (session_date, event_date)), default=None)
         if session_date is not None:
             date.fromisoformat(session_date)
         symbols = db.get_universe_symbols(include_inactive=True)
@@ -29,16 +34,20 @@ def audit_intraday(db, session_date=None):
                 db.conn, params=[session_date] + ids)
         else:
             frame = pd.DataFrame()
+        capture = read_capture_audit(db, session_date)
     finally:
         if own_snapshot:
             db.conn.rollback()
-    result = dict(version='intraday-quality-v1', created_at=now_tehran_iso(), session_date=session_date,
+    result = dict(version='intraday-quality-v2', created_at=now_tehran_iso(), session_date=session_date,
                   scope='current ordinary-equity metadata, including inactive; not historical membership',
                   expected_current_active_symbols=expected, rows=len(frame), symbols=0, status='no_data',
                   full_session_coverage_known=False, independent_book_timestamp_available=False,
                   trading_state_feed_available=False, own_fill_calibration_available=False,
-                  prospective_independence=False, per_symbol=[])
+                  prospective_independence=False, per_symbol=[], capture=capture,
+                  snapshot_gap_semantics='stored changes only; not independent polling gaps')
     if frame.empty:
+        if capture['protocols']:
+            result['status'] = 'capture_only'
         return result
     def aware(value):
         try:
