@@ -22,6 +22,11 @@ class WorkbenchRepository:
     def save_profile(self, profile: RiskProfile, actual_history_complete: bool = False):
         if not isinstance(actual_history_complete, bool):
             raise ValueError("تأیید کامل بودن دفتر باید بولی باشد")
+        baseline = self.db.conn.execute('SELECT * FROM broker_baselines ORDER BY id DESC LIMIT 1').fetchone()
+        if baseline and (profile.capital_rial != baseline['capital_rial'] or profile.max_loss_rial != baseline['max_loss_rial']):
+            raise ValueError('مبنای مرحله فارابی ثابت است؛ شروع مرحله جدید باید مستقل و صریح ثبت شود')
+        if actual_history_complete and self.db.conn.execute("SELECT 1 FROM broker_imports WHERE kind='portfolio' LIMIT 1").fetchone():
+            raise ValueError('تأیید دفتر واقعی پیش از بازسازی و تطبیق موجودی فارابی مجاز نیست')
         existing = self.profile()
         if existing and existing["capital_rial"] != profile.capital_rial and self.db.conn.execute(
                 "SELECT COUNT(*) FROM journal_executions").fetchone()[0]:

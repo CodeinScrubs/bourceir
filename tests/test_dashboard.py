@@ -12,12 +12,13 @@ from config import settings
 from data_collector.scheduler import DataCollector
 from data_collector.tsetmc import TsetmcProvider
 from database.db import DatabaseManager
+from ops import jobs
 from tests.conftest import ROOT_DIR, FakeSession
 
 DASHBOARD = str(ROOT_DIR / "dashboard" / "app.py")
 ROOT_APP = str(ROOT_DIR / "app.py")
 
-PAGES = ["🏠 خانه", "🔎 فهرست بررسی", "🛡️ برنامه و دفتر معاملات", "📊 بررسی نماد", "📡 دیده‌بان زنده",
+PAGES = ["🏠 خانه", "🔎 فهرست بررسی", "🛡️ برنامه و دفتر معاملات", "🏦 حساب و تطبیق فارابی", "📊 بررسی نماد", "📡 دیده‌بان زنده",
          "📰 اطلاعیه‌های کدال", "🔬 پژوهش", "🩺 سلامت سامانه", "ℹ️ راهنما"]
 
 
@@ -25,6 +26,7 @@ PAGES = ["🏠 خانه", "🔎 فهرست بررسی", "🛡️ برنامه و
 def dashboard_db(tmp_path, monkeypatch):
     path = tmp_path / "dash.db"
     monkeypatch.setattr(settings, "DB_PATH", path)
+    monkeypatch.setattr(jobs, 'JOBS_DIR', tmp_path / 'jobs')
     st.cache_data.clear()       # کش Streamlit بین آزمون‌ها (در یک فرآیند) مشترک است
     st.cache_resource.clear()
     yield path

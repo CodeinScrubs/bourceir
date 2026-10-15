@@ -43,6 +43,14 @@ jobs:
     - name: Lint (ruff)
       run: ruff check .
 
+    - name: Set up Node for read-only capture checks
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Check read-only capture validation
+      run: node --test tests/farabi_capture.test.mjs
+
     - name: Run Pytest test suite (offline)
       run: python -m pytest tests/ -m "not network" -v
 
