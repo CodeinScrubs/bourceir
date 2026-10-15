@@ -44,6 +44,18 @@ st.markdown(
     [data-testid="stDataFrame"], .vega-embed { direction: ltr; }
     .brs-card { padding: .8rem 1rem; border-radius: .6rem; border: 1px solid rgba(128,128,128,.25); margin-bottom: .6rem; }
     .brs-muted { opacity: .7; font-size: .9rem; }
+    @media (max-width: 640px) {
+        [data-testid="stSidebar"][aria-expanded="true"] {
+            position: fixed !important; right: 0 !important; left: auto !important;
+            width: 18rem !important; min-width: 18rem !important; max-width: 18rem !important;
+            height: 100dvh !important; z-index: 100002; flex-shrink: 0 !important;
+        }
+        [data-testid="stSidebar"][aria-expanded="false"] {
+            width: 0 !important; min-width: 0 !important; overflow: hidden !important;
+            visibility: hidden !important; pointer-events: none !important;
+        }
+        [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -432,13 +444,13 @@ def latest_research_report(pointer: str = "latest.json") -> str:
 
 def page_research() -> None:
     st.title("🔬 پژوهش: آیا این روش‌ها بعد از کارمزد سود می‌دهند؟")
-    st.info("این صفحه بررسی اولیه روش‌های ساده با داده موجود است؛ پرتفوی واقعی هنوز شبیه‌سازی نشده: خرید فردا، "
-            "فروش چند جلسه بعد، با کارمزد واقعی و بدون فرض خرید در صف. هر مدل هوش مصنوعی بعدی باید از بهترین "
-            "همین‌ها بهتر باشد.")
+    st.info("روش‌های پایه و خرید در اصلاح، بازده گروه تصمیم‌ها را می‌سنجند. زبانه سرمایه مشترک، نقدینگی و "
+            "پوزیشن‌های هم‌زمان را در یک اجرای روزانه پژوهشی لحاظ می‌کند؛ پر شدن سفارش واقعی هنوز تأیید نشده است.")
     job_panel("research", ["research"], "اجرای دوباره پژوهش",
               "برچسب‌ها و ارزیابی همه روش‌ها را با آخرین داده دوباره می‌سازد (چند دقیقه). دوره بیرون از نمونه "
               "(از ۱۴۰۴) عمداً بسته می‌ماند تا فقط برای آزمون نهایی مدل استفاده شود.")
-    dip_tab, base_tab = st.tabs(["روش شما: خرید در اصلاح", "روش‌های پایه (خرید فردا، فروش چند روز بعد)"])
+    dip_tab, base_tab, portfolio_tab = st.tabs(["روش شما: خرید در اصلاح", "روش‌های پایه (خرید فردا، فروش چند روز بعد)",
+                                               "سرمایه مشترک و ارزیابی زمانی"])
     with dip_tab:
         job_panel("research-dip", ["research-dip"], "اجرای دوباره آزمون خرید در اصلاح",
                   "نامزدهای پایان روز ← فردا خرید فقط اگر سهم ۱ تا ۳٪ زیر قیمت مرجع آمد ← فروش با هدف ۲ تا ۴٪ سود "
@@ -448,6 +460,12 @@ def page_research() -> None:
     with base_tab:
         report = latest_research_report()
         st.markdown(report) if report else st.info("هنوز پژوهشی اجرا نشده است. دکمه بالای صفحه را بزنید.")
+    with portfolio_tab:
+        job_panel("research-portfolio", ["research-portfolio"], "اجرای پژوهش سرمایه مشترک",
+                  "از ورودی محفوظ پژوهش پایه استفاده می‌کند؛ انتخاب روش فقط با گذشته و آزمون در برش بعد. "
+                  "دوره نهایی بسته می‌ماند و این خروجی مجوز سیگنال نیست.")
+        report = latest_research_report("latest-portfolio.json")
+        st.markdown(report) if report else st.info("ابتدا پژوهش پایه و سپس پژوهش سرمایه مشترک را اجرا کنید.")
 
 
 def page_health() -> None:

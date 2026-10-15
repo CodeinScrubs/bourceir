@@ -188,6 +188,17 @@ def cmd_research_dip(args) -> int:
     return 0
 
 
+def cmd_research_portfolio(args) -> int:
+    from database.db import DatabaseManager
+    from research.portfolio_run import run_portfolio_research
+    with DatabaseManager() as db:
+        print("🔬 پژوهش سرمایه مشترک و ارزیابی زمانی؛ فقط دوره توسعه...", flush=True)
+        out = run_portfolio_research(db, source_id=args.source)
+        print(f"   • آزمایش: {out['experiment_id']}")
+        print(f"   • گزارش: {out['report_path']}")
+    return 0
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -290,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("research-dip", help="آزمون روش «خرید در اصلاح»: خرید در افت روز بعد، فروش با هدف سود")
     p.set_defaults(func=cmd_research_dip)
+
+    p = sub.add_parser("research-portfolio", help="پژوهش سرمایه مشترک چندنماد و ارزیابی زمانی؛ فقط دوره توسعه")
+    p.add_argument("--source", default=None, help="شناسه پژوهش پایه ثبت‌شده؛ پیش‌فرض آخرین اجرای موفق")
+    p.set_defaults(func=cmd_research_portfolio)
 
     p = sub.add_parser("universe", help="همگام‌سازی فهرست سهام")
     p.set_defaults(func=cmd_universe)
