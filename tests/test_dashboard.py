@@ -99,13 +99,15 @@ def test_running_portfolio_job_has_a_label_and_does_not_crash(dashboard_db, monk
     assert any('پرتفوی' in item.value for item in at.info)
 
 
-def test_legacy_research_reports_are_marked_as_archived(dashboard_db, tmp_path, monkeypatch):
+@pytest.mark.parametrize('pointer, params', [('latest-dip.json', dict(version='dip-v2')),
+    ('latest.json', dict(raw_feature_inputs_verified=True, features=dict(version='daily-v4'), labels=dict(version='labels-v3')))])
+def test_legacy_research_reports_are_marked_as_archived(dashboard_db, tmp_path, monkeypatch, pointer, params):
     import json
     monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
     folder = tmp_path / 'research'
     folder.mkdir()
-    (folder / 'latest-dip.json').write_text(json.dumps(dict(experiment_id='old-dip')), encoding='utf-8')
-    (folder / 'old-dip.json').write_text(json.dumps(dict(params=dict(version='dip-v2'))), encoding='utf-8')
+    (folder / pointer).write_text(json.dumps(dict(experiment_id='old-dip')), encoding='utf-8')
+    (folder / 'old-dip.json').write_text(json.dumps(dict(params=params)), encoding='utf-8')
     (folder / 'old-dip.md').write_text('Historical research report', encoding='utf-8')
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.sidebar.radio[0].set_value('🔬 پژوهش').run()

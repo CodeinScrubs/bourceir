@@ -26,7 +26,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-LABEL_SET_VERSION = "labels-v3"   # actual holding excursions and unknown action gaps
+LABEL_SET_VERSION = "labels-v4"   # missing official close remains unknown
 DEFAULT_HORIZONS = (1, 2, 3, 5)
 CALENDAR_MIN_SYMBOLS = 20          # روزی «روز معاملاتی بازار» است که دست‌کم این تعداد نماد معامله داشته باشند
 

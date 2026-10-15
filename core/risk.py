@@ -155,5 +155,5 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
             "fee_only_breakeven_pct": breakeven_move(), "participation_cap": participation,
             "fees": {"buy": buy, "sell": sell}, "slippage_bps": slip * 10000,
             "equity_floor_rial": profile.equity_floor_rial, "capital_at_risk_rial": quantity * cost,
-            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v2",
+            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v3",
             "intraday_evidence": dict(intraday_snapshot) if intraday and intraday_snapshot else None}

@@ -449,7 +449,11 @@ def latest_research_report(pointer: str = "latest.json") -> str:
             protocol = payload.get('protocol') or {}
             current = protocol.get('portfolio_version') == PORTFOLIO_VERSION and (protocol.get('dip') or {}).get('time_exit_price_basis') == TIME_EXIT_PRICE_BASIS
         else:
-            current = params.get('raw_feature_inputs_verified') is True
+            from features.daily import FEATURE_SET_VERSION
+            from research.labels import LABEL_SET_VERSION
+            current = (params.get('raw_feature_inputs_verified') is True
+                       and (params.get('features') or {}).get('version') == FEATURE_SET_VERSION
+                       and (params.get('labels') or {}).get('version') == LABEL_SET_VERSION)
         if not current:
             return '> ⚠️ گزارش قدیمی: با قرارداد فعلی داده/اجرا سازگار نیست؛ برای ارزیابی تازه پژوهش را دوباره اجرا کنید. اعداد زیر فقط سابقه آرشیوی‌اند.\n\n' + report
         return report
@@ -476,7 +480,10 @@ def page_research() -> None:
         report = latest_research_report()
         st.markdown(report) if report else st.info("هنوز پژوهشی اجرا نشده است. دکمه بالای صفحه را بزنید.")
     with portfolio_tab:
-        job_panel("research-portfolio", ["research-portfolio"], "اجرای پژوهش سرمایه مشترک",
+        selectors = {'صف خرید قفل در روز تصمیم': 'buy_queue', 'قدرت خریدار': 'buyer_power'}
+        selector = st.selectbox('فرضیه انتخاب نامزدهای خرید در اصلاح', list(selectors))
+        st.caption('فرضیه صف خریدِ گزارش قدیمی با قدرت خریدار متفاوت است؛ نتیجه هر اجرا نام روش را مشخص می‌کند.')
+        job_panel("research-portfolio", ["research-portfolio", '--dip-selector', selectors[selector]], "اجرای پژوهش سرمایه مشترک",
                   "از ورودی محفوظ پژوهش پایه استفاده می‌کند؛ انتخاب روش فقط با گذشته و آزمون در برش بعد. "
                   "قاعده ثابت اصلاح ۲٪ با هدف ۳٪ هم با نقد مشترک و فشار اجرا مقایسه می‌شود. دوره نهایی بسته می‌ماند.")
         report = latest_research_report("latest-portfolio.json")

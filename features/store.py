@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import subprocess
 import uuid
 from pathlib import Path
@@ -28,7 +29,7 @@ from core.timeutils import now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
 from features.market import MARKET_FEATURES, RELATIVE_FEATURES, add_relative_features, compute_market_features
-from features.provenance import feature_logic_fingerprint, raw_input_snapshot
+from features.provenance import feature_environment, feature_logic_fingerprint, raw_input_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def store_dir(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -
 def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None,
                         progress: Optional[ProgressFn] = None) -> pd.DataFrame:
     """محاسبه فیچرهای روزانه همه نمادهای داخل دامنه + فیچرهای بازار و نسبی."""
-    targets = symbols or [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
+    targets = symbols if symbols is not None else [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
     frames = []
     for i, symbol in enumerate(targets, start=1):
         if progress:
@@ -130,12 +131,13 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     if own_snapshot:
         db.conn.execute("BEGIN")
     try:
+        environment = feature_environment()
         logic_sha = feature_logic_fingerprint()
         panel = build_feature_panel(db, symbols=symbols, progress=progress)
         raw_inputs = raw_input_snapshot(db, symbols=symbols)
         schema_version = db.schema_version()
-        if feature_logic_fingerprint() != logic_sha:
-            raise RuntimeError('منطق فیچر هنگام ساخت تغییر کرد؛ انبار منتشر نشد')
+        if feature_logic_fingerprint() != logic_sha or feature_environment() != environment:
+            raise RuntimeError('منطق یا وابستگی فیچر هنگام ساخت تغییر کرد؛ انبار منتشر نشد')
     finally:
         if own_snapshot:
             db.conn.rollback()
@@ -161,11 +163,13 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "provenance": _provenance(db, tmp_parquet),
     }
     manifest['provenance'].update(raw_inputs=raw_inputs, feature_logic_sha256=logic_sha,
-                                  database_schema_version=schema_version)
+                                  database_schema_version=schema_version, feature_environment=environment,
+                                  requirements_lock_sha256=environment['requirements_lock_sha256'],
+                                  python_version=platform.python_version())
     tmp_manifest = target / f"manifest-{uuid.uuid4().hex}.json.tmp"
     tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    if feature_logic_fingerprint() != logic_sha:
-        raise RuntimeError('منطق فیچر هنگام انتشار تغییر کرد؛ انبار منتشر نشد')
+    if feature_logic_fingerprint() != logic_sha or feature_environment() != environment:
+        raise RuntimeError('منطق یا وابستگی فیچر هنگام انتشار تغییر کرد؛ انبار منتشر نشد')
     os.replace(tmp_parquet, generation / "daily.parquet")
     # Publish only one pointer. Existing readers retain an immutable generation, even if
     # another build commits a newer manifest while they are reading their Parquet.

@@ -8,10 +8,11 @@ import streamlit as st
 
 from config import settings
 from core import market_rules
+from core.account_risk import intraday_account_state, reserved_position_risk
 from core.journal import summarize_executions
 from core.risk import RiskProfile, plan_trade
 from core.screening import current_daily_row, descriptive_screen
-from core.timeutils import now_tehran_iso, to_jalali
+from core.timeutils import now_tehran, now_tehran_iso, to_jalali
 from database.broker import BrokerRepository
 from database.db import DatabaseManager
 from database.workbench import WorkbenchRepository
@@ -83,7 +84,7 @@ def page_workbench():
     c3, c4 = st.columns(2)
     c1.metric("قدرت خرید آخرین گزارش" if actual_incomplete else "نقدینگی دفتر", _toman(display_cash))
     c2.metric("سود/زیان تحقق‌یافته خالص", _toman(None if actual_incomplete else state["realized_net_rial"]))
-    c3.metric("ارزش آخرین گزارش" if actual_incomplete else "ارزش برآوردی دفتر", _toman(display_equity))
+    c3.metric("ارزش آخرین گزارش" if actual_incomplete else "ارزش آرشیوی دفتر", _toman(display_equity))
     c4.metric("سقف زیان کل", _toman(profile.max_loss_rial))
     st.caption("ارزش دفتر از آخرین قیمت آرشیو و کارمزد فروش برآورد می‌شود؛ تازگی قیمت و امکان فروش جدا بررسی می‌شوند.")
     if state["estimated_fee_events"]:
@@ -93,17 +94,10 @@ def page_workbench():
     if actual_incomplete:
         st.warning("تا کامل بودن دفتر واقعی تأیید نشود، اندازه معامله جدید محاسبه نمی‌شود.")
     account_current = not state["unknown_marks"]
-    risk_reserved = 0.0
-    for symbol, pos in state["positions"].items():
+    risk_reserved = reserved_position_risk(state, plans)
+    for symbol in state["positions"]:
         source = rows.loc[rows["symbol_fa"] == symbol]
         account_current &= not source.empty and current_daily_row(source.iloc[0]["date"])
-        plans_by_id = {p["id"]: p for p in plans}
-        linked = [plans_by_id.get(key) for key in pos["plan_ids"]]
-        stop_price = min(p["stop_rial"] for p in linked) if linked and all(linked) else None
-        marked_value = pos.get("liquidation_value_rial", pos["cost_rial"])
-        slip = settings.BACKTEST_CONFIG["default_slippage_bps"] / 10000
-        stop_value = pos["quantity"] * stop_price * (1 - settings.FEES["sell"]) * (1 - slip) if stop_price else 0
-        risk_reserved += max(0, marked_value - stop_value)
     if state["positions"]:
         positions = pd.DataFrame.from_dict(state["positions"], orient="index").reset_index().rename(columns={"index": "نماد"})
         positions["موجودی"] = positions.pop("quantity")
@@ -122,28 +116,47 @@ def page_workbench():
             horizon_label = st.selectbox("افق", list(HORIZONS))
             source = rows.loc[rows["symbol_fa"] == symbol].iloc[0]
             st.caption(f"آخرین روز داده: {to_jalali(source['date'])} — ورود، حد زیان و هدف را خودت وارد کن.")
-            entry = st.number_input("قیمت ورود (تومان برای هر سهم)", min_value=0.1, value=max(0.1, marks[symbol] / 10))
+            archived_price = marks.get(symbol)
+            entry = st.number_input("قیمت ورود (تومان برای هر سهم)", min_value=0.1,
+                                    value=float(archived_price) / 10 if pd.notna(archived_price) and archived_price > 0 else 0.1)
             stop = st.number_input("قیمت سناریوی خروج با زیان (تومان)", min_value=0.1, value=0.1)
             target = st.number_input("قیمت هدف خودت (تومان)", min_value=0.1, value=0.1)
             budget = st.number_input("بودجه زیان همین معامله (تومان)", min_value=1, value=1)
             rationale = st.text_area("دلیل انتخاب سهم و شرط نامعتبر شدن برنامه")
-            data_current = current_daily_row(source["date"]) and account_current
+            at = now_tehran()
+            data_current = current_daily_row(source["date"], at)
             locks = market_rules.lock_flags(pd.DataFrame([source])).iloc[0]
             data_current &= bool(market_rules.daily_vwap(pd.DataFrame([source])).notna().iloc[0])
             intraday = HORIZONS[horizon_label] == 'intraday'
             snapshot = None
+            sizing_state, sizing_reserved = state, risk_reserved
+            account_evidence = None
             if intraday:
                 with DatabaseManager(read_only=True) as db:
-                    snapshot = WorkbenchRepository(db).latest_snapshot(symbol)
+                    snapshots = WorkbenchRepository(db).latest_snapshots(set(state['positions']) | {symbol})
+                snapshot = snapshots.get(symbol)
+                live = intraday_account_state(events, profile, plans, snapshots, at=at)
+                sizing_state, sizing_reserved = live['state'], live['reserved_risk_rial']
+                account_evidence = live['evidence']
+                data_current &= live['current']
+                st.metric('ارزش سبد با مظنه‌های تازه', _toman(sizing_state['equity_rial']))
+                if account_evidence['blockers']:
+                    st.warning('؛ '.join(account_evidence['blockers']))
+                if sizing_state['loss_limit_reached']:
+                    st.error('ارزش تازه سبد به کف مجاز زیان رسیده است؛ ورود جدید متوقف است.')
                 st.caption('اندازه برنامه درون‌روزی به عرضه قابل مشاهده و داده تازه امروز محدود است؛ نوبت صف و اجرای سفارش تضمین نمی‌شود.')
+            else:
+                data_current &= account_current
             try:
                 calculation = plan_trade(profile=profile, entry_rial=entry * 10, stop_rial=stop * 10, target_rial=target * 10,
-                                         trade_loss_budget_rial=budget * 10, available_cash_rial=state["cash_rial"],
-                                         equity_rial=state["equity_rial"] or 0, reserved_risk_rial=risk_reserved,
+                                         trade_loss_budget_rial=budget * 10, available_cash_rial=sizing_state["cash_rial"],
+                                         equity_rial=sizing_state["equity_rial"] or 0, reserved_risk_rial=sizing_reserved or 0,
                                          daily_value_rial=source["value"], data_current=bool(data_current),
                                          intraday=intraday, intraday_snapshot=snapshot,
+                                         at=at,
                                          locked_up=bool(locks["locked_up"]), locked_down=bool(locks["locked_down"]),
                                          account_complete=mode == "paper" or not actual_incomplete)
+                calculation['account_risk_evidence'] = account_evidence
                 if calculation["blockers"]:
                     st.warning("؛ ".join(calculation["blockers"]))
                 else:
