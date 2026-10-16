@@ -3,8 +3,10 @@
 import gzip
 import hashlib
 import json
+import os
 import re
 import time
+import uuid
 from collections import Counter, deque
 from html.parser import HTMLParser
 from pathlib import Path
@@ -17,7 +19,7 @@ import requests
 from core.file_lock import exclusive_file
 from core.timeutils import now_tehran_iso
 
-AGENT = 'BRS-PublicResearch/0.7.7'
+AGENT = 'BRS-PublicResearch/0.7.10'
 BLOCKED = re.compile(r'/(?:api|auth|login|logout|register|signup|signin|payment|checkout|account)(?:/|$)', re.I)
 
 
@@ -80,12 +82,16 @@ def category(url):
 
 
 class PublicSiteArchive:
-    def __init__(self, base_url, output, *, interval=1., max_pages=4000, session=None, max_bytes=8_000_000):
+    def __init__(self, base_url, output, *, interval=1., max_pages=4000, session=None, max_bytes=8_000_000,
+                 verify_derived_text=True):
         origin = urlsplit(base_url)
         if origin.scheme != 'https' or not origin.hostname or origin.username or origin.password or origin.query:
             raise ValueError('نشانی HTTPS عمومی بدون رمز یا query لازم است')
         if interval < .5 or max_pages < 1 or max_bytes < 1:
             raise ValueError('فاصله حداقل نیم ثانیه و بودجه مثبت لازم است')
+        if type(verify_derived_text) is not bool:
+            raise ValueError('سیاست خواندن متن مشتق‌شده باید بولی باشد')
+        self.verify_derived_text = verify_derived_text
         self.base = urlunsplit((origin.scheme, origin.netloc, '/', '', ''))
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=True)
@@ -94,26 +100,115 @@ class PublicSiteArchive:
         self.records, self.last_request, self.stopped = [], None, None
         self.code_sha256 = hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n',b'\n')).hexdigest()
         self.manifest = self.output / 'sources.jsonl'
-        if self.manifest.exists():
-            for line in self.manifest.read_text(encoding='utf-8').splitlines():
-                record = json.loads(line)
-                if record.get('body_file'):
-                    path = (self.output / record['body_file']).resolve()
-                    if path.parent != self.output.resolve():
-                        raise ValueError('مسیر فایل آرشیو صفحه نامعتبر است')
-                    with gzip.open(path,'rb') as stream:
-                        data = stream.read(self.max_bytes+1)
-                    if len(data)>self.max_bytes or hashlib.sha256(data).hexdigest() != record['sha256']:
-                        raise ValueError('آرشیو صفحه با هش ثبت‌شده سازگار نیست')
-                self.records.append(record)
-        if any(urlsplit(r['url']).netloc != origin.netloc for r in self.records):
+        with exclusive_file(self.output / '.crawl.lock'):
+            self._reload_records()
+
+    def _reload_records(self):
+        self._recover_pending()
+        contents = self.manifest.read_bytes() if self.manifest.exists() else b''
+        self.records = self._read_records(contents)
+        self._manifest_size = len(contents)
+        self._manifest_digest = hashlib.sha256(contents)
+
+    def _validate_record(self, record):
+        if not isinstance(record, dict) or not isinstance(record.get('url'), str):
+            raise ValueError('قالب رکورد آرشیو صفحه نامعتبر است')
+        if urlsplit(record['url']).netloc != urlsplit(self.base).netloc:
             raise ValueError('این آرشیو متعلق به مبدأ دیگری است')
+        if record.get('record_id') is not None and (not isinstance(record['record_id'], str) or not record['record_id']):
+            raise ValueError('شناسه رکورد آرشیو نامعتبر است')
+        for field, digest in (('body_file', 'sha256'), ('text_file', 'text_sha256')):
+            if not record.get(field):
+                continue
+            path = (self.output / record[field]).resolve()
+            if path.parent != self.output.resolve():
+                raise ValueError('مسیر فایل آرشیو صفحه نامعتبر است')
+            if field == 'text_file' and (digest not in record or not self.verify_derived_text):
+                continue  # متن مشتق‌شده قدیمی هش مستقل نداشته است؛ تأیید تازه‌ای برای آن نمی‌سازیم.
+            with gzip.open(path, 'rb') as stream:
+                data = stream.read(self.max_bytes + 1)
+            if len(data) > self.max_bytes or hashlib.sha256(data).hexdigest() != record.get(digest):
+                raise ValueError('آرشیو صفحه با هش ثبت‌شده سازگار نیست')
+
+    def _read_records(self, contents):
+        if contents and not contents.endswith(b'\n'):
+            raise ValueError('انتهای فهرست ناقص است و رسید بازیابی ندارد؛ فایل حفظ شد')
+        records, identities = [], set()
+        for line in contents.decode('utf-8').splitlines():
+            record = json.loads(line)
+            self._validate_record(record)
+            identity = record.get('record_id')
+            if identity is not None:
+                if not isinstance(identity, str) or not identity or identity in identities:
+                    raise ValueError('شناسه رکورد آرشیو نامعتبر یا تکراری است')
+                identities.add(identity)
+            records.append(record)
+        return records
+
+    def _recover_pending(self):
+        pending = self.output / '.pending-source-record.json'
+        if not pending.exists():
+            return
+        receipt = json.loads(pending.read_bytes())
+        if (not isinstance(receipt, dict) or receipt.get('version') != 'public-source-append-v1'
+                or type(receipt.get('prefix_bytes')) is not int or receipt['prefix_bytes'] < 0
+                or not isinstance(receipt.get('line'), str)):
+            raise ValueError('رکورد در انتظار آرشیو معتبر نیست؛ فایل‌ها حفظ شدند')
+        line = receipt['line'].encode('utf-8')
+        record = json.loads(line)
+        if (not line.endswith(b'\n') or len(line.splitlines()) != 1 or not isinstance(record, dict)
+                or not record.get('record_id') or hashlib.sha256(line).hexdigest() != receipt.get('line_sha256')):
+            raise ValueError('محتوای رکورد در انتظار با رسید سازگار نیست؛ فایل‌ها حفظ شدند')
+        self._validate_record(record)
+        contents = self.manifest.read_bytes() if self.manifest.exists() else b''
+        offset = receipt['prefix_bytes']
+        prefix, fragment = contents[:offset], contents[offset:]
+        if (len(prefix) != offset or hashlib.sha256(prefix).hexdigest() != receipt.get('prefix_sha256')
+                or not line.startswith(fragment)):
+            raise ValueError('فهرست با پیشوند محفوظ یا رکورد در انتظار ناسازگار است؛ فایل‌ها حفظ شدند')
+        prior = self._read_records(prefix)
+        if any(row.get('record_id') == record['record_id'] for row in prior):
+            raise ValueError('رکورد در انتظار قبلاً در پیشوند ثبت شده است؛ فایل‌ها حفظ شدند')
+        if fragment != line:
+            self._publish_bytes(self.manifest, prefix + line)
+        pending.unlink()
+
+    def _publish_bytes(self, path, data):
+        temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp')
+        try:
+            with temporary.open('xb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _record(self, record):
         record['collector_code_sha256'] = self.code_sha256
-        with self.manifest.open('a', encoding='utf-8') as stream:
-            stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + '\n')
+        record['record_id'] = uuid.uuid4().hex
+        line = (json.dumps(record, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
+        pending = self.output / '.pending-source-record.json'
+        if pending.exists():
+            raise ValueError('ثبت قبلی تکمیل نشده؛ آرشیو را با قفل مشترک دوباره باز کنید')
+        self._validate_record(record)
+        receipt = dict(version='public-source-append-v1', prefix_bytes=self._manifest_size,
+                       prefix_sha256=self._manifest_digest.hexdigest(), line=line.decode('utf-8'),
+                       line_sha256=hashlib.sha256(line).hexdigest())
+        self._publish_bytes(pending, json.dumps(receipt, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+        self._append_line(line)
+        pending.unlink()
+        self._manifest_size += len(line)
+        self._manifest_digest.update(line)
         self.records.append(record)
+
+    def _append_line(self, line):
+        with self.manifest.open('ab') as stream:
+            if stream.seek(0, 2) != self._manifest_size:
+                raise ValueError('اندازه فهرست زیر قفل تغییر کرده است؛ فایل‌ها حفظ شدند')
+            stream.write(line)
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def _get(self, url):
         elapsed = time.monotonic() - self.last_request if self.last_request is not None else self.interval
@@ -143,17 +238,18 @@ class PublicSiteArchive:
                 response.close()
             key = hashlib.sha256(body).hexdigest()
             body_file = key + '.body.gz'
-            if not (self.output / body_file).exists():
-                (self.output / body_file).write_bytes(gzip.compress(body, mtime=0))
+            self._publish_bytes(self.output / body_file, gzip.compress(body, mtime=0))
             record.update(sha256=key, body_file=body_file, bytes=len(body), captured_at=now_tehran_iso())
             content = body.decode('utf-8', errors='replace')
             if response.status_code == 200 and 'html' in record['content_type']:
                 parsed = PublicPage()
                 parsed.feed(content)
-                record.update(title=''.join(parsed.title).strip(), text_file=key+'.text.gz',
+                text = '\n'.join(parsed.parts).encode('utf-8')
+                text_digest = hashlib.sha256(text).hexdigest()
+                record.update(title=''.join(parsed.title).strip(), text_file=key+'.'+text_digest+'.text.gz', text_sha256=text_digest,
                     links=sorted({u for v in parsed.links if (u := public_url(v, url))}),
                     scripts=sorted({u for v in parsed.scripts if (u := public_url(v, url))}))
-                (self.output / record['text_file']).write_bytes(gzip.compress('\n'.join(parsed.parts).encode(), mtime=0))
+                self._publish_bytes(self.output / record['text_file'], gzip.compress(text, mtime=0))
             if record['category'] == 'script':
                 record['referenced_origins'] = sorted({urlsplit(v).netloc for v in re.findall(r'(?:https?|wss)://[\w.-]+', content)})
         except (requests.RequestException, ValueError) as error:
@@ -164,9 +260,14 @@ class PublicSiteArchive:
 
     def crawl(self, *, progress=None):
         with exclusive_file(self.output/'.crawl.lock'):
-            return self._crawl(progress=progress)
+            result = self._crawl(progress=progress)
+            self._publish_bytes(self.output / 'coverage.json', json.dumps(result, ensure_ascii=False, indent=2).encode('utf-8'))
+            return result
 
     def _crawl(self, *, progress=None):
+        # شیء قدیمی نیز زیر همان قفل، نتیجه نویسنده قبلی و وضعیت توقف تازه را می‌خواند.
+        self._reload_records()
+        self.stopped = None
         robots_record, robots_body = self._get(urljoin(self.base, 'robots.txt'))
         robots = RobotFileParser()
         if robots_record.get('error') or robots_record.get('status') not in (200, 404):
@@ -230,7 +331,6 @@ class PublicSiteArchive:
             if progress and fetched % 25 == 0:
                 progress(self.summary(sitemap_members, skipped))
         result = self.summary(sitemap_members, skipped)
-        (self.output / 'coverage.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         return result
 
     def summary(self, sitemap_members=(), skipped=()):

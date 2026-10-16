@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from core.text import normalize_symbol
 
-VERSION = 'market-query-v2'
+VERSION = 'market-query-v3'
 METRICS = {'market_cap_rial', 'confirmed_count', 'ambiguous_count', 'possible_count', 'valid_sessions',
            'observed_sessions', 'avg_value_rial', 'sector_code', 'symbol_fa'}
 
@@ -131,7 +131,9 @@ def rank_caps(instruments, prices, *, low=10., high=40.):
             sector_code=meta.get('sector_code'), sector_name=meta.get('sector_name'), shares_outstanding=meta.get('shares_outstanding'),
             metadata_observed_at=meta.get('updated_at'), historical_effective_shares_verified=False,
             price_rial=quote.get('close_raw') if known else None, price_date=quote.get('date'),
-            price_captured_at=quote.get('captured_at'), market_cap_rial=int(shares)*int(price) if known else None))
+            price_captured_at=quote.get('captured_at'), price_provider_timestamp=quote.get('provider_timestamp'),
+            price_received_at=quote.get('quote_received_at'), price_kind=quote.get('quote_kind', 'daily_bar'),
+            market_cap_rial=int(shares)*int(price) if known else None))
     known = [r['market_cap_rial'] for r in rows if r['market_cap_rial'] is not None]
     missing = n-len(known)
     lo, hi = decimal(low), decimal(high)
@@ -233,7 +235,9 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
         total_value = sum(r['price']*r['volume'] for r in active)
         total_volume = sum(r['volume'] for r in active)
         value = decimal(daily.get('value'))
-        if ((count is not None and (count <= 0 or count != count.to_integral_value()))
+        invalid_present = any(daily.get(k) is not None and decimal(daily[k]) is None
+                              for k in ('trade_count', 'value'))
+        if (invalid_present or (count is not None and (count <= 0 or count != count.to_integral_value()))
                 or (value is not None and value <= 0)):
             result['contradictory'] = True
             raise ValueError('تعداد یا ارزش معاملات روز نامعتبر است')
@@ -247,7 +251,7 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
         # کسری می‌تواند شاهد ناقص باشد؛ افزونی یا اختلاف پس از پوشش کامل، تعارض است.
         excess = ((count is not None and len(active) > count) or total_volume > volume
                   or (value is not None and total_value > value))
-        exhausted = count == len(active) or total_volume == volume
+        exhausted = count == len(active) or total_volume == volume or value == total_value
         available_checks = [ok for key, ok in checks.items()
                             if ok is not None and (key != 'count' or count is not None)
                             and (key != 'value' or value is not None)]

@@ -89,23 +89,22 @@ def _print_report(title: str, report: dict) -> None:
 
 def cmd_doctor(args) -> int:
     from ops.doctor import ERROR, format_report, run_doctor
+    from ops.report_files import json_report_path, write_json_report
 
-    report = run_doctor(include_network=not args.offline)
+    target = json_report_path(args.json, forbidden_paths=[settings.DB_PATH]) if args.json else None
+    report = run_doctor(include_network=not args.offline, read_only=args.read_only)
     print(format_report(report))
     if args.json:
         # گزارش ماشین‌خوان برای ارسال به پشتیبان/هوش مصنوعی (بدون کلیدها و رمزها)
-        import json
         from dataclasses import asdict
 
         from core.timeutils import now_tehran_iso
 
-        target = Path(args.json)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps({
+        write_json_report(target, {
             "checked_at": now_tehran_iso(), "version": settings.VERSION, "python": sys.version.split()[0],
-            "network_tested": not args.offline, "overall": report.worst,
+            "network_tested": not args.offline, "database_read_only": args.read_only, "overall": report.worst,
             "checks": [asdict(c) for c in report.checks],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        }, forbidden_paths=[settings.DB_PATH])
         print(f"گزارش JSON: {target}")
     return 1 if report.worst == ERROR else 0
 
@@ -288,6 +287,12 @@ def cmd_research_preflight(args) -> int:
     return preflight(argv)
 
 
+def cmd_trader_readiness(args) -> int:
+    from ops.trader_readiness import main as readiness
+
+    return readiness(['--json', args.json])
+
+
 def cmd_research_uncertainty(args) -> int:
     from research.uncertainty import main as uncertainty
 
@@ -307,14 +312,13 @@ def cmd_intraday_audit(args) -> int:
 
     from database.db import DatabaseManager
     from ops.intraday_audit import audit_intraday
+    from ops.report_files import private_report_path, write_private_report
+
+    target = private_report_path(args.report, forbidden_paths=[settings.DB_PATH]) if args.report else None
     with DatabaseManager(read_only=True) as db:
         report = audit_intraday(db, args.date)
-    if args.report:
-        target = Path(args.report).resolve()
-        if not target.is_relative_to((settings.DATA_DIR / 'private').resolve()):
-            raise ValueError('گزارش کیفیت را در data/private/ ذخیره کنید')
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+    if target:
+        write_private_report(target, report, forbidden_paths=[settings.DB_PATH])
     print(json.dumps({k: v for k, v in report.items() if k != 'per_symbol'}, ensure_ascii=False, indent=2, allow_nan=False))
     return 0 if report['rows'] or report['capture']['protocols'] else 1
 
@@ -569,6 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="بررسی سلامت سامانه")
     p.add_argument("--offline", action="store_true", help="بدون آزمایش اتصال اینترنت")
     p.add_argument("--json", default="", help="ذخیره گزارش ماشین‌خوان در این مسیر (مثلاً logs/doctor.json)")
+    p.add_argument('--read-only', action='store_true', help='دیتابیس مفقود ساخته و ساختار قدیمی ارتقا داده نمی‌شود')
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("audit", help="گزارش فقط‌خواندنی کیفیت آرشیو واقعی، بدون اتصال اینترنت")
@@ -621,6 +626,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
     p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'research-preflight.json'))
     p.set_defaults(func=cmd_research_preflight)
+
+    p = sub.add_parser('trader-readiness', help='گزارش آفلاین نصب و داده بازار؛ تأیید سودآوری نیست')
+    p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'trader-readiness.json'))
+    p.set_defaults(func=cmd_trader_readiness)
 
     p = sub.add_parser('research-recheck', help='برنامه بازبینی قیمت‌های ناسازگار و مقایسه فقط‌خواندنی با منبع')
     p.add_argument('--before', default=None, help='پایان انحصاری توسعه؛ حداکثر مرز دوره مهر و موم')

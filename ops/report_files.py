@@ -8,10 +8,10 @@ from pathlib import Path
 from config import settings
 
 
-def private_report_path(path, *, forbidden_paths=()):
+def json_report_path(path, *, forbidden_paths=()):
     target = Path(path).resolve()
-    if not target.is_relative_to((settings.DATA_DIR / 'private').resolve()) or target.suffix.lower() != '.json':
-        raise ValueError('خروجی گزارش باید فایل JSON داخل data/private/ باشد')
+    if target.suffix.lower() != '.json':
+        raise ValueError('خروجی گزارش باید فایل JSON باشد')
     for source in forbidden_paths:
         source = Path(source).resolve()
         if target == source or (target.exists() and source.exists() and target.samefile(source)):
@@ -19,8 +19,15 @@ def private_report_path(path, *, forbidden_paths=()):
     return target
 
 
-def write_private_report(path, payload, *, forbidden_paths=()):
-    target = private_report_path(path, forbidden_paths=forbidden_paths)
+def private_report_path(path, *, forbidden_paths=()):
+    target = json_report_path(path, forbidden_paths=forbidden_paths)
+    if not target.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+        raise ValueError('خروجی گزارش باید فایل JSON داخل data/private/ باشد')
+    return target
+
+
+def write_json_report(path, payload, *, forbidden_paths=()):
+    target = json_report_path(path, forbidden_paths=forbidden_paths)
     body = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -36,3 +43,8 @@ def write_private_report(path, payload, *, forbidden_paths=()):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return target
+
+
+def write_private_report(path, payload, *, forbidden_paths=()):
+    target = private_report_path(path, forbidden_paths=forbidden_paths)
+    return write_json_report(target, payload, forbidden_paths=forbidden_paths)

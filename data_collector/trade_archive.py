@@ -45,15 +45,20 @@ class TradeArchive:
         if not refresh:
             for path in sorted(self.root.glob(prefix+'*.json.gz'), key=lambda p: p.stat().st_mtime_ns, reverse=True):
                 cached = self.load(path)
-                if cached['status'] == 'ok' and ((cached.get('observation') or {}).get('response') or {}).get('tradeHistory'):
+                observation = cached.get('observation')
+                response = observation.get('response') if isinstance(observation, dict) else None
+                rows = response.get('tradeHistory') if isinstance(response, dict) else None
+                if cached['status'] == 'ok' and isinstance(rows, list) and rows:
                     return cached, path
         record = dict(ins_code=str(ins_code), trade_date=trade_date, attempted_at=now_tehran_iso(), status='unavailable', observation=None)
         if provider is not None:
             try:
                 observation = provider.get_trade_session(str(ins_code), trade_date)
                 if observation is not None:
-                    rows=(observation.get('response') or {}).get('tradeHistory')
-                    record.update(status='ok' if isinstance(rows,list) and rows else 'empty', observation=observation)
+                    response = observation.get('response') if isinstance(observation, dict) else None
+                    rows = response.get('tradeHistory') if isinstance(response, dict) else None
+                    status = ('ok' if rows else 'empty') if isinstance(rows, list) else 'invalid'
+                    record.update(status=status, observation=observation)
             except (NotImplementedError, ValueError, OSError) as error:
                 record['error_type'] = type(error).__name__
         data = json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(',', ':')).encode()
@@ -65,9 +70,12 @@ class TradeArchive:
         final = self.root / (prefix+sha+'.json.gz')
         temporary = self.root / ('.'+uuid.uuid4().hex+'.tmp')
         # فایل کامل به نام مبتنی بر محتوا منتشر می‌شود؛ فهرست مشترک قابل بازنویسی نداریم.
-        with temporary.open('xb') as stream:
-            stream.write(gzip.compress(data, mtime=0))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, final)
+        try:
+            with temporary.open('xb') as stream:
+                stream.write(gzip.compress(data, mtime=0))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, final)
+        finally:
+            temporary.unlink(missing_ok=True)
         return record, final

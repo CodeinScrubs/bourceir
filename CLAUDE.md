@@ -26,7 +26,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 ## نقشه کد
 | مسیر | مسئولیت |
 | :--- | :--- |
-| `core/query_screener.py` + `ops/query_screener.py` + `dashboard/query_screener.py` | پرسش توصیفی ثبت‌شده پیش از خواندن، رتبه ارزش بازار جاری با کران نامعلوم/هم‌ارزش، ترتیب منفی→مثبت با اثبات کندلی محدود و تیک تطبیق‌شده؛ `market-query-v2`. تعارض مجموع/مسیر کامل تیک با روز، قطعیت نمی‌سازد. سیگنال/اجرای سفارش/جامعه تاریخی PIT نیست. [راهنما](docs/research/market-queries.md). |
+| `core/query_screener.py` + `ops/query_screener.py` + `dashboard/query_screener.py` | پرسش توصیفی ثبت‌شده پیش از خواندن، رتبه ارزش بازار جاری با کران نامعلوم/هم‌ارزش، ترتیب منفی→مثبت با اثبات کندلی محدود و تیک تطبیق‌شده؛ `market-query-v3`. تعارض مجموع/مسیر کامل تیک با روز، قطعیت نمی‌سازد. سیگنال/اجرای سفارش/جامعه تاریخی PIT نیست. [راهنما](docs/research/market-queries.md). |
 | `data_collector/trade_archive.py` + `data_collector/public_site.py` + `ops/source_catalog.py` | خام فشرده ریزمعاملات، برداشت قابل ادامه سایت عمومی و فهرست ادعاها بدون اجرای کد ناشناس. فقط provider با TSETMC حرف می‌زند. [راهنما](docs/algosaham-public-archive.md). |
 | `core/` | منطق خالص دامنه: `market_rules` (کارمزد، صف قفل، بازده PIT)، `text` (ی/ک عربی)، `timeutils` (تهران، شمسی) |
 | `core/paper.py` + `database/paper.py` + `dashboard/paper.py` | پورتفوی مجازی مستقل با سرمایه دلخواه یا کپی موجودی آغازین از گزارش تازه فارابی؛ خرید گذشته ساخته نمی‌شود. نقد مشترک، بهای هر تحلیل و منبع محفوظ‌اند؛ ابزار خارج از دامنه فقط مشاهده می‌شود. سناریوی دستی جدا از مظنه تازه است. Migration 013/014، پروتکل v2 با خواندن v1؛ داده/اقدام شرکتی نامعلوم مانع سود عددی است. هیچ سفارش واقعی یا سیگنال پذیرفته‌شده ندارد. [راهنما](docs/paper-portfolio.md). |
@@ -38,7 +38,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `research/` | daily-v7، labels-v4، dip-v4 با خلاصه dip-summary-v2 و portfolio-v3؛ `portfolio_run` پژوهش سرمایه مشترک از ورودی پایه محفوظ، `walkforward` برش زمانی و purge با تاریخ خروج واقعی. آمار روز یا قرعه نامعلوم صفر یا از مخرج حذف نمی‌شود. مخرج ورود و خروج و آمار شرطی صریح‌اند. نتیجه پژوهشی است و سیگنال پذیرفته‌شده نداریم. دوره `holdout_start` مهر و موم است. پروتکل سه افق: `docs/research/personal_strategy_protocol.md` |
 | `ai/` | Jev (TypeSafe) — کلید در `.env`؛ پلاگین `typesafe` راهنمای ساخت با آن است |
 | `dashboard/app.py` | رابط فارسی راست‌چین؛ کارهای طولانی با `ops/jobs.py` در پس‌زمینه |
-| `ops/doctor.py` | عیب‌یاب با راه‌حل فارسی |
+| `ops/doctor.py` + `ops/trader_readiness.py` | عیب‌یاب با راه‌حل فارسی و حالت صریح `--read-only`؛ گزارش آمادگی آفلاین فقط از بازار، بدون محتوای حساب یا پذیرش روش. [راهنما](docs/trader-readiness.md). |
 | `ops/environment.py` + `ops/report_files.py` | تطبیق همه نسخه‌های قفل‌شده/رسید نصب در Windows و انتشار اتمی گزارش خصوصی بدون بازنویسی ورودی. |
 | `ops/research_preflight.py` + `research/uncertainty.py` + `dashboard/reliability.py` | بررسی فقط‌خواندنی قرارداد داده توسعه و نمایش گزارش محفوظ در سلامت سامانه؛ اختلاف زوجی روزانه با بازنمونه‌گیری بلوکی و مخرج نامعلوم. پذیرش سیگنال یا احتمال سود نیست. [راهنما](docs/research/reliability-roadmap-fa.md). |
 | `core/price_quality.py` + `ops/price_recheck.py` | علت‌های مشخص نقص قیمت و تفکیک تاریخچه پیشین در preflight-v3؛ برنامه بازبینی پیش از دریافت، کد محفوظ و مقایسه محدود فقط از provider. هیچ اصلاح خودکار ندارد. [مراحل فعلی](docs/research/next-phase-plan-fa.md) مرجع تصمیم مرحله بعد است؛ طرح اولیه فاز۱ سند تاریخی است. |

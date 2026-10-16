@@ -21,12 +21,13 @@ from core.query_screener import (
     trade_evidence,
     validate_spec,
 )
-from core.timeutils import is_trading_session, now_tehran, now_tehran_iso
+from core.timeutils import TEHRAN_TZ, now_tehran, now_tehran_iso
 from data_collector.trade_archive import TradeArchive
 
-CODE_FILES = ('core/query_screener.py', 'core/file_lock.py', 'ops/query_screener.py', 'ops/query_report.py',
+LEGACY_CODE_FILES = ('core/query_screener.py', 'core/file_lock.py', 'ops/query_screener.py', 'ops/query_report.py',
               'data_collector/base.py', 'data_collector/tsetmc.py', 'data_collector/trade_archive.py',
               'core/timeutils.py', 'core/text.py', 'requirements.lock.txt')
+CODE_FILES = LEGACY_CODE_FILES + ('database/db.py', 'config/settings.py', 'config/default.yaml', 'config/production.yaml')
 
 
 def clean(value):
@@ -69,23 +70,34 @@ def code_sources(folder=None):
 def verify_inputs(folder):
     folder = Path(folder)
     manifest = json.loads((folder/'inputs.json').read_text(encoding='utf-8'))
+    protocol = json.loads((folder/'protocol.json').read_text(encoding='utf-8'))
+    sources = protocol.get('code') if isinstance(protocol, dict) else None
+    # خواننده فهرست کد همان قرارداد را می‌سنجد؛ محاسبه دوباره به هویت کامل کد جاری نیاز دارد.
+    if (not isinstance(sources, dict) or not set(LEGACY_CODE_FILES) <= set(sources)
+            or any(not isinstance(name, str) or not isinstance(digest, str) or len(digest) != 64
+                   or any(c not in '0123456789abcdef' for c in digest)
+                   or Path(name).is_absolute() or '..' in Path(name).parts for name, digest in sources.items())):
+        raise ValueError('فهرست کد محفوظ قرارداد معتبر نیست')
     required = {'protocol.json','instruments.json','latest-prices.json','daily-prices.json','calendar.json','quote-observations.json'}
-    required.update('code/'+name for name in CODE_FILES)
+    required.update('code/'+name for name in sources)
     if not isinstance(manifest,dict) or not required <= set(manifest):
         raise ValueError('فهرست ورودی محفوظ ناقص است')
     for name, expected in manifest.items():
         path = (folder / name).resolve()
         if not path.is_relative_to(folder.resolve()) or sha(path) != expected:
             raise ValueError('ورودی یا کد محفوظ پرسش مخدوش است')
-    protocol = json.loads((folder/'protocol.json').read_text(encoding='utf-8'))
-    if protocol['code'] != {name:manifest['code/'+name] for name in CODE_FILES}:
+    if sources != {name:manifest['code/'+name] for name in sources}:
         raise ValueError('نسخه کد با قرارداد محفوظ متفاوت است')
     return manifest
 
 
 def start_query(db, spec, *, output_root=None, quote_provider=None):
     spec = validate_spec(spec)
-    if iso_day(spec['end']) >= now_tehran().date():
+    registered_at = now_tehran()
+    weekdays = list(settings.TRADING_DAYS)
+    if any(type(day) is not int or not 0 <= day <= 6 for day in weekdays) or len(set(weekdays)) != len(weekdays):
+        raise ValueError('روزهای هفته در تنظیمات معتبر نیستند')
+    if iso_day(spec['end']) >= registered_at.date():
         raise ValueError('فقط روزهای کامل گذشته در این پرسش توصیفی مجازند')
     root = Path(output_root or settings.DATA_DIR/'private'/'market-queries').resolve()
     if not root.is_relative_to((settings.DATA_DIR/'private').resolve()):
@@ -93,12 +105,16 @@ def start_query(db, spec, *, output_root=None, quote_provider=None):
     folder = root / ('QUERY-'+uuid.uuid4().hex)
     folder.mkdir(parents=True, exist_ok=False)
     sources = code_sources(folder)
-    protocol = dict(id=folder.name, version=VERSION, registered_at=now_tehran_iso(), spec=spec, code=sources,
+    protocol = dict(id=folder.name, version=VERSION, registered_at=registered_at.isoformat(), spec=spec, code=sources,
         purpose='owner-requested descriptive query; no model, feature or parameter selection', holdout_opened=False,
         independent_validation_for_derived_hypotheses=False, historical_membership_verified=False,
         tick_priority='ambiguous daily order first, then candle-confirmed audit; date and symbol_id order',
         signals_enabled=False, source_field='raw last trade: close_raw or dated snapshot last_price', market_cap_basis='current stored shares x latest observed raw last trade',
         current_snapshot_not_historical_pit_master=True, annual_calendar_coverage_verified=False)
+    protocol['calendar_policy'] = dict(trading_weekdays=weekdays,
+        basis='registered weekday fallback with frozen calendar exceptions; not a verified full exchange calendar')
+    protocol['quote_replacement_policy'] = ('later Tehran date; on current date require market time after stored capture; '
+                                             'never replace a completed prior-day daily last with a same-day intraday quote')
     write_json(folder/'protocol.json', protocol)
     registered = db.log_experiment(folder.name+'-PROTOCOL', 'descriptive_market_query_protocol', 'current ordinary universe',
         json.dumps(protocol, ensure_ascii=False), '{}', start_date=spec['start'], end_date=spec['end'], status='registered',
@@ -106,6 +122,9 @@ def start_query(db, spec, *, output_root=None, quote_provider=None):
     if not registered:
         raise RuntimeError('ثبت قرارداد پیش از خواندن داده ناموفق بود')
     snapshots = quote_provider.get_market_snapshots() if quote_provider is not None else None
+    quote_received_at = now_tehran()
+    if snapshots is not None and (not isinstance(snapshots, list) or any(not isinstance(q, dict) for q in snapshots)):
+        raise ValueError('پاسخ مظنه باید فهرست ردیف‌های معتبر باشد')
     with db.conn:
         db.conn.execute('BEGIN')
         instruments = [r for r in db.get_universe_symbols() if r['instrument_type_code'] in (300, 303)]
@@ -113,7 +132,7 @@ def start_query(db, spec, *, output_root=None, quote_provider=None):
         latest = {}
         for row in db.conn.execute("SELECT p.* FROM daily_prices p JOIN (SELECT symbol_id,max(date) AS d FROM daily_prices "
             "WHERE source='tsetmc' AND date<=? GROUP BY symbol_id) x ON p.symbol_id=x.symbol_id AND p.date=x.d "
-            "WHERE p.source='tsetmc'", (now_tehran().date().isoformat(),)):
+            "WHERE p.source='tsetmc'", (quote_received_at.date().isoformat(),)):
             if row['symbol_id'] in ids:
                 latest[row['symbol_id']] = {k: row[k] for k in ('date','close_raw','price_unit','source','captured_at')}
         columns = 'symbol_id,date,open_raw,high_raw,low_raw,close_raw,close_final_raw,ref_price_raw,volume,value,trade_count,price_unit,source,captured_at'
@@ -133,8 +152,11 @@ def start_query(db, spec, *, output_root=None, quote_provider=None):
             stamp = quote.get('provider_timestamp')
             try:
                 clock = datetime.fromisoformat(stamp)
+                if clock.utcoffset() is None:
+                    continue
+                clock = clock.astimezone(TEHRAN_TZ)
                 day = clock.date().isoformat()
-                if clock.utcoffset() is None or clock > now_tehran():
+                if clock > quote_received_at:
                     continue
             except (ValueError, TypeError):
                 continue
@@ -142,10 +164,18 @@ def start_query(db, spec, *, output_root=None, quote_provider=None):
             current = latest.get(key,{})
             from core.query_screener import decimal
             price = decimal(quote.get('last_price'))
-            if (day >= current.get('date','') and price is not None and price > 0 and
+            newer = day > current.get('date', '')
+            if day == current.get('date') == quote_received_at.date().isoformat():
+                try:
+                    captured = datetime.fromisoformat(current['captured_at'])
+                    newer = captured.utcoffset() is not None and clock > captured
+                except (ValueError, TypeError, KeyError):
+                    newer = False
+            if (newer and price is not None and price > 0 and
                 quote.get('source') == 'tsetmc' and quote.get('price_unit') == 'Rial'):
                 latest[key] = dict(date=day, close_raw=quote['last_price'], price_unit='Rial', source='tsetmc',
-                    captured_at=quote.get('captured_at'), provider_timestamp=stamp, quote_kind='dated_market_snapshot')
+                    captured_at=quote.get('captured_at'), provider_timestamp=clock.isoformat(),
+                    quote_kind='dated_market_snapshot', quote_received_at=quote_received_at.isoformat())
     for name, value in (('instruments.json',instruments), ('latest-prices.json',latest), ('daily-prices.json',prices),
                         ('calendar.json',calendar),('quote-observations.json',snapshots)):
         write_json(folder/name,value)
@@ -176,6 +206,11 @@ def _evaluate_query(folder, *, provider=None, archive_root=None, max_trade_days=
     if protocol['version'] != VERSION or protocol['code'] != code_sources():
         raise ValueError('نسخه کد تغییر کرده؛ پرسش تازه با قرارداد مستقل ثبت کن')
     spec = validate_spec(protocol['spec'])
+    policy = protocol.get('calendar_policy', {})
+    weekdays = policy.get('trading_weekdays')
+    if (not isinstance(weekdays, list) or any(type(d) is not int or not 0 <= d <= 6 for d in weekdays)
+            or len(set(weekdays)) != len(weekdays)):
+        raise ValueError('قاعده تقویم در قرارداد محفوظ معتبر نیست')
     instruments = json.loads((folder/'instruments.json').read_text(encoding='utf-8'))
     latest = {int(k):v for k,v in json.loads((folder/'latest-prices.json').read_text(encoding='utf-8')).items()}
     prices = json.loads((folder/'daily-prices.json').read_text(encoding='utf-8'))
@@ -209,7 +244,7 @@ def _evaluate_query(folder, *, provider=None, archive_root=None, max_trade_days=
             record, path = archive.capture(provider, members[key]['ins_code'], row['date'], refresh=refresh_archive)
             fetched += 1
             # پاسخ HTTP خالی، فقدان آرشیو همان روز است؛ خطای دریافت کل سرویس نیست.
-            consecutive_failures = consecutive_failures+1 if record.get('status')=='unavailable' else 0
+            consecutive_failures = consecutive_failures+1 if record.get('status') in ('unavailable', 'invalid', 'oversized') else 0
         if record is None:
             continue
         evidence = trade_evidence(record['observation'], row, dip_pct=spec['dip_pct'], rally_pct=spec['rally_pct'])
@@ -245,7 +280,12 @@ def _evaluate_query(folder, *, provider=None, archive_root=None, max_trade_days=
     weekday_candidates = []
     day = start
     while day <= end:
-        if is_trading_session(day, calendar):
+        key = day.isoformat()
+        recorded = calendar.get(key)
+        if key in calendar and type(recorded) is not bool:
+            raise ValueError('وضعیت ثبت‌شده تقویم باید بولی باشد')
+        is_session = recorded if key in calendar else day.weekday() in weekdays
+        if is_session:
             weekday_candidates.append(day.isoformat())
         day += timedelta(days=1)
     result = dict(protocol=protocol, evaluated_at=now_tehran_iso(), caps=caps, results=results,
