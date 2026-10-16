@@ -74,3 +74,7 @@ class BaseDataProvider(ABC):
     def get_intraday_trades(self, ins_code: str) -> Optional[pd.DataFrame]:
         """ریزمعاملات روز جاری (زمان، قیمت، حجم)."""
         raise NotImplementedError
+
+    def get_trade_session(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        """پاسخ خام ریزمعاملات یک تاریخ مشخص با نشانی و زمان دریافت؛ کامل بودن هنوز اثبات نشده."""
+        raise NotImplementedError

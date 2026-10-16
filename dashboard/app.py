@@ -25,6 +25,7 @@ from dashboard.broker import page_broker  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
+from dashboard.query_screener import page_query_screener  # noqa: E402
 from dashboard.stock_study import page_stock_study  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
@@ -245,8 +246,9 @@ def page_home() -> None:
             row2[1].metric("👥 ورود پول حقیقی" + (" (ناقص)" if partial else ""), fa_num(billion_toman(pulse["real_flow"])),
                            help="خرید حقیقی منهای فروش حقیقی؛ منفی یعنی خروج پول حقیقی")
             if partial:
-                st.caption(f"⏳ آمار حقیقی/حقوقی امروز فعلاً برای {fa_num(pulse['flow_coverage'])} از "
-                           f"{fa_num(pulse['count'])} سهم منتشر شده است (TSETMC تا عصر کامل می‌کند).")
+                st.caption(f"⏳ آمار معتبر حقیقی/حقوقی جلسه {to_jalali(pulse['date'])} برای "
+                           f"{fa_num(pulse['flow_coverage'])} از {fa_num(pulse['count'])} سهم موجود است؛ "
+                           "نماد فاقد داده یا دارای آمار ناسازگار در جمع وارد نشده است. صفحه سلامت را بررسی کنید.")
     else:
         st.warning("هنوز داده‌ای ثبت نشده است. دکمه «به‌روزرسانی داده‌ها» را بزنید.")
 
@@ -254,8 +256,9 @@ def page_home() -> None:
     st.subheader("🔄 به‌روزرسانی داده‌ها")
     job_panel("update", ["update"], "شروع به‌روزرسانی",
               "فهرست سهام، قیمت‌های روزانه، حقیقی/حقوقی و اطلاعیه‌های کدال را به‌روز می‌کند. "
-              "بار اول حدود ۴۵ دقیقه و بعد از آن چند دقیقه طول می‌کشد. بعد از ساعت ۱۴ قیمت‌های امروز کامل است؛ "
-              "آمار حقیقی/حقوقی امروز را TSETMC تا عصر منتشر می‌کند، پس اجرای دوباره در عصر مفید و بی‌خطر است.")
+              "مدت دریافت به حجم داده و دسترسی منبع بستگی دارد. پس از بسته شدن بازار به‌روزرسانی کنید؛ "
+              "زمان انتشار یا اصلاح آمار نمادها یکسان نیست. تاریخ و پوشش معتبر را در صفحه سلامت بررسی کنید؛ "
+              "اجرای دوباره، اصلاحات اخیر منبع را نیز بررسی می‌کند.")
 
     st.subheader("📡 پایش زنده بازار")
     job_panel("live", ["live"], "شروع پایش زنده",
@@ -691,6 +694,7 @@ PAGES = {
     "📰 اطلاعیه‌های کدال": page_codal,
     "🔬 پژوهش": page_research,
     "📚 مطالعه رشد نمادها": page_stock_study,
+    '🔎 پرسش‌گر بازار': page_query_screener,
     "🩺 سلامت سامانه": page_health,
     "ℹ️ راهنما": page_guide,
 }

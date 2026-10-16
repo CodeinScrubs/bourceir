@@ -26,6 +26,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 ## نقشه کد
 | مسیر | مسئولیت |
 | :--- | :--- |
+| `core/query_screener.py` + `ops/query_screener.py` + `dashboard/query_screener.py` | پرسش توصیفی ثبت‌شده پیش از خواندن، رتبه ارزش بازار جاری با کران نامعلوم/هم‌ارزش، ترتیب منفی→مثبت با اثبات کندلی محدود و تیک تطبیق‌شده؛ `market-query-v1`. سیگنال/اجرای سفارش/جامعه تاریخی PIT نیست. [راهنما](docs/research/market-queries.md). |
+| `data_collector/trade_archive.py` + `data_collector/public_site.py` + `ops/source_catalog.py` | خام فشرده ریزمعاملات، برداشت قابل ادامه سایت عمومی و فهرست ادعاها بدون اجرای کد ناشناس. فقط provider با TSETMC حرف می‌زند. [راهنما](docs/algosaham-public-archive.md). |
 | `core/` | منطق خالص دامنه: `market_rules` (کارمزد، صف قفل، بازده PIT)، `text` (ی/ک عربی)، `timeutils` (تهران، شمسی) |
 | `core/paper.py` + `database/paper.py` + `dashboard/paper.py` | پورتفوی مجازی مستقل با سرمایه دلخواه یا کپی موجودی آغازین از گزارش تازه فارابی؛ خرید گذشته ساخته نمی‌شود. نقد مشترک، بهای هر تحلیل و منبع محفوظ‌اند؛ ابزار خارج از دامنه فقط مشاهده می‌شود. سناریوی دستی جدا از مظنه تازه است. Migration 013/014، پروتکل v2 با خواندن v1؛ داده/اقدام شرکتی نامعلوم مانع سود عددی است. هیچ سفارش واقعی یا سیگنال پذیرفته‌شده ندارد. [راهنما](docs/paper-portfolio.md). |
 | `data_collector/tsetmc.py` | تنها نقطه تماس با TSETMC (پیاده‌سازی `BaseDataProvider`) |

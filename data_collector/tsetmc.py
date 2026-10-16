@@ -497,3 +497,17 @@ class TsetmcProvider(BaseDataProvider):
     def test_connection(self) -> bool:
         data = self._get_json(MARKET_WATCH_STOCKS, rate_limit=False)
         return bool(data and data.get("marketwatch"))
+
+    def get_trade_session(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        from datetime import date
+
+        requested = date.fromisoformat(trade_date)
+        if requested.isoformat() != trade_date or not str(ins_code).isdigit() or requested > now_tehran().date():
+            raise ValueError('شناسه و تاریخ معتبر گذشته لازم است')
+        url = f'{BASE_URL}/Trade/GetTradeHistory/{ins_code}/{requested:%Y%m%d}/false'
+        data = self._get_json(url)
+        if not isinstance(data, dict) or not isinstance(data.get('tradeHistory'), list):
+            return None
+        return dict(source='tsetmc', price_unit='Rial', ins_code=str(ins_code), requested_date=trade_date,
+                    captured_at=now_tehran().isoformat(), source_url=url, response=data,
+                    endpoint_is_grouped=False, completeness_verified=False)
