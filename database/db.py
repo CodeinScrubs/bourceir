@@ -9,8 +9,10 @@
 
 import json
 import logging
+import math
 import sqlite3
 from datetime import datetime
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -63,6 +65,25 @@ def _none_if_nan(value: Any) -> Any:
     except (TypeError, ValueError):
         pass
     return value
+
+
+def _integer_or_unknown(value: Any, field: str) -> Optional[int]:
+    """حجم و شمار کسری قطع نمی‌شوند و مقدار بولی به تعداد مشاهده‌شده تبدیل نمی‌شود."""
+    if value is None or value is pd.NA:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f'{field} must be an integer quantity or unknown')
+    if isinstance(value, Integral):
+        number = int(value)
+    else:
+        if math.isnan(value):
+            return None
+        if not math.isfinite(value) or not float(value).is_integer():
+            raise ValueError(f'{field} must be a finite integer quantity or unknown')
+        number = int(value)
+    if not 0 <= number <= 2**63 - 1:
+        raise ValueError(f'{field} is outside the SQLite nonnegative integer range')
+    return number
 
 
 class DatabaseManager:
@@ -310,7 +331,7 @@ class DatabaseManager:
             vol, val, cnt = (_none_if_nan(r.get(k)) for k in ("volume", "value", "trade_count"))
             params.append((
                 symbol_id, r["date"], o, h, lo, c, None,
-                int(vol) if vol is not None else None, val, int(cnt) if cnt is not None else None,
+                _integer_or_unknown(vol, 'volume'), val, _integer_or_unknown(cnt, 'trade_count'),
                 settings.PRICE_UNIT, source, now,
                 o, h, lo, c, _none_if_nan(r.get("close_final_raw")), _none_if_nan(r.get("ref_price_raw")), 1.0,
             ))
@@ -437,25 +458,35 @@ class DatabaseManager:
         updates = ", ".join(f"{c} = excluded.{c}" for c in CLIENT_TYPE_COLUMNS + ["captured_at"])
         query = (
             f"INSERT INTO client_types_daily ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
-            f"ON CONFLICT(symbol_id, date) DO UPDATE SET {updates};"
+            f"ON CONFLICT(symbol_id, date) DO UPDATE SET {updates} "
+            "WHERE client_types_daily.source = excluded.source;"
         )
         params = [
-            [symbol_id, r["date"]] + [_none_if_nan(r.get(c)) for c in CLIENT_TYPE_COLUMNS] + ["tsetmc", now]
+            [symbol_id, r["date"]] + [
+                _integer_or_unknown(_none_if_nan(r.get(c)), c) if c.endswith(('_count', '_volume'))
+                else _none_if_nan(r.get(c)) for c in CLIENT_TYPE_COLUMNS
+            ] + [PRICE_SOURCE, now]
             for r in df.to_dict("records")
         ]
         with self.conn:
-            self.conn.executemany(query, params)
+            cursor = self.conn.executemany(query, params)
+            if cursor.rowcount != len(params):
+                raise ValueError('Client source conflict: the entire batch was rolled back')
         return len(params)
 
-    def get_client_types_df(self, symbol_fa: str, start_date: Optional[str] = None) -> pd.DataFrame:
+    def get_client_types_df(self, symbol_fa: str, start_date: Optional[str] = None,
+                            end_date: Optional[str] = None, source: str = PRICE_SOURCE) -> pd.DataFrame:
         sym_id = self.get_symbol_id(symbol_fa)
         if not sym_id:
             return pd.DataFrame()
-        query = f"SELECT date, {', '.join(CLIENT_TYPE_COLUMNS)} FROM client_types_daily WHERE symbol_id = ?"
-        params: List[Any] = [sym_id]
+        query = f"SELECT date, {', '.join(CLIENT_TYPE_COLUMNS)} FROM client_types_daily WHERE symbol_id = ? AND source = ?"
+        params: List[Any] = [sym_id, source]
         if start_date:
             query += " AND date >= ?"
             params.append(start_date)
+        if end_date:
+            query += " AND date <= ?"
+            params.append(end_date)
         return pd.read_sql_query(query + " ORDER BY date ASC;", self.conn, params=params)
 
     # ═══════════════════════════════════════════════

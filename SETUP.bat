@@ -71,6 +71,8 @@ if %errorlevel%==0 (
     venv\Scripts\python.exe -m pip check
 )
 if errorlevel 1 goto failed
+venv\Scripts\python.exe -m ops.environment --record
+if errorlevel 1 goto failed
 venv\Scripts\python.exe brs.py doctor --offline --json logs\doctor-local.json
 if errorlevel 1 goto failed
 echo.

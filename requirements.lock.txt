@@ -70,6 +70,7 @@ numpy==2.4.6
     #   streamlit
 packaging==26.3
     # via
+    #   -r requirements.txt
     #   altair
     #   plotly
     #   pytest

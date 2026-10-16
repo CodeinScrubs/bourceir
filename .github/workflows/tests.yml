@@ -67,6 +67,21 @@ jobs:
         python -m venv venv
         call SETUP.bat --ci
 
+    - name: Verify existing Windows environment detects and repairs a missing locked package
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        & venv/Scripts/python.exe -m ops.environment --check
+        if ($LASTEXITCODE -ne 0) { throw 'Fresh setup did not record its environment' }
+        & venv/Scripts/python.exe -m pip uninstall -y plotly
+        if ($LASTEXITCODE -ne 0) { throw 'Could not prepare missing-package upgrade fixture' }
+        & venv/Scripts/python.exe -m ops.environment --check
+        if ($LASTEXITCODE -eq 0) { throw 'Missing locked package was accepted' }
+        cmd /c "call SETUP.bat --ci"
+        if ($LASTEXITCODE -ne 0) { throw 'Existing venv could not be synchronized' }
+        & venv/Scripts/python.exe -m ops.environment --check
+        if ($LASTEXITCODE -ne 0) { throw 'Repaired environment still disagrees with lock' }
+
     - name: Verify first-run capture entry point installs its local runtime
       if: runner.os == 'Windows'
       shell: cmd

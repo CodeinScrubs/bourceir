@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from core.client_quality import snapshot_buyer_power
+from core.client_quality import snapshot_buyer_power, snapshot_client_metrics
 from core.timeutils import TEHRAN_TZ, now_tehran
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,8 @@ class DataFreshnessMonitor:
         if last_price:
             self.last_seen_prices[symbol_fa] = last_price
 
-        bp = buyer_power(snapshot)
+        client_metrics = snapshot_client_metrics(snapshot)
+        bp = client_metrics['buyer_power']
         return {
             "symbol": symbol_fa,
             "checked_at": now.strftime("%H:%M:%S"),
@@ -103,7 +104,13 @@ class DataFreshnessMonitor:
             "delay_seconds": delay_seconds,
             "status": status_flag,
             "last_price": last_price,
-            "buyer_power": bp,   # None = نامعلوم (عدد ساختگی ۱ گزارش نمی‌شود)
+            "buyer_power": round(bp, 2) if bp is not None else None,
+            "real_flow_estimate_rial": client_metrics['real_flow_estimate_rial'],
+            "buy_volume_quality": client_metrics['buy_volume_quality'],
+            "sell_volume_quality": client_metrics['sell_volume_quality'],
+            "buy_volume_quality_label": client_metrics['buy_volume_quality_label'],
+            "sell_volume_quality_label": client_metrics['sell_volume_quality_label'],
+            "clock_coupling_verified": False,
             "warnings": warnings,
             "is_healthy": status_flag == "🟢 Fresh" and not warnings,
         }

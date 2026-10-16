@@ -191,7 +191,7 @@ def latest_snapshots() -> pd.DataFrame:
 
 JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه",
               "research-dip": "آزمون روش خرید در اصلاح", 'research-portfolio': 'پژوهش پرتفوی با نقد مشترک',
-              'research-flow': 'پژوهش فیلترهای ثابت جریان حقیقی'}
+              'research-flow': 'پژوهش فیلترهای ثابت جریان حقیقی', 'research-preflight': 'بررسی قرارداد داده پژوهش'}
 
 
 def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
@@ -395,10 +395,11 @@ def page_live() -> None:
             return
         snaps = snaps.copy()
         snaps["change_pct"] = (snaps["last_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
-        snaps["real_flow_bt"] = (snaps["real_buy_volume"] - snaps["real_sell_volume"]) * snaps["last_price"] / 1e10
         monitor = DataFreshnessMonitor()
         health = [monitor.inspect_snapshot(row["symbol_fa"], row) for row in snaps.to_dict("records")]
-        snaps["buyer_power"] = [h['buyer_power'] for h in health]
+        snaps["buyer_power"] = pd.to_numeric(pd.Series([h['buyer_power'] for h in health], index=snaps.index), errors='coerce')
+        snaps["real_flow_bt"] = pd.to_numeric(pd.Series([h['real_flow_estimate_rial'] for h in health], index=snaps.index), errors='coerce') / 1e10
+        snaps["client_volume_quality"] = [h['buy_volume_quality_label'] + ' / ' + h['sell_volume_quality_label'] for h in health]
         snaps["freshness"] = [h["status"] for h in health]
         snaps["source_delay"] = [h["delay_seconds"] for h in health]
         view_filter = st.radio("نمایش", ["همه", "فقط صف خرید", "فقط صف فروش", "قدرت خریدار > ۲"], horizontal=True)
@@ -423,11 +424,13 @@ def page_live() -> None:
             "صف خرید (حجم)": snaps["buy_queue_volume"],
             "صف فروش (حجم)": snaps["sell_queue_volume"],
             "قدرت خریدار": snaps["buyer_power"].round(2),
+            "کیفیت حجم خرید / فروش": snaps["client_volume_quality"],
             "برآورد پول حقیقی (میلیارد تومان)": snaps["real_flow_bt"].round(1),
             "ارزش (میلیارد تومان)": (snaps["value"] / 1e10).round(1),
         }), hide_index=True, width="stretch", height=600)
         st.caption('قدرت خریدار این جدول حجمی است. برآورد پول حقیقی از تفاضل حجم حقیقی × آخرین قیمت است؛ '
-                   'ارزش واقعی معاملات حقیقی را فقط با آمار ارزشی روزانه می‌توان تطبیق داد.')
+                   'ارزش واقعی معاملات حقیقی را فقط با آمار ارزشی روزانه می‌توان تطبیق داد. '
+                   'هم‌زمانی مستقل آمار حقیقی/حقوقی با عمق سفارش‌ها تأیید نشده است.')
         interval_panel(snaps['symbol_fa'].tolist())
 
     live_table()
@@ -577,6 +580,9 @@ def page_research() -> None:
 
 def page_health() -> None:
     st.title("🩺 سلامت سامانه")
+    from dashboard.reliability import show_reliability
+
+    show_reliability(job_panel)
     with st.expander('کیفیت ثبت داده درون‌روزی'):
         st.caption('فاصله اسنپ‌شات‌ها، فاصله تغییرات ذخیره‌شده است؛ پاسخ بدون تغییر دوباره ذخیره نمی‌شود. '
                    'ثبت مستقل چرخه‌ها کیفیت دریافت را جدا نشان می‌دهد. زمان مستقل عمق بازار، وضعیت مجاز معاملات '
