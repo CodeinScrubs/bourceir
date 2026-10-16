@@ -142,7 +142,7 @@ def test_stale_schema_receipt_blocks_readiness_without_migrating(db, monkeypatch
     report = collect_readiness(db)
     assert not report['schema_current'] and report['status'] == 'blocked'
     assert 'database_schema_not_current' in report['blockers']
-    assert db.conn.total_changes == before and db.schema_version() == 13
+    assert db.conn.total_changes == before and db.schema_version() == 15
 
 
 def test_intraday_report_cannot_overwrite_database_before_checks(tmp_path, monkeypatch):

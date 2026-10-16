@@ -280,3 +280,16 @@ def test_previous_price_contract_cannot_feed_a_new_portfolio_evaluation(pinned_b
     path.write_text(json.dumps(payload), encoding='utf-8')
     with pytest.raises(ValueError, match='قرارداد'):
         verified_baseline_inputs(root/'research')
+
+
+def test_baseline_without_recovery_provenance_cannot_feed_new_research(pinned_baseline):
+    import json
+
+    from research.portfolio_run import verified_baseline_inputs
+    source, root = pinned_baseline
+    path = root / 'research' / f"{source['experiment_id']}.json"
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    payload['params']['research_provenance']['feature_manifest']['provenance']['raw_inputs']['version'] = 'raw-inputs-v1'
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    with pytest.raises(ValueError, match='قرارداد'):
+        verified_baseline_inputs(root / 'research')

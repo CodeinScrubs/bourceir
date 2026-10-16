@@ -11,8 +11,9 @@ import pandas as pd
 
 from config import settings
 from database.db import CLIENT_TYPE_COLUMNS
+from database.price_recovery import recovery_partitions
 
-INPUT_VERSION = 'raw-inputs-v1'
+INPUT_VERSION = 'raw-inputs-v2'
 PRICE_COLUMNS = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw',
                  'ref_price_raw', 'volume', 'value', 'trade_count']
 COMPUTATION_PACKAGES = ('numpy', 'pandas', 'pyarrow')
@@ -60,7 +61,7 @@ def feature_logic_fingerprint():
     digest = hashlib.sha256()
     files = ('features/daily.py', 'features/market.py', 'features/store.py', 'features/provenance.py',
              'core/market_rules.py', 'core/client_quality.py', 'core/text.py', 'core/timeutils.py',
-             'database/db.py', 'config/settings.py')
+             'database/db.py', 'database/price_recovery.py', 'config/settings.py')
     for name in files:
         digest.update(name.encode())
         digest.update((settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n'))
@@ -106,6 +107,7 @@ def raw_input_snapshot(db, *, symbols=None, end_exclusive=None):
                     digests.setdefault(day, hashlib.sha256()).update(packed.tobytes())
                     counts[day] = counts.get(day, 0) + len(rows)
         tables[table] = {day: dict(sha256=digest.hexdigest(), rows=counts[day]) for day, digest in digests.items()}
+    tables['price_recoveries'] = recovery_partitions(db.conn, ids, end_exclusive)
     return dict(version=INPUT_VERSION, tables=tables)
 
 

@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from core.text import normalize_symbol
 
-VERSION = 'market-query-v3'
+VERSION = 'market-query-v4'
 METRICS = {'market_cap_rial', 'confirmed_count', 'ambiguous_count', 'possible_count', 'valid_sessions',
            'observed_sessions', 'avg_value_rial', 'sector_code', 'symbol_fa'}
 
@@ -181,7 +181,7 @@ def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
 
 def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
     """نسخه تکراری یکسان حذف می‌شود؛ تعارض شماره، تاریخ یا OHLCV قطعیت نمی‌سازد."""
-    result = dict(event_confirmed=None, complete=False, contradictory=False, duplicate_rows=0, issues=[], witness=None,
+    result = dict(event_confirmed=None, complete=False, contradictory=False, duplicate_rows=0, canceled_revision_rows=0, issues=[], witness=None,
                   payload_date_verified=False, payload_identity_verified=False)
     if (not isinstance(observation,dict) or not isinstance(daily,dict) or observation.get('source') != 'tsetmc' or observation.get('price_unit') != 'Rial' or
         observation.get('requested_date') != daily.get('date') or
@@ -218,6 +218,11 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
             normalized = dict(number=int(number), clock=int(clock), price=price, volume=volume, canceled=raw['canceled'])
             if int(number) in by_number:
                 if by_number[int(number)] != normalized:
+                    # تاریخچه ابطال ممکن است همان معامله ابطال‌شده را با ساعت ابطال هم برگرداند.
+                    # دو نسخه ابطال‌شده در مسیر فعال نیستند؛ ابهام فعال/ابطال همچنان رد می‌شود.
+                    if by_number[int(number)]['canceled'] == normalized['canceled'] == 1:
+                        result['canceled_revision_rows'] += 1
+                        continue
                     raise ValueError('دو نسخه متعارض از یک شماره معامله')
                 result['duplicate_rows'] += 1
             by_number[int(number)] = normalized

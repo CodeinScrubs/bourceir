@@ -53,7 +53,8 @@ def collect_readiness(db):
         if own_snapshot:
             db.conn.rollback()
     environment = inspect_environment(settings.BASE_DIR / 'requirements.lock.txt', Path(sys.prefix) / '.brs-lock.sha256')
-    schema_current = preflight['database_schema'] == discover_migrations()[-1][0]
+    schema_current = [(row['version'], row['name']) for row in db.conn.execute(
+        'SELECT version,name FROM schema_migrations ORDER BY version')] == [(number, name) for number, name, _ in discover_migrations()]
     engineering_passed = bool(environment['ready'] and preflight['input_contract_passed']
                               and integrity == 'ok' and foreign_keys == 0 and schema_current)
     blockers = list(preflight['blockers'])
