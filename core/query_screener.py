@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from core.text import normalize_symbol
 
-VERSION = 'market-query-v1'
+VERSION = 'market-query-v2'
 METRICS = {'market_cap_rial', 'confirmed_count', 'ambiguous_count', 'possible_count', 'valid_sessions',
            'observed_sessions', 'avg_value_rial', 'sector_code', 'symbol_fa'}
 
@@ -159,6 +159,8 @@ def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
         any(v is None or v <= 0 for v in values.values())):
         return result
     low, high, ref, _ = values.values()
+    if values['volume'] != values['volume'].to_integral_value():
+        return result
     op,last=decimal(row.get('open_raw')),decimal(row.get('close_raw'))
     result['unavailable_price_fields']=[k for k,v in [('open_raw',op),('close_raw',last)] if v is None]
     if low>high or any(v is not None and (v<=0 or not low<=v<=high) for v in (op,last)):
@@ -177,12 +179,15 @@ def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
 
 def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
     """نسخه تکراری یکسان حذف می‌شود؛ تعارض شماره، تاریخ یا OHLCV قطعیت نمی‌سازد."""
-    result = dict(event_confirmed=None, complete=False, duplicate_rows=0, issues=[], witness=None,
+    result = dict(event_confirmed=None, complete=False, contradictory=False, duplicate_rows=0, issues=[], witness=None,
                   payload_date_verified=False, payload_identity_verified=False)
     if (not isinstance(observation,dict) or not isinstance(daily,dict) or observation.get('source') != 'tsetmc' or observation.get('price_unit') != 'Rial' or
         observation.get('requested_date') != daily.get('date') or
         str(observation.get('ins_code')) != str(daily.get('ins_code')) or observation.get('endpoint_is_grouped') is not False):
         result['issues'].append('منبع یا تاریخ درخواست ریزمعاملات سازگار نیست')
+        return result
+    if daily_evidence(daily, dip_pct=dip_pct, rally_pct=rally_pct)['event_possible'] is None:
+        result['issues'].append('کندل روز برای تطبیق ریزمعاملات معتبر نیست')
         return result
     response=observation.get('response')
     rows = response.get('tradeHistory') if isinstance(response,dict) else None
@@ -221,17 +226,34 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
             raise ValueError('شماره و ساعت معاملات ترتیب سازگار ندارند')
         prices = [r['price'] for r in active]
         if min(prices) < decimal(daily['low_raw']) or max(prices) > decimal(daily['high_raw']):
+            result['contradictory'] = True
             raise ValueError('قیمت ریزمعامله بیرون از کندل روز است')
         result.update(payload_date_verified=dates_verified, payload_identity_verified=identities_verified)
         count, volume = decimal(daily.get('trade_count')), decimal(daily.get('volume'))
         total_value = sum(r['price']*r['volume'] for r in active)
-        checks = dict(count=count == len(active), volume=volume == sum(r['volume'] for r in active),
+        total_volume = sum(r['volume'] for r in active)
+        value = decimal(daily.get('value'))
+        if ((count is not None and (count <= 0 or count != count.to_integral_value()))
+                or (value is not None and value <= 0)):
+            result['contradictory'] = True
+            raise ValueError('تعداد یا ارزش معاملات روز نامعتبر است')
+        checks = dict(count=count == len(active), volume=volume == total_volume,
             open=prices[0] == decimal(daily['open_raw']) if decimal(daily['open_raw']) is not None else None,
             last=prices[-1] == decimal(daily['close_raw']) if decimal(daily['close_raw']) is not None else None,
             low=min(prices) == decimal(daily['low_raw']), high=max(prices) == decimal(daily['high_raw']),
-            value=decimal(daily.get('value')) == total_value)
+            value=value == total_value)
         result.update(reconciliation=checks, complete=all(checks.values()), active_rows=len(active),
                       date_binding='payload' if dates_verified else 'dated_request_and_daily_reconciliation')
+        # کسری می‌تواند شاهد ناقص باشد؛ افزونی یا اختلاف پس از پوشش کامل، تعارض است.
+        excess = ((count is not None and len(active) > count) or total_volume > volume
+                  or (value is not None and total_value > value))
+        exhausted = count == len(active) or total_volume == volume
+        available_checks = [ok for key, ok in checks.items()
+                            if ok is not None and (key != 'count' or count is not None)
+                            and (key != 'value' or value is not None)]
+        if excess or (exhausted and not all(available_checks)):
+            result['contradictory'] = True
+            raise ValueError('جمع یا مسیر ریزمعاملات با آمار روز تعارض دارد؛ وقوع الگو تأیید نمی‌شود')
         dip = decimal(daily['ref_price_raw'])*(1+decimal(dip_pct)/100)
         rally = decimal(daily['ref_price_raw'])*(1+decimal(rally_pct)/100)
         first = None
