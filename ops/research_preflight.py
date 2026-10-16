@@ -7,33 +7,43 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-
 from config import settings
 from core.client_quality import validated_client_data
+from core.price_quality import RAW_PRICES, json_price_row, price_quality  # noqa: F401 (قرارداد عمومی نسخه قبلی)
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
 from features.provenance import feature_environment, feature_logic_fingerprint, raw_input_snapshot
 from ops.report_files import private_report_path, write_private_report
 
-VERSION = 'research-preflight-v2'
-RAW_PRICES = ('open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'volume', 'value')
+VERSION = 'research-preflight-v3'
 
 
-def research_preflight(db, *, before=None):
-    diagnostic_hash = hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+def diagnostic_fingerprint():
+    digest = hashlib.sha256()
+    for path in (Path(__file__), settings.BASE_DIR / 'core' / 'price_quality.py'):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes().replace(b'\r\n', b'\n'))
+    return digest.hexdigest()
+
+
+def research_preflight(db, *, before=None, detail_limit=1000):
+    diagnostic_hash = diagnostic_fingerprint()
     logic_hash = feature_logic_fingerprint()
     cutoff = settings.RESEARCH_CONFIG['holdout_start'] if before is None else before
     if (not is_canonical_iso_date(cutoff)
             or cutoff > settings.RESEARCH_CONFIG['holdout_start']):
         raise ValueError('بررسی فقط برای دوره توسعه است؛ مرز دوره مهر و موم را جلو نبرید')
+    if type(detail_limit) is not int or not 0 <= detail_limit <= 10000:
+        raise ValueError('سقف جزئیات باید عدد صحیح بین صفر و ده هزار باشد')
+    development_start = settings.RESEARCH_CONFIG['dev_start']
+    if not is_canonical_iso_date(development_start) or development_start >= settings.RESEARCH_CONFIG['holdout_start']:
+        raise ValueError('شروع دوره توسعه معتبر نیست')
     end = (date.fromisoformat(cutoff) - timedelta(days=1)).isoformat()
     own_snapshot = not db.conn.in_transaction
     if own_snapshot:
         db.conn.execute('BEGIN')
     try:
         universe = [s for s in db.get_universe_symbols(include_inactive=True) if s['instrument_type_code'] in (300, 303)]
-        records = []
+        records, issues, reason_totals = [], [], {}
         for symbol in universe:
             p = db.get_daily_prices_df(symbol['symbol_fa'], end_date=end)
             c = db.get_client_types_df(symbol['symbol_fa'], end_date=end)
@@ -41,23 +51,29 @@ def research_preflight(db, *, before=None):
                           price_rows=len(p), date_min=None, date_max=None, duplicate_dates=0,
                           client_rows=len(c), invalid_price_dates=0, invalid_client_dates=0, duplicate_client_dates=0,
                           invalid_price_rows=0, unknown_client_pairs=len(p), coherent_client_pairs=0,
-                          invalid_optional_legal_cells=0)
+                          invalid_optional_legal_cells=0, development_price_rows=0, prior_price_rows=0,
+                          invalid_development_price_rows=0, invalid_prior_price_rows=0, price_issue_counts={})
             if not c.empty:
                 record['invalid_client_dates'] = int((~c.date.map(is_canonical_iso_date)).sum())
                 record['duplicate_client_dates'] = int(c.date.duplicated().sum())
             if not p.empty:
                 record.update(date_min=p.date.min(), date_max=p.date.max(), duplicate_dates=int(p.date.duplicated().sum()))
                 record['invalid_price_dates'] = int((~p.date.map(is_canonical_iso_date)).sum())
-                numeric = p[list(RAW_PRICES)].apply(pd.to_numeric, errors='coerce')
-                valid = pd.Series(np.isfinite(numeric.to_numpy()).all(axis=1), index=p.index)
-                valid &= numeric[list(RAW_PRICES)].gt(0).all(axis=1)
-                valid &= numeric.volume.eq(np.floor(numeric.volume))
-                valid &= numeric.low_raw.le(numeric.high_raw)
-                valid &= numeric.open_raw.between(numeric.low_raw, numeric.high_raw)
-                valid &= numeric.close_raw.between(numeric.low_raw, numeric.high_raw)
-                implied = numeric.value / numeric.volume
-                valid &= implied.between(numeric.low_raw - 1., numeric.high_raw + 1.)
+                _, flags = price_quality(p)
+                valid = ~flags.any(axis=1)
                 record['invalid_price_rows'] = int((~valid).sum())
+                development = p.date.ge(development_start)
+                record.update(development_price_rows=int(development.sum()), prior_price_rows=int((~development).sum()),
+                              invalid_development_price_rows=int((~valid & development).sum()),
+                              invalid_prior_price_rows=int((~valid & ~development).sum()),
+                              price_issue_counts={k: int(v) for k, v in flags.sum().items() if v})
+                for key, count in record['price_issue_counts'].items():
+                    reason_totals[key] = reason_totals.get(key, 0) + count
+                for index in p.index[~valid][:max(0, detail_limit - len(issues))]:
+                    raw = json_price_row(p.loc[index])
+                    issues.append(dict(symbol=symbol['symbol_fa'], symbol_id=symbol['id'], ins_code=str(symbol['ins_code']),
+                                       phase='development' if development.loc[index] else 'prior_history',
+                                       date=raw['date'], reasons=flags.columns[flags.loc[index]].tolist(), raw=raw))
                 if not any(record[k] for k in ('duplicate_dates', 'duplicate_client_dates',
                                                'invalid_price_dates', 'invalid_client_dates')):
                     clean = validated_client_data(p, c)
@@ -91,8 +107,7 @@ def research_preflight(db, *, before=None):
     prices_passed = bool(rows) and not any(r['invalid_price_rows'] or r['duplicate_dates']
                                           or r['invalid_price_dates'] for r in records)
     contract_passed = prices_passed and not alignment_errors and 'environment_mismatch' not in blockers
-    if (logic_hash != feature_logic_fingerprint() or diagnostic_hash !=
-            hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n', b'\n')).hexdigest()):
+    if logic_hash != feature_logic_fingerprint() or diagnostic_hash != diagnostic_fingerprint():
         raise ValueError('کد هنگام بررسی تغییر کرد؛ گزارش منتشر نشد')
     return dict(version=VERSION, generated_at=now_tehran_iso(), end_exclusive=cutoff, database_schema=schema,
                 universe_count=len(universe), observed_symbols=sum(r['price_rows'] > 0 for r in records), price_rows=rows,
@@ -102,6 +117,10 @@ def research_preflight(db, *, before=None):
                 feature_logic_sha256=logic_hash, diagnostic_code_sha256=diagnostic_hash, blockers=blockers,
                 no_raw_price_errors=prices_passed, input_contract_passed=contract_passed,
                 status='observed_contract_passed' if contract_passed else 'blocked',
+                development_start=development_start,
+                price_scope='all_available_history_before_cutoff_including_feature_warmup',
+                price_issue_counts=reason_totals, price_issues=issues, detail_limit=detail_limit,
+                price_details_truncated=sum(r['invalid_price_rows'] for r in records) > len(issues),
                 client_value_pairs_complete=bool(rows) and sum(r['unknown_client_pairs'] for r in records) == 0,
                 accepted_for_signals=False, profitability_proven=False,
                 limitations=['Current known registry is not point-in-time membership.',

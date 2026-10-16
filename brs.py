@@ -268,6 +268,17 @@ def cmd_research_flow(args) -> int:
     return 0
 
 
+def cmd_research_recheck(args) -> int:
+    from ops.price_recheck import main
+
+    argv = ['--max-rows', str(args.max_rows)]
+    if args.before:
+        argv += ['--before', args.before]
+    if args.fetch:
+        argv += ['--fetch']
+    return main(argv)
+
+
 def cmd_research_preflight(args) -> int:
     from ops.research_preflight import main as preflight
 
@@ -610,6 +621,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
     p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'research-preflight.json'))
     p.set_defaults(func=cmd_research_preflight)
+
+    p = sub.add_parser('research-recheck', help='برنامه بازبینی قیمت‌های ناسازگار و مقایسه فقط‌خواندنی با منبع')
+    p.add_argument('--before', default=None, help='پایان انحصاری توسعه؛ حداکثر مرز دوره مهر و موم')
+    p.add_argument('--max-rows', type=int, default=5, help='حداکثر پنجاه مورد؛ پیش‌فرض پنج مورد')
+    p.add_argument('--fetch', action='store_true', help='دریافت واقعی؛ بدون این گزینه فقط برنامه محلی ثبت می‌شود')
+    p.set_defaults(func=cmd_research_recheck)
 
     p = sub.add_parser('research-uncertainty', help='عدم قطعیت اختلاف بازده روزانه دو منحنی توسعه؛ تأیید سودآوری نیست')
     p.add_argument('--strategy', required=True, help='Parquet با date و equity_rial؛ فقط دوره توسعه')

@@ -1,9 +1,7 @@
 """نمایش گزارش محفوظ قرارداد داده؛ اجرای بررسی سنگین فقط با کار پس‌زمینه."""
 
-import hashlib
 import json
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -24,6 +22,19 @@ BLOCKERS_FA = {
     'invalid_development_date_alignment': 'تاریخ یا تطبیق روزانه ناسازگار',
     'environment_mismatch': 'محیط محاسبه با نسخه‌های قفل‌شده سازگار نیست',
 }
+
+PRICE_FIELDS_FA = {'open_raw': 'اولین معامله', 'close_raw': 'آخرین معامله', 'low_raw': 'کمترین معامله',
+                   'high_raw': 'بیشترین معامله', 'close_final_raw': 'پایانی رسمی', 'ref_price_raw': 'مرجع روز',
+                   'volume': 'حجم', 'value': 'ارزش معاملات'}
+
+
+def price_reason_fa(reason):
+    for prefix, label in (('missing_or_nonfinite_', 'نامعلوم/نامعتبر: '),
+                          ('nonpositive_', 'صفر/منفی: '), ('outside_range_', 'بیرون از بازه معاملات: ')):
+        if reason.startswith(prefix):
+            return label + PRICE_FIELDS_FA.get(reason[len(prefix):], reason[len(prefix):])
+    return {'fractional_volume': 'حجم کسری', 'inverted_range': 'کمترین بیشتر از بیشترین',
+            'vwap_outside_range': 'میانگین ارزش به حجم بیرون از بازه'}.get(reason, reason)
 
 
 def load_report(path):
@@ -55,6 +66,32 @@ def load_report(path):
             raise ValueError('ردیف یا شمارش نماد معتبر نیست')
     if any(sum(row[k] for row in report['records']) != report[k] for k in record_counts[:3]):
         raise ValueError('جمع نمادها با خلاصه گزارش سازگار نیست')
+    phase_fields = ('development_price_rows', 'prior_price_rows', 'invalid_development_price_rows',
+                    'invalid_prior_price_rows')
+    for row in report['records']:
+        if (any(type(row.get(k)) is not int or row[k] < 0 for k in phase_fields)
+                or row['development_price_rows'] + row['prior_price_rows'] != row['price_rows']
+                or row['invalid_development_price_rows'] + row['invalid_prior_price_rows'] != row['invalid_price_rows']
+                or row['invalid_development_price_rows'] > row['development_price_rows']
+                or row['invalid_prior_price_rows'] > row['prior_price_rows']):
+            raise ValueError('مخرج دوره توسعه و تاریخچه پیشین ناسازگار است')
+    details = report.get('price_issues')
+    if (not isinstance(details, list) or type(report.get('detail_limit')) is not int
+            or not 0 <= len(details) <= report['detail_limit'] <= 10000
+            or type(report.get('price_details_truncated')) is not bool
+            or not is_canonical_iso_date(report.get('development_start'))):
+        raise ValueError('جزئیات گزارش قیمت معتبر نیست')
+    invalid = sum(row['invalid_price_rows'] for row in report['records'])
+    if len(details) > invalid or report['price_details_truncated'] != (len(details) < invalid):
+        raise ValueError('شمار جزئیات نقص قیمت با جمع ناسازگار است')
+    for row in details:
+        if (not isinstance(row, dict) or not isinstance(row.get('symbol'), str)
+                or not isinstance(row.get('date'), str)
+                or row['date'] >= report['end_exclusive']
+                or row.get('phase') != ('development' if row['date'] >= report['development_start'] else 'prior_history')
+                or not isinstance(row.get('reasons'), list)
+                or not row['reasons'] or any(not isinstance(v, str) for v in row['reasons'])):
+            raise ValueError('شناسه، تاریخ یا علت نقص قیمت معتبر نیست')
     if (not is_canonical_iso_date(report.get('end_exclusive'))
             or report['end_exclusive'] > settings.RESEARCH_CONFIG['holdout_start']):
         raise ValueError('مرز گزارش توسعه معتبر نیست')
@@ -76,8 +113,7 @@ def show_reliability(job_panel):
         return
     try:
         report = load_report(target)
-        current_hash = hashlib.sha256(Path(research_preflight.__file__).read_bytes()
-                                      .replace(b'\r\n', b'\n')).hexdigest()
+        current_hash = research_preflight.diagnostic_fingerprint()
         archived = (report.get('diagnostic_code_sha256') != current_hash
                     or report.get('feature_logic_sha256') != feature_logic_fingerprint()
                     or report.get('feature_environment') != feature_environment())
@@ -97,9 +133,28 @@ def show_reliability(job_panel):
         invalid_prices = sum(row['invalid_price_rows'] for row in report['records'])
         cols[3].metric('ردیف قیمت ناقص/ناسازگار', f'{invalid_prices:,}')
         st.write(f"نماد دارای قیمت: {report['observed_symbols']:,} از {report['universe_count']:,}")
+        development_rows = sum(row['development_price_rows'] for row in report['records'])
+        development_bad = sum(row['invalid_development_price_rows'] for row in report['records'])
+        prior_bad = sum(row['invalid_prior_price_rows'] for row in report['records'])
+        st.caption(f"از {to_jalali(report['development_start'])}: {development_rows:,} ردیف، "
+                   f"{development_bad:,} ناقص/ناسازگار؛ در تاریخچه پیشین: {prior_bad:,} ناقص/ناسازگار. "
+                   'تاریخچه پیشین برای محاسبه سابقه فیچرها بررسی می‌شود؛ نقص‌هایش حذف نشده‌اند.')
         st.write('موانع پذیرش پژوهش:')
         for blocker in report['blockers']:
             st.write('• ' + BLOCKERS_FA.get(blocker, 'مانع ثبت‌شده: ' + blocker))
+        with st.expander('موارد مشخص برای بازبینی منبع'):
+            st.caption('نبود قیمت با قیمت بیرون از بازه یکی نیست. این فهرست مجوز جایگزینی با عدد حدسی نیست؛ '
+                       'فرمان research-recheck برنامه و نتیجه دریافت دوباره را مستقل حفظ می‌کند.')
+            details = report['price_issues']
+            if details:
+                st.dataframe(pd.DataFrame([dict(نماد=r['symbol'], تاریخ=(to_jalali(r['date'])
+                    if is_canonical_iso_date(r['date']) else 'تاریخ نامعتبر: ' + r['date']),
+                    دوره='توسعه' if r['phase'] == 'development' else 'تاریخچه پیشین',
+                    علت='، '.join(price_reason_fa(v) for v in r['reasons'])) for r in details[:100]]), hide_index=True)
+            if report['price_details_truncated'] or len(details) > 100:
+                st.caption('نمایش به صد مورد محدود است؛ سقف جزئیات فایل و شمار کامل نقص‌ها در گزارش ثبت شده‌اند.')
+            if not details:
+                st.write('نقص عددی قیمت در جزئیات این گزارش ثبت نشده است؛ پوشش داده و امکان معامله همچنان جدا بررسی می‌شوند.')
         with st.expander('جزئیات کیفیت هر نماد'):
             frame = pd.DataFrame(report['records'])
             for field in ('date_min', 'date_max'):

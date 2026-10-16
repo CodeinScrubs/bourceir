@@ -217,7 +217,9 @@ def _evaluate_query(folder, *, provider=None, archive_root=None, max_trade_days=
         if record.get('status') not in ('ok',None):
             evidence['issues'].append('وضعیت نسخه آرشیو: '+str(record['status']))
         row['tick_evidence'] = evidence
-        if evidence['event_confirmed'] is True:
+        if evidence.get('contradictory'):
+            row.update(event_confirmed=None, evidence='daily_trade_conflict')
+        elif evidence['event_confirmed'] is True:
             row.update(event_confirmed=True, evidence='ordered_trade_witness')
         elif evidence['event_confirmed'] is False:
             if row['event_confirmed'] is True:
