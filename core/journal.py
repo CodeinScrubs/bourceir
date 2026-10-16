@@ -4,12 +4,22 @@ from config import settings
 from core.risk import RiskProfile, finite_number
 
 
-def summarize_executions(events: list, profile: RiskProfile, marks: dict, *, sell_fee_rate=None) -> dict:
+def summarize_executions(events: list, profile: RiskProfile, marks: dict, *, sell_fee_rate=None,
+                         opening_positions=None, opening_cash_rial=None) -> dict:
     sell_fee = finite_number(settings.FEES['sell'] if sell_fee_rate is None else sell_fee_rate, positive=False)
     if sell_fee >= 1:
         raise ValueError('نرخ کارمزد فروش باید کمتر از یک باشد')
-    cash, realized, fees = float(profile.capital_rial), 0.0, 0.0
+    if opening_positions is not None and opening_cash_rial is None:
+        raise ValueError('نقد آغازین باید جدا از ارزش موجودی آغازین مشخص باشد')
+    cash = float(profile.capital_rial) if opening_cash_rial is None else finite_number(opening_cash_rial, positive=False)
+    realized, fees = 0.0, 0.0
     holdings = {}
+    for symbol, position in (opening_positions or {}).items():
+        quantity = finite_number(position['quantity'])
+        cost = finite_number(position['cost_rial'])
+        if not quantity.is_integer():
+            raise ValueError('تعداد موجودی آغازین باید صحیح باشد')
+        holdings[symbol] = dict(quantity=int(quantity), cost_rial=cost, plan_ids=[])
     for event in events:
         symbol = event["symbol_fa"]
         quantity, price = finite_number(event["quantity"]), finite_number(event["price_rial"])

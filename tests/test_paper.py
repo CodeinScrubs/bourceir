@@ -326,7 +326,7 @@ def test_session_configuration_change_does_not_silently_change_trial(paper, monk
 def test_migration_thirteen_idempotent(db):
     from database.migrator import MIGRATIONS_DIR, _run_sql_migration
 
-    assert db.schema_version() == 13
+    assert db.schema_version() >= 13
     _run_sql_migration(db.conn, MIGRATIONS_DIR / '013_paper_portfolios.sql')
     db.conn.commit()
     assert db.conn.execute('SELECT count(*) FROM paper_portfolios').fetchone()[0] == 0
@@ -344,7 +344,7 @@ def test_upgrade_from_twelve_backs_up_and_preserves_data(tmp_path, monkeypatch):
             old.upsert_symbol(dict(symbol_fa='فولاد', ins_code='123', instrument_type_code=300))
             assert old.schema_version() == 12
     with DatabaseManager(db_path=path) as upgraded:
-        assert upgraded.schema_version() == 13
+        assert upgraded.schema_version() == max(m[0] for m in original())
         assert upgraded.get_symbol('فولاد')['ins_code'] == '123'
         assert upgraded.conn.execute('SELECT count(*) FROM paper_portfolios').fetchone()[0] == 0
     backups = list((tmp_path / 'backups').glob('existing-*.db'))

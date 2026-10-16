@@ -10,7 +10,8 @@ from core.risk import RiskProfile, finite_number
 from core.screening import current_snapshot
 from core.timeutils import is_market_open
 
-VERSION = 'paper-portfolio-v1'
+VERSION = 'paper-portfolio-v2'
+SUPPORTED_VERSIONS = ('paper-portfolio-v1', VERSION)
 HORIZONS = ('intraday', 'swing', 'weeks_months')
 MODES = ('manual', 'observed')
 
@@ -88,15 +89,20 @@ def quote_fill(snapshot, *, side, quantity, at, decision_at, protocol, consumed_
                 execution_proven=False, trading_state_verified=False, independent_book_clock=False)
 
 
-def portfolio_state(protocol, ideas, trades, marks, *, integrity=None):
+def portfolio_state(protocol, ideas, trades, marks, *, integrity=None, opening=None, passive_values=None):
     """بهای میانگین هر تحلیل مستقل است ولی همه از یک نقد خرج می‌کنند."""
     profile = RiskProfile(protocol['capital_rial'], protocol['max_loss_rial'])
     keyed = [dict(t, symbol_fa=t['idea_id']) for t in trades]
-    ledger = summarize_executions(keyed, profile, marks, sell_fee_rate=protocol['fees']['sell'])
+    initial = opening or {}
+    lots = initial.get('positions', {})
+    ledger = summarize_executions(keyed, profile, marks, sell_fee_rate=protocol['fees']['sell'],
+                                 opening_positions=lots if opening else None,
+                                 opening_cash_rial=initial.get('available_cash_rial'))
     attribution = []
     for key, idea in ideas.items():
         own = [t for t in trades if t['idea_id'] == key]
-        bought = sum(t['quantity'] * t['price_rial'] + t['fee_rial'] for t in own if t['side'] == 'buy')
+        opening_cost = lots.get(key, {}).get('cost_rial', 0)
+        bought = opening_cost + sum(t['quantity'] * t['price_rial'] + t['fee_rial'] for t in own if t['side'] == 'buy')
         sold = sum(t['quantity'] * t['price_rial'] - t['fee_rial'] for t in own if t['side'] == 'sell')
         position = ledger['positions'].get(key, {})
         closed_cost = bought - position.get('cost_rial', 0)
@@ -104,12 +110,22 @@ def portfolio_state(protocol, ideas, trades, marks, *, integrity=None):
         attribution.append(dict(id=key, symbol_fa=idea['symbol_fa'], label=idea['label'],
                                 status='open' if position else 'closed' if own else 'untraded',
                                 quantity=position.get('quantity', 0), bought_rial=bought,
+                                opening_basis_rial=opening_cost, imported_inventory=key in lots,
                                 realized_net_rial=realized, unrealized_net_rial=position.get('unrealized_net_rial'),
                                 closed_cost_rial=closed_cost, created_at=idea['created_at']))
     issues = integrity or {}
     blocked = any(issues.values())
-    equity = None if blocked else ledger['equity_rial']
+    passive = initial.get('passive', [])
+    passive_values = passive_values or {}
+    passive_unknown = [p['symbol_fa'] for p in passive if passive_values.get(p['symbol_fa']) is None]
+    other = initial.get('locked_cash_rial', 0) + initial.get('rounding_rial', 0)
+    other += sum(v for v in passive_values.values() if v is not None)
+    equity = None if blocked or passive_unknown or ledger['equity_rial'] is None else ledger['equity_rial'] + other
+    ledger.update(equity_rial=equity, total_net_rial=None if equity is None else equity - profile.capital_rial,
+                  loss_limit_reached=None if equity is None else equity <= profile.equity_floor_rial)
     return dict(ledger=ledger, attribution=attribution, integrity=issues,
+                passive_unknown=passive_unknown, passive_values=passive_values,
+                locked_cash_rial=initial.get('locked_cash_rial', 0), opening_rounding_rial=initial.get('rounding_rial', 0),
                 equity_rial=equity, total_net_rial=None if equity is None else equity - profile.capital_rial,
                 return_pct=None if equity is None else (equity / profile.capital_rial - 1) * 100,
                 loss_limit_reached=None if equity is None else equity <= profile.equity_floor_rial,
