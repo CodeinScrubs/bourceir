@@ -104,6 +104,24 @@ def test_missing_market_marks_do_not_reuse_opening_prices_as_current(mirror, db)
     assert repo.report(key)['events'] == []
 
 
+def test_portfolio_value_uses_last_trade_not_official_close(mirror, db):
+    repo, _, _ = mirror
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET close_final_raw=close_raw*0.97')
+    key = create(mirror)
+    report = repo.report(key)
+    assert report['equity_rial'] == pytest.approx(21220)
+    assert report['total_net_rial'] == pytest.approx(0)
+    assert report['observations'][first_lot(report)]['mark_rial'] == 1000
+    assert report['observations'][first_lot(report)]['basis'] == 'archived_last_trade'
+    assert report['protocol']['valuation_policy'] == 'fresh_min_last_bid_else_archived_last_trade'
+    # نبود آخرین معامله با پایانی رسمی یا قیمت منبع پر نمی‌شود.
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET close_raw=NULL')
+    report = repo.report(key)
+    assert report['equity_rial'] is None
+
+
 def test_partial_sale_uses_opening_value_and_no_new_buy_fee(mirror):
     repo, _, _ = mirror
     key = create(mirror)
@@ -128,6 +146,20 @@ def test_opening_inventory_does_not_become_new_buy_thesis(mirror):
         repo.trade(key, idea_id=first_lot(report), side='buy', quantity=1, price_rial=1000, rationale='ورود')
     with pytest.raises(ValueError, match='سهام عادی'):
         repo.register_idea(key, symbol='آزمونح', label='آزمون', thesis='آزمون', invalidation='رد')
+
+
+@pytest.mark.parametrize('field,value', [('instrument_type_code', 309), ('is_active', 0), ('ins_code', '999')])
+def test_symbol_scope_and_identity_checked_again_at_execution(mirror, db, field, value):
+    repo, _, _ = mirror
+    key = create(mirror)
+    iid = first_lot(repo.report(key))
+    fresh = repo.register_idea(key, symbol='آزمونالف', label='فرضیه تازه', thesis='شاهد', invalidation='رد')
+    with db.conn:
+        db.conn.execute(f'UPDATE symbols SET {field}=? WHERE symbol_fa=?', (value, 'آزمونالف'))
+    for idea, side in ((iid, 'sell'), (fresh, 'buy')):
+        with pytest.raises(ValueError, match='سهام عادی فعال'):
+            repo.trade(key, idea_id=idea, side=side, quantity=1, price_rial=10, rationale='نامعتبر پس از تغییر')
+    assert repo.report(key)['events'] == []
 
 
 def test_copy_idempotency_and_source_kept_independent(mirror, db):

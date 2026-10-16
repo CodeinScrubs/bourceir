@@ -67,7 +67,8 @@ class PaperRepository:
                         trading_hours=dict(settings.TRADING_HOURS), trading_days=list(settings.TRADING_DAYS),
                         accepted_for_signals=False, profitability_proven=False, externally_timestamped=False,
                         cash_interest_rial=0, corporate_action_model='unresolved_blocks_performance',
-                        actual_account_linked=False, opening_kind='cash')
+                        actual_account_linked=False, opening_kind='cash',
+                        valuation_policy='fresh_min_last_bid_else_archived_last_trade')
         return protocol
 
     def _insert_protocol(self, protocol):
@@ -347,8 +348,8 @@ class PaperRepository:
                     pass
             if price is None and daily:
                 try:
-                    price = finite_number(daily['close_final_raw'])
-                    mark_date, basis = daily['date'], 'archived_official_close'
+                    price = finite_number(daily['close_raw'])
+                    mark_date, basis = daily['date'], 'archived_last_trade'
                 except ValueError:
                     pass
             own = [t for t in trades if t['idea_id'] == key]
@@ -362,7 +363,7 @@ class PaperRepository:
                 if price is None or mark_date < latest_trade_day:
                     price = None
                     problems.append('قیمت پس از معامله هنوز موجود نیست')
-                elif basis == 'archived_official_close' and not current_daily_row(mark_date, at, calendar=calendar):
+                elif basis == 'archived_last_trade' and not current_daily_row(mark_date, at, calendar=calendar):
                     problems.append('قیمت ارزش‌گذاری روزانه کهنه است')
                 if price is not None:
                     marks[key] = price
@@ -437,6 +438,11 @@ class PaperRepository:
             if idea_id not in ideas:
                 raise ValueError('تحلیل به این پورتفو مربوط نیست')
             idea = ideas[idea_id]
+            current_symbol = self.db.conn.execute(
+                'SELECT instrument_type_code,is_active,ins_code FROM symbols WHERE id=?', (idea['symbol_id'],)).fetchone()
+            if (not current_symbol or current_symbol['instrument_type_code'] not in (300, 303) or
+                not current_symbol['is_active'] or str(current_symbol['ins_code']) != str(idea['ins_code'])):
+                raise ValueError('معامله مجازی فقط برای سهام عادی فعال با شناسه ثابت مجاز است؛ اطلاعات نماد نیازمند بازبینی است')
             if side == 'buy' and idea.get('origin') == 'broker_opening':
                 raise ValueError('موجودی آغازین تحلیل خرید تازه نیست؛ برای خرید بیشتر تحلیل جدید ثبت کن')
             at = self._clock(protocol, events)
