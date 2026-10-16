@@ -153,19 +153,22 @@ def rank_caps(instruments, prices, *, low=10., high=40.):
 
 def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
     """کندل فقط در دو حالت ترتیب را اثبات می‌کند؛ سبز بودن به‌تنهایی کافی نیست."""
-    values = {key: decimal(row.get(key)) for key in ('open_raw', 'low_raw', 'high_raw', 'close_raw', 'ref_price_raw', 'volume')}
+    values = {key: decimal(row.get(key)) for key in ('low_raw', 'high_raw', 'ref_price_raw', 'volume')}
     result = dict(row, event_confirmed=None, event_possible=None, evidence='invalid_daily', tick_evidence=None)
     if (row.get('source') != 'tsetmc' or row.get('price_unit') != 'Rial' or
         any(v is None or v <= 0 for v in values.values())):
         return result
-    op, low, high, last, ref, _ = values.values()
-    if not low <= op <= high or not low <= last <= high:
+    low, high, ref, _ = values.values()
+    op,last=decimal(row.get('open_raw')),decimal(row.get('close_raw'))
+    result['unavailable_price_fields']=[k for k,v in [('open_raw',op),('close_raw',last)] if v is None]
+    if low>high or any(v is not None and (v<=0 or not low<=v<=high) for v in (op,last)):
         return result
     dip, rally = ref*(1+decimal(dip_pct)/100), ref*(1+decimal(rally_pct)/100)
     candidate = low <= dip and high >= rally
-    confirmed = candidate and (op <= dip or last >= rally)
-    reason = ('not_touched' if not candidate else 'open_before_high' if op <= dip else
-              'low_before_last' if last >= rally else 'order_unknown')
+    open_proof,last_proof=op is not None and op<=dip,last is not None and last>=rally
+    confirmed = candidate and (open_proof or last_proof)
+    reason = ('not_touched' if not candidate else 'open_before_high' if open_proof else
+              'low_before_last' if last_proof else 'order_unknown')
     result.update(event_confirmed=True if confirmed else None if candidate else False,
                   event_possible=bool(candidate), evidence=reason,
                   dip_level_rial=str(dip), rally_level_rial=str(rally))
@@ -223,7 +226,8 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
         count, volume = decimal(daily.get('trade_count')), decimal(daily.get('volume'))
         total_value = sum(r['price']*r['volume'] for r in active)
         checks = dict(count=count == len(active), volume=volume == sum(r['volume'] for r in active),
-            open=prices[0] == decimal(daily['open_raw']), last=prices[-1] == decimal(daily['close_raw']),
+            open=prices[0] == decimal(daily['open_raw']) if decimal(daily['open_raw']) is not None else None,
+            last=prices[-1] == decimal(daily['close_raw']) if decimal(daily['close_raw']) is not None else None,
             low=min(prices) == decimal(daily['low_raw']), high=max(prices) == decimal(daily['high_raw']),
             value=decimal(daily.get('value')) == total_value)
         result.update(reconciliation=checks, complete=all(checks.values()), active_rows=len(active),

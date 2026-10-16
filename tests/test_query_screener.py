@@ -56,10 +56,31 @@ def test_noninteger_percentile_boundaries_select_by_position_from_smallest():
 
 
 @pytest.mark.parametrize('changes',[{'ref_price_raw':None},{'volume':0},{'high_raw':99},{'close_raw':200},
-    {'source':'unverified'},{'price_unit':'Toman'},{'open_raw':float('nan')},{'low_raw':True}])
+    {'source':'unverified'},{'price_unit':'Toman'},{'low_raw':True}])
 def test_invalid_or_missing_daily_is_unknown(changes):
     row=daily_evidence(bar(**changes))
     assert row['event_confirmed'] is None and row['event_possible'] is None
+
+
+def test_missing_endpoint_price_does_not_invalidate_an_independent_proof():
+    missing_open=daily_evidence(bar(open_raw=None,close_raw=102))
+    assert missing_open['event_confirmed'] is True and missing_open['unavailable_price_fields']==['open_raw']
+    assert daily_evidence(bar(close_raw=None,open_raw=98))['event_confirmed'] is True
+    assert daily_evidence(bar(open_raw=None,close_raw=None,low_raw=99,high_raw=101))['event_confirmed'] is False
+    assert daily_evidence(bar(open_raw=float('nan')))['event_confirmed'] is None
+    assert daily_evidence(bar(open_raw=float('nan')))['event_possible'] is True
+    tick=trade_evidence(trades(),bar(open_raw=None))
+    assert tick['reconciliation']['open'] is None and not tick['complete']
+
+
+def test_partial_candle_proofs_are_sound_for_short_paths():
+    from itertools import product
+    for path in product((98,100,102),repeat=5):
+        actual=any(a<=98 and b>=102 for i,a in enumerate(path) for b in path[i+1:])
+        for missing in ('open_raw','close_raw'):
+            scored=daily_evidence(bar(open_raw=path[0],close_raw=path[-1],low_raw=min(path),high_raw=max(path))|{missing:None})
+            if scored['event_confirmed'] is True:assert actual
+            if scored['event_confirmed'] is False:assert not actual
 
 
 def test_complete_tick_order_and_identical_duplicate_are_reconciled():
