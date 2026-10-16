@@ -455,6 +455,78 @@ def cmd_backup(args) -> int:
     return 0
 
 
+def cmd_query(args) -> int:
+    import json
+    from datetime import timedelta
+
+    from core.timeutils import now_tehran
+    from data_collector.tsetmc import TsetmcProvider
+    from database.db import DatabaseManager
+    from ops.query_screener import evaluate_query, read_query, start_query
+
+    if args.resume and (args.spec or args.start or args.end or args.refresh_quotes):
+        raise ValueError('ادامه فقط همان قرارداد محفوظ را می‌خواند؛ برای تغییر دامنه پرسش تازه بساز')
+    if args.max_trade_days and not args.verify_trades:
+        raise ValueError('دریافت ریزمعاملات به --verify-trades نیاز دارد')
+    provider = TsetmcProvider() if args.verify_trades or args.refresh_quotes else None
+    if args.resume:
+        folder = Path(args.resume)
+    else:
+        today = now_tehran().date()
+        spec = json.loads(Path(args.spec).read_text(encoding='utf-8')) if args.spec else dict(
+            start=args.start or (today-timedelta(days=365)).isoformat(), end=args.end or (today-timedelta(days=1)).isoformat(),
+            cap_low=args.cap_low, cap_high=args.cap_high, dip_pct=args.dip, rally_pct=args.rally, kind=args.kind)
+        with DatabaseManager() as db:
+            folder = start_query(db, spec, quote_provider=provider if args.refresh_quotes else None)
+        print(f'قرارداد و ورودی محفوظ: {folder}', flush=True)
+    if args.verify_trades:
+        result, revision = evaluate_query(folder, provider=provider, max_trade_days=args.max_trade_days,
+            refresh_archive=args.refresh_archive, progress=lambda r: print(json.dumps(r,ensure_ascii=False),flush=True))
+    else:
+        result, revision = read_query(folder)
+    print(f"جامعه {result['caps']['universe_total']}؛ ارزش نامعلوم {result['caps']['caps_unknown']}؛ روز کاندید {result['candidate_days']}")
+    print(f'گزارش: {revision / "report.html"}')
+    print('شمار تأییدشده کران پایین روزهای موجود است؛ رتبه قطعی سالانه و سودآوری تأیید نشده است.')
+    if result.get('collection_stopped_reason'):
+        print('دریافت پس از سه پاسخ ناموجود متوالی متوقف شد؛ گزارش ناقص و نسخه‌های قبلی محفوظ‌اند.')
+        return 2
+    return 0
+
+
+def cmd_archive_site(args) -> int:
+    import json
+
+    from data_collector.public_site import PublicSiteArchive
+
+    output = Path(args.output).resolve()
+    if not output.is_relative_to((settings.DATA_DIR/'private').resolve()):
+        raise ValueError('آرشیو عمومی نیز در data/private/ نگه داشته می‌شود')
+    crawler = PublicSiteArchive(args.url, output, interval=args.interval, max_pages=args.max_pages)
+    result = crawler.crawl(progress=lambda s: print(json.dumps({k:v for k,v in s.items()
+        if k not in ('sitemap_unresolved','skipped_by_robots')},ensure_ascii=False),flush=True))
+    print(json.dumps(result,ensure_ascii=False,indent=2))
+    return 0 if not result['stopped'] and not result['sitemap_unresolved'] else 2
+
+
+def cmd_catalog_sources(args) -> int:
+    from ops.source_catalog import catalog_claim_files, catalog_site
+    if not args.site and not args.files:
+        raise ValueError('آرشیو سایت یا فایل متن برای فهرست‌سازی لازم است')
+    if args.site:
+        root=Path(args.site).resolve()
+        if not root.is_relative_to((settings.DATA_DIR/'private').resolve()):
+            raise ValueError('آرشیو سایت باید در پوشه خصوصی باشد')
+        result=catalog_site(root)
+        print(f"فهرست سایت: {len(result['pages'])} نشانی موفق؛ فرمول خصوصی و سودآوری تأیید نشده است.")
+    if args.files:
+        root=Path(args.output).resolve()
+        if not root.is_relative_to((settings.DATA_DIR/'private').resolve()):
+            raise ValueError('فهرست ضمیمه باید در پوشه خصوصی باشد')
+        result=catalog_claim_files(args.files,root)
+        print(f"فهرست ثابت {result['source_count']} فایل و {result['indexed_lines']} خط ساخته شد؛ کد اجرا نشده است.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BRS — سامانه نوسان‌گیری هوشمند بورس و فرابورس")
     parser.add_argument("-v", "--verbose", action="store_true", help="نمایش جزئیات بیشتر")
@@ -529,6 +601,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--observations',default=None,help='مشاهده عمومی محفوظ برای ارزش بازار فعلی؛ اختیاری')
     p.add_argument('--news',default=None,help='فهرست اطلاعیه عمومی با زمان انتشار؛ پیش‌فرض آرشیو محلی')
     p.set_defaults(func=cmd_stock_study)
+
+    p = sub.add_parser('query',help='پرسش توصیفی ارزش شرکت و ترتیب منفی به مثبت؛ بدون سیگنال')
+    p.add_argument('--spec',default=None,help='قرارداد JSON با شرط‌های مجاز؛ کد اجرا نمی‌شود')
+    p.add_argument('--start',default=None,help='روز میلادی؛ پیش‌فرض ۳۶۵ روز پیش')
+    p.add_argument('--end',default=None,help='روز میلادی؛ پیش‌فرض دیروز')
+    p.add_argument('--cap-low',type=float,default=10.,help='صدک از سمت کوچک‌ترین‌ها')
+    p.add_argument('--cap-high',type=float,default=40.)
+    p.add_argument('--dip',type=float,default=-2.)
+    p.add_argument('--rally',type=float,default=2.)
+    p.add_argument('--kind',choices=['market_caps','dip_rally'],default='dip_rally')
+    p.add_argument('--refresh-quotes',action='store_true',help='دریافت مظنه عمومی دارای تاریخ؛ ورودی مستقل محفوظ می‌شود')
+    p.add_argument('--resume',default=None,help='پوشه QUERY برای ادامه همان قرارداد بدون تغییر ورودی')
+    p.add_argument('--verify-trades',action='store_true',help='برداشت فقط‌خواندنی آرشیو ریزمعاملات عمومی')
+    p.add_argument('--max-trade-days',type=int,default=0,help='سقف درخواست روز-نماد در این اجرا؛ صفر فقط آرشیو موجود')
+    p.add_argument('--refresh-archive',action='store_true',help='نسخه مستقل تازه از ریزمعاملات؛ نسخه قبلی حذف نمی‌شود')
+    p.set_defaults(func=cmd_query)
+
+    p = sub.add_parser('archive-site',help='آرشیو قابل ادامه صفحات عمومی sitemap و پیوندها؛ بدون اجرای کد سایت')
+    p.add_argument('--url',default='https://algosaham.ir/')
+    p.add_argument('--output',default=str(settings.DATA_DIR/'private'/'algosaham-public'))
+    p.add_argument('--interval',type=float,default=1.,help='حداقل فاصله درخواست‌ها به ثانیه')
+    p.add_argument('--max-pages',type=int,default=4000)
+    p.set_defaults(func=cmd_archive_site)
+
+    p = sub.add_parser('catalog-sources',help='فهرست‌سازی آفلاین آرشیو سایت و ادعاهای متنی؛ بدون اجرای کد ضمیمه')
+    p.add_argument('--site',default=None,help='پوشه آرشیو archive-site')
+    p.add_argument('--files',nargs='*',default=[])
+    p.add_argument('--output',default=str(settings.DATA_DIR/'private'/'source-catalog'))
+    p.set_defaults(func=cmd_catalog_sources)
 
     p = sub.add_parser("live", help="پایش زنده بازار")
     p.add_argument("--symbols", default="", help="فقط این نمادها (پیش‌فرض: کل سهام)")
