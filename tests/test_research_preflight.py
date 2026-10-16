@@ -84,7 +84,7 @@ def test_environment_error_blocks_cli_even_with_coherent_prices(db, tmp_path, mo
 
     monkeypatch.setattr('ops.research_preflight.feature_environment', mismatch)
     assert main() == 2
-    report = json.loads(output.read_text())
+    report = json.loads(output.read_text(encoding='utf-8'))
     assert report['no_raw_price_errors'] and not report['input_contract_passed']
     assert report['status'] == 'blocked' and 'environment_mismatch' in report['blockers']
 

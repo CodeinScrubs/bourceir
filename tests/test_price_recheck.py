@@ -9,6 +9,7 @@ from brs import build_parser
 from config import settings
 from core.price_quality import price_quality
 from ops.price_recheck import compare_row, run_recheck
+from ops.report_files import write_private_report
 from ops.research_preflight import research_preflight
 from tests.test_research_preflight import store
 
@@ -177,3 +178,103 @@ def test_quality_report_shows_missing_price_on_invalid_date_without_crashing(db,
     assert not app.exception
     assert any('قرارداد داده عبور نکرده' in message.value for message in app.error)
     assert not any('قابل نمایش نیست' in message.value for message in app.warning)
+
+
+def archived_report(db, tmp_path, monkeypatch):
+    prices, sid = damage(db)
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    path = tmp_path / 'private' / 'preflight.json'
+    report = research_preflight(db)
+    write_private_report(path, report)
+    return path, report, prices, sid
+
+
+def test_archived_frame_checks_selected_rows_without_full_scan_or_fresh_global_claim(db, tmp_path, monkeypatch):
+    path, report, _, sid = archived_report(db, tmp_path, monkeypatch)
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET open_raw=NULL WHERE symbol_id=? AND date=?',
+                        (sid, report['records'][0]['date_max']))
+    monkeypatch.setattr('ops.price_recheck.research_preflight', lambda *_a, **_k: pytest.fail('no global scan'))
+    queries = []
+    db.conn.set_trace_callback(queries.append)
+    result, folder = run_recheck(db, from_preflight=path)
+    db.conn.set_trace_callback(None)
+    assert result['preflight_basis'] == 'archived_sample_only'
+    assert not result['fresh_global_scan_performed'] and not result['current_global_quality_verified']
+    plan = json.loads((folder / 'plan.json').read_text(encoding='utf-8'))
+    assert plan['preflight'] == report and plan['selected'] == report['price_issues']
+    daily_queries = [q for q in queries if 'FROM daily_prices' in q]
+    assert len(daily_queries) == 2 and all('date >=' in q and 'date <=' in q for q in daily_queries)
+    assert not db.conn.in_transaction and result['requests_made'] == 0
+
+
+@pytest.mark.parametrize('mutation', ['price', 'ins_code', 'type', 'name', 'delete'])
+def test_changed_archived_selection_blocks_before_network_and_artifacts(db, tmp_path, monkeypatch, mutation):
+    path, report, _, sid = archived_report(db, tmp_path, monkeypatch)
+    with db.conn:
+        if mutation == 'price':
+            db.conn.execute('UPDATE daily_prices SET open_raw=100 WHERE symbol_id=?', (sid,))
+        elif mutation == 'delete':
+            db.conn.execute('DELETE FROM daily_prices WHERE symbol_id=?', (sid,))
+        else:
+            column, value = {'ins_code': ('ins_code', 'different'), 'type': ('instrument_type_code', 305),
+                             'name': ('symbol_fa', 'دیگر')}[mutation]
+            db.conn.execute(f'UPDATE symbols SET {column}=? WHERE id=?', (value, sid))
+    class Provider:
+        name = 'tsetmc'
+        def get_symbol_history(self, _):
+            pytest.fail('changed frame must block before fetch')
+    with pytest.raises(ValueError, match='تغییر'):
+        run_recheck(db, from_preflight=path, provider=Provider())
+    assert not (tmp_path / 'private' / 'price-rechecks').exists()
+
+
+@pytest.mark.parametrize('key,value', [('version', 'old'), ('diagnostic_code_sha256', 'old'),
+                                    ('feature_logic_sha256', 'old'), ('database_schema', -1),
+                                    ('end_exclusive', '2026-01-01'), ('development_start', '2020-01-01')])
+def test_archived_contract_drift_is_rejected(db, tmp_path, monkeypatch, key, value):
+    path, report, _, _ = archived_report(db, tmp_path, monkeypatch)
+    report[key] = value
+    write_private_report(path, report)
+    with pytest.raises(ValueError, match='سازگار'):
+        run_recheck(db, from_preflight=path)
+
+
+def test_archived_selection_is_registered_before_provider_and_completion_detects_mutation(db, tmp_path, monkeypatch):
+    path, _, prices, sid = archived_report(db, tmp_path, monkeypatch)
+    class Provider:
+        name = 'tsetmc'
+        def get_symbol_history(self, _):
+            folder = next((tmp_path / 'private' / 'price-rechecks').iterdir())
+            assert (folder / 'plan.json').exists() and not db.conn.in_transaction
+            with db.conn:
+                db.conn.execute('UPDATE daily_prices SET close_raw=123 WHERE symbol_id=?', (sid,))
+            return prices
+    result, _ = run_recheck(db, from_preflight=path, provider=Provider())
+    assert result['observations'][0]['status'] == 'source_changed_consistent'
+    assert not result['observations'][0]['local_row_unchanged_at_completion']
+    assert result['source_consistent_candidates'] == 0
+
+
+def test_archived_cli_passes_explicit_frame(db, tmp_path, monkeypatch):
+    path, _, _, _ = archived_report(db, tmp_path, monkeypatch)
+    args = build_parser().parse_args(['research-recheck', '--from-preflight', str(path)])
+    assert args.from_preflight == str(path) and args.fetch is False
+
+
+@pytest.mark.parametrize('mutation', ['holdout', 'wrong_reason', 'boolean_price', 'duplicate'])
+def test_archived_invalid_sampling_frame_never_fetches(db, tmp_path, monkeypatch, mutation):
+    path, report, _, _ = archived_report(db, tmp_path, monkeypatch)
+    issue = report['price_issues'][0]
+    if mutation == 'holdout':
+        issue['date'] = settings.RESEARCH_CONFIG['holdout_start']
+    elif mutation == 'wrong_reason':
+        issue['reasons'] = []
+    elif mutation == 'boolean_price':
+        issue['raw']['volume'] = True
+    else:
+        report['price_issues'].append(issue.copy())
+    write_private_report(path, report)
+    with pytest.raises(ValueError):
+        run_recheck(db, from_preflight=path)
+    assert not (tmp_path / 'private' / 'price-rechecks').exists()

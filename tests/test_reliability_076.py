@@ -189,9 +189,10 @@ def test_environment_rejects_wrong_python_and_launcher_wires_guard_before_stream
     lock.write_text('numpy==1.0\n')
     result = inspect_environment(lock, marker, installed_version=versions, python_minor=(3, 12))
     assert not result['dependencies_match']
-    launch = (settings.BASE_DIR/'START.bat').read_text()
-    setup = (settings.BASE_DIR/'SETUP.bat').read_text()
+    launch = (settings.BASE_DIR/'START.bat').read_text(encoding='utf-8')
+    setup = (settings.BASE_DIR/'SETUP.bat').read_text(encoding='utf-8')
     assert launch.index('-m ops.environment --check') < launch.index('-m streamlit run')
+    assert launch.index('setlocal') < launch.index('set "PYTHONUTF8=1"') < launch.index('-m ops.environment --check')
     assert '-m ops.environment --record' in setup
 
 

@@ -271,6 +271,8 @@ def cmd_research_recheck(args) -> int:
     from ops.price_recheck import main
 
     argv = ['--max-rows', str(args.max_rows)]
+    if args.from_preflight:
+        argv += ['--from-preflight', args.from_preflight]
     if args.before:
         argv += ['--before', args.before]
     if args.fetch:
@@ -634,6 +636,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('research-recheck', help='برنامه بازبینی قیمت‌های ناسازگار و مقایسه فقط‌خواندنی با منبع')
     p.add_argument('--before', default=None, help='پایان انحصاری توسعه؛ حداکثر مرز دوره مهر و موم')
     p.add_argument('--max-rows', type=int, default=5, help='حداکثر پنجاه مورد؛ پیش‌فرض پنج مورد')
+    p.add_argument('--from-preflight', default=None, help='نمونه از گزارش خصوصی محفوظ؛ سلامت فعلی کل دیتابیس را بررسی نمی‌کند')
     p.add_argument('--fetch', action='store_true', help='دریافت واقعی؛ بدون این گزینه فقط برنامه محلی ثبت می‌شود')
     p.set_defaults(func=cmd_research_recheck)
 

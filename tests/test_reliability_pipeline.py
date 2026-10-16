@@ -65,7 +65,7 @@ def test_fixture_history_to_features_paper_partial_exit_export_and_reopen(paper,
     assert ledger['realized_net_rial'] == pytest.approx(expected_cash - 100000.)
     assert not exported['accepted_for_signals'] and not exported['report']['profitability_proven']
     target = write_private_report(tmp_path / 'private' / 'paper.json', exported, forbidden_paths=[db.db_path])
-    assert len(json.loads(target.read_text())['events']) == 3
+    assert len(json.loads(target.read_text(encoding='utf-8'))['events']) == 3
 
     with DatabaseManager(db_path=db.db_path, read_only=True) as reopened:
         restored = PaperRepository(reopened).export(key)

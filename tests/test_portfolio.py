@@ -251,8 +251,8 @@ def test_registered_walkforward_end_to_end_stays_development_only(db, pinned_bas
     assert observed_candidates > 0
     for name, digest in result['artifacts_sha256'].items():
         assert _sha256(folder/name) == digest
-    assert json.loads((root/'research'/'latest-portfolio.json').read_text())['experiment_id'] == result['experiment_id']
-    assert json.loads((root/'research'/f'latest-portfolio-{selector}.json').read_text())['experiment_id'] == result['experiment_id']
+    assert json.loads((root/'research'/'latest-portfolio.json').read_text(encoding='utf-8'))['experiment_id'] == result['experiment_id']
+    assert json.loads((root/'research'/f'latest-portfolio-{selector}.json').read_text(encoding='utf-8'))['experiment_id'] == result['experiment_id']
 
 
 def test_tampered_or_holdout_source_is_rejected(pinned_baseline):

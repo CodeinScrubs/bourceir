@@ -43,7 +43,7 @@ def test_missing_database_is_not_created_and_report_is_saved_privately(tmp_path,
     monkeypatch.setattr(settings, 'DB_PATH', tmp_path / 'missing.db')
     output = tmp_path / 'private' / 'readiness.json'
     assert main(['--json', str(output)]) == 2
-    report = json.loads(output.read_text())
+    report = json.loads(output.read_text(encoding='utf-8'))
     assert report['status'] == 'blocked' and report['error_type'] == 'OperationalError'
     assert not settings.DB_PATH.exists() and not report['accepted_for_signals']
 
@@ -56,7 +56,7 @@ def test_cli_adapter_exposes_the_same_offline_contract(tmp_path, monkeypatch):
     output = tmp_path / 'private' / 'readiness.json'
     args = build_parser().parse_args(['trader-readiness', '--json', str(output)])
     assert args.func(args) == 2
-    assert json.loads(output.read_text())['network_checked'] is False
+    assert json.loads(output.read_text(encoding='utf-8'))['network_checked'] is False
 
 
 def test_read_only_doctor_does_not_initialize_missing_database(tmp_path, monkeypatch):

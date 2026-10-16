@@ -100,6 +100,30 @@ def test_curve_recomputed_stress_failure_not_promoted_to_profitability(db, evide
     assert result['candidates']['dip']['comparisons']['stressed_selected_past_baseline']['mean_known_difference'] == 0
     assert 'میانگین حساب‌های مستقل' in format_review(result)
     assert not result['verified']['external_authenticity_verified']
+    assert not result['fractional_valuation_corrected']
+
+
+@pytest.mark.parametrize('omit_count', [False, True])
+def test_v4_review_counts_fraction_only_stale_days_and_preserves_v3_reader(db, evidence, omit_count):
+    p = evidence['payload']
+    p['protocol']['portfolio_version'] = 'portfolio-v4'
+    for index, result in enumerate(p['results']):
+        for name, record in result['modes'].items():
+            record['assumptions']['version'] = 'portfolio-v4'
+            record['metrics']['stale_mark_days'] = 1
+            path = evidence['folder'] / f'fold-{index:02d}-{name}-equity.parquet'
+            curve = pd.read_parquet(path)
+            if not omit_count:
+                curve['stale_fractional_exposures'] = [0, 1]
+            curve.to_parquet(path, index=False)
+    update_report(db, evidence)
+    if omit_count:
+        with pytest.raises(ValueError, match='کسر سهم'):
+            review_research(db, EXPERIMENT, root=evidence['root'])
+    else:
+        result = review_research(db, EXPERIMENT, root=evidence['root'])
+        assert result['fractional_valuation_corrected'] and result['portfolio_version'] == 'portfolio-v4'
+        assert 'stale_marks_present' in result['candidates']['dip']['blockers']
 
 
 def test_positive_everywhere_still_requires_independent_evidence(db, evidence):
