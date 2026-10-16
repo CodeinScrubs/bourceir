@@ -268,6 +268,29 @@ def cmd_research_flow(args) -> int:
     return 0
 
 
+def cmd_research_preflight(args) -> int:
+    from ops.research_preflight import main as preflight
+
+    argv = ['--json', args.json]
+    if args.before is not None:
+        argv += ['--before', args.before]
+    return preflight(argv)
+
+
+def cmd_research_uncertainty(args) -> int:
+    from research.uncertainty import main as uncertainty
+
+    argv = ['--strategy', args.strategy, '--benchmark', args.benchmark,
+            '--initial-capital-rial', str(args.initial_capital_rial),
+            '--blocks', *map(str, args.blocks), '--replications', str(args.replications),
+            '--seed', str(args.seed), '--output', args.output]
+    if args.calendar is not None:
+        argv += ['--calendar', args.calendar]
+    if args.trials_attempted is not None:
+        argv += ['--trials-attempted', str(args.trials_attempted)]
+    return uncertainty(argv)
+
+
 def cmd_intraday_audit(args) -> int:
     import json
 
@@ -582,6 +605,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--source', default=None, help='شناسه پژوهش پایه محفوظ و سازگار با داده خام')
     p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی به ریال؛ پیش‌فرض تنظیمات بکتست')
     p.set_defaults(func=cmd_research_flow)
+
+    p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
+    p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
+    p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'research-preflight.json'))
+    p.set_defaults(func=cmd_research_preflight)
+
+    p = sub.add_parser('research-uncertainty', help='عدم قطعیت اختلاف بازده روزانه دو منحنی توسعه؛ تأیید سودآوری نیست')
+    p.add_argument('--strategy', required=True, help='Parquet با date و equity_rial؛ فقط دوره توسعه')
+    p.add_argument('--benchmark', required=True, help='منحنی مقایسه با همان تاریخ‌ها و سرمایه آغازین')
+    p.add_argument('--initial-capital-rial', type=float, required=True)
+    p.add_argument('--blocks', nargs='+', type=int, default=[5, 10, 20])
+    p.add_argument('--replications', type=int, default=5000)
+    p.add_argument('--seed', type=int, default=41)
+    p.add_argument('--trials-attempted', type=int, default=None, help='کل روش‌های آزموده‌شده؛ پیش‌فرض نامعلوم')
+    p.add_argument('--calendar', default=None, help='آرایه JSON جلسات مورد انتظار همان برش توسعه؛ اختیاری')
+    p.add_argument('--output', default=str(settings.DATA_DIR / 'private' / 'uncertainty.json'))
+    p.set_defaults(func=cmd_research_uncertainty)
 
     p = sub.add_parser('research-review', help='بازبینی شواهد پژوهش محفوظ؛ بدون صدور سیگنال یا بازکردن holdout')
     p.add_argument('--experiment', required=True, help='شناسه صریح آزمایش PORTFOLIO یا FLOW')

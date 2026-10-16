@@ -27,7 +27,7 @@ from core.timeutils import TEHRAN_TZ, is_trading_session, now_tehran
 from database.broker import BrokerRepository
 
 CODE_FILES = ('core/paper.py', 'core/journal.py', 'core/risk.py', 'core/screening.py',
-              'core/market_rules.py', 'core/timeutils.py', 'database/paper.py',
+              'core/market_rules.py', 'core/client_quality.py', 'core/timeutils.py', 'database/paper.py',
               'core/text.py', 'config/settings.py', 'database/broker.py',
               'database/migrations/013_paper_portfolios.sql', 'database/migrations/014_paper_opening_holdings.sql',
               'requirements.lock.txt')
@@ -395,6 +395,13 @@ class PaperRepository:
         if not state['runtime_matches']:
             state['equity_rial'], state['total_net_rial'], state['return_pct'] = None, None, None
             state['loss_limit_reached'] = None
+            # نقد/کارمزد ثبت‌شده معلوم می‌مانند؛ نتیجه وابسته به نسخه در تمام مسیرهای export نامعلوم است.
+            for field in ('equity_rial', 'total_net_rial', 'loss_limit_reached', 'realized_net_rial'):
+                state['ledger'][field] = None
+            for position in state['ledger']['positions'].values():
+                position['liquidation_value_rial'] = position['unrealized_net_rial'] = None
+            for item in state['attribution']:
+                item['realized_net_rial'] = item['unrealized_net_rial'] = None
         return state
 
     @staticmethod

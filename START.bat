@@ -11,6 +11,16 @@ if not exist "venv\Scripts\python.exe" (
     if not exist "venv\Scripts\python.exe" exit /b 1
 )
 
+rem پیش از اجرا، نسخه بسته‌ها و رسید فایل قفل بررسی شوند.
+venv\Scripts\python.exe -m ops.environment --check > nul 2> nul
+if errorlevel 1 (
+    echo [BRS] محیط تغییر کرده؛ همگام‌سازی وابستگی‌های قفل‌شده با SETUP ...
+    call "%~dp0SETUP.bat" --ci
+    if errorlevel 1 exit /b 1
+    venv\Scripts\python.exe -m ops.environment --check
+    if errorlevel 1 exit /b 1
+)
+
 rem اگر داشبورد از قبل در حال اجراست، فقط مرورگر باز شود
 netstat -ano | findstr /R /C:":8501 .*LISTENING" > nul
 if %errorlevel%==0 (

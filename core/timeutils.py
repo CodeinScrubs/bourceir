@@ -33,6 +33,16 @@ def now_tehran_iso() -> str:
     return now_tehran().isoformat()
 
 
+def is_canonical_iso_date(value) -> bool:
+    """Accept only a real Gregorian date written exactly as YYYY-MM-DD."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
 def _parse_hhmm(value: str) -> dtime:
     hour, minute = (int(p) for p in value.split(":")[:2])
     return dtime(hour=hour, minute=minute)

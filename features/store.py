@@ -26,6 +26,7 @@ import pandas as pd
 
 from config import settings
 from core.client_quality import validated_client_data
+from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
@@ -47,14 +48,34 @@ def store_dir(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -
 def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None,
                         progress: Optional[ProgressFn] = None) -> pd.DataFrame:
     """محاسبه فیچرهای روزانه همه نمادهای داخل دامنه + فیچرهای بازار و نسبی."""
-    targets = symbols if symbols is not None else [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
+    if isinstance(symbols, str):
+        raise ValueError('نمادها باید فهرست باشند، نه یک رشته')
+    targets = list(symbols) if symbols is not None else [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
     frames = []
-    for i, symbol in enumerate(targets, start=1):
+    selection = dict(requested_symbols=list(targets), included_symbols=[], unavailable_symbols=[])
+    seen = set()
+    for i, requested in enumerate(targets, start=1):
+        symbol = normalize_symbol(requested)
         if progress:
             progress(i, len(targets), symbol)
-        prices = db.get_daily_prices_df(symbol).sort_values('date').reset_index(drop=True)
-        if prices.empty:
+        if not isinstance(requested, str) or not symbol:
+            raise ValueError('نام هر نماد باید متن غیرخالی باشد')
+        if symbol in seen:
+            selection['unavailable_symbols'].append(dict(symbol=symbol, reason='duplicate_normalized_request'))
             continue
+        seen.add(symbol)
+        metadata = db.get_symbol(symbol)
+        if metadata and (metadata['instrument_type_code'] not in (300, 303) or symbol[-1:].isdigit()):
+            selection['unavailable_symbols'].append(dict(symbol=symbol, reason='outside_ordinary_equity_scope'))
+            logger.warning('نماد %s خارج از دامنه سهام عادی است؛ وارد انبار فیچر نشد.', symbol)
+            continue
+        prices = db.get_daily_prices_df(symbol)
+        if prices.empty:
+            selection['unavailable_symbols'].append(dict(symbol=symbol, reason='unknown_or_no_daily_prices'))
+            logger.warning('نماد %s: تاریخچه روزانه موجود نیست؛ در پوشش نامعلوم ثبت شد.', symbol)
+            continue
+        prices = prices.sort_values('date').reset_index(drop=True)
+        selection['included_symbols'].append(symbol)
         client_types = db.get_client_types_df(symbol)
         feats = compute_daily_features(prices, client_types)
         feats.insert(1, "symbol", symbol)
@@ -67,13 +88,17 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
             feats["real_net_value"] = float("nan")
         frames.append(feats)
     if not frames:
-        return pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES)
+        empty = pd.DataFrame(columns=["date", "symbol"] + ALL_FEATURES)
+        empty.attrs['selection'] = selection
+        return empty
 
     panel = pd.concat(frames, ignore_index=True)
     panel = add_relative_features(panel)
     panel = panel.merge(compute_market_features(panel), on="date", how="left")
     panel = panel.drop(columns=["value", "real_net_value"])
-    return panel.sort_values(["date", "symbol"]).reset_index(drop=True)[["date", "symbol"] + ALL_FEATURES]
+    panel = panel.sort_values(["date", "symbol"]).reset_index(drop=True)[["date", "symbol"] + ALL_FEATURES]
+    panel.attrs['selection'] = selection
+    return panel
 
 
 def _sha256(path: Path) -> str:
@@ -118,7 +143,7 @@ def _provenance(db: DatabaseManager, parquet: Path) -> dict:
         "parquet_sha256": _sha256(parquet),
         # محدودیت‌های شناخته‌شده که هر پژوهشی روی این داده باید در نظر بگیرد
         "known_limitations": [
-            "universe = current active TSE/IFB equities (survivorship bias: delisted symbols missing)",
+            "universe = currently known ordinary TSE/IFB registry including inactive symbols; historical membership is unverified",
             "history reconstructed from TSETMC's current archive, not as originally published in real time",
         ],
     }
@@ -135,7 +160,8 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         environment = feature_environment()
         logic_sha = feature_logic_fingerprint()
         panel = build_feature_panel(db, symbols=symbols, progress=progress)
-        raw_inputs = raw_input_snapshot(db, symbols=symbols)
+        # انبار سراسری حتی داده مشتریِ نماد بدون قیمت را در منشأ نگه می‌دارد؛ انتخاب صریح نام‌های یکسان‌شده دارد.
+        raw_inputs = raw_input_snapshot(db, symbols=None if symbols is None else panel.attrs['selection']['included_symbols'])
         schema_version = db.schema_version()
         if feature_logic_fingerprint() != logic_sha or feature_environment() != environment:
             raise RuntimeError('منطق یا وابستگی فیچر هنگام ساخت تغییر کرد؛ انبار منتشر نشد')
@@ -161,6 +187,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "date_max": str(panel["date"].max()) if len(panel) else None,
         "features": ALL_FEATURES,
         "coverage": {f: round(float(panel[f].notna().mean()), 4) for f in ALL_FEATURES} if len(panel) else {},
+        "symbol_selection": panel.attrs['selection'],
         "provenance": _provenance(db, tmp_parquet),
     }
     manifest['provenance'].update(raw_inputs=raw_inputs, feature_logic_sha256=logic_sha,

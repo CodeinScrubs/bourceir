@@ -44,13 +44,18 @@ def synthetic_history(seed: int = 7, corporate_action: bool = True):
         prev_close = close
     prices = pd.DataFrame(rows)
     prices.loc[10, "close_raw"] = np.nan    # فیلد خالی‌شده توسط اعتبارسنج
+    # برگه سهم کسری نیست؛ دو طرف هر روز دقیقاً با کل حجم و ارزش جمع می‌شوند.
+    buy_i_volume = np.floor(prices['volume'] * 0.6)
+    sell_i_volume = np.floor(prices['volume'] * 0.55)
+    average_price = prices['value'] / prices['volume']
     ct = pd.DataFrame({
         "date": prices["date"],
-        "buy_i_volume": prices["volume"] * 0.6, "sell_i_volume": prices["volume"] * 0.55,
-        "buy_n_volume": prices["volume"] * 0.4, "sell_n_volume": prices["volume"] * 0.45,
-        "buy_i_value": prices["value"] * 0.6,
-        "sell_i_value": prices["value"] * 0.55,
-        "buy_n_value": prices["value"] * 0.4, "sell_n_value": prices["value"] * 0.45,
+        "buy_i_volume": buy_i_volume, "sell_i_volume": sell_i_volume,
+        "buy_n_volume": prices["volume"] - buy_i_volume, "sell_n_volume": prices["volume"] - sell_i_volume,
+        "buy_i_value": buy_i_volume * average_price,
+        "sell_i_value": sell_i_volume * average_price,
+        "buy_n_value": (prices["volume"] - buy_i_volume) * average_price,
+        "sell_n_value": (prices["volume"] - sell_i_volume) * average_price,
         "buy_i_count": rng.integers(50, 500, N_DAYS).astype(float),
         "sell_i_count": rng.integers(50, 500, N_DAYS).astype(float),
         "buy_n_count": 3.0, "sell_n_count": 3.0,

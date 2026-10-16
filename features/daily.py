@@ -19,7 +19,7 @@ import pandas as pd
 from core import market_rules
 from core.client_quality import validated_client_data
 
-FEATURE_SET_VERSION = "daily-v6"  # آمار متناقض حقیقی/حقوقی در تمام مسیرها نامعلوم است
+FEATURE_SET_VERSION = "daily-v7"  # دامنه، نام یکسان، پوشش بی‌داده و منبع حقیقی/حقوقی مطابق منشأ
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
