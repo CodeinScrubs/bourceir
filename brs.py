@@ -285,6 +285,10 @@ def cmd_price_recovery(args) -> int:
 
     argv = ['--from-preflight', args.from_preflight] if args.from_preflight else ['--apply-run', args.apply_run]
     argv += ['--max-rows', str(args.max_rows)]
+    if args.offset:
+        argv += ['--offset', str(args.offset)]
+    if args.include_warmup:
+        argv += ['--include-warmup']
     if args.fetch:
         argv += ['--fetch']
     if args.review_note is not None:
@@ -658,6 +662,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument('--apply-run', help='پوشه برنامه/شواهد محفوظ؛ هیچ دریافت شبکه‌ای ندارد')
     p.add_argument('--fetch', action='store_true', help='دریافت واقعی ریزمعاملات؛ پیش‌فرض بدون شبکه')
     p.add_argument('--max-rows', type=int, default=5, help='یک تا پنجاه مورد؛ ابتدا تازه‌ترین نقص‌های توسعه')
+    p.add_argument('--offset', type=int, default=0, help='آغاز دسته در فهرست مرتب همان گزارش ثابت؛ پیش‌فرض صفر')
+    p.add_argument('--include-warmup', action='store_true', help='سابقه پیش از توسعه برای ورودی فیچر نیز بررسی شود؛ فقط پیش از holdout')
     p.add_argument('--review-note', default=None, help='توضیح بررسی برای اعمال صریح؛ تصدیق انسانی/بیرونی نیست')
     p.set_defaults(func=cmd_price_recovery)
 

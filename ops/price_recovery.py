@@ -18,7 +18,7 @@ from database.price_recovery import apply_recoveries
 from ops.price_recheck import SOURCE_FILES, _archived_preflight, _local_rows_unchanged
 from ops.report_files import private_report_path, read_private_report, write_private_report
 
-VERSION = 'price-recovery-run-v1'
+VERSION = 'price-recovery-run-v2'
 CODE_FILES = tuple(dict.fromkeys((*SOURCE_FILES, 'ops/price_recovery.py', 'core/price_recovery.py',
     'core/query_screener.py', 'data_collector/trade_archive.py', 'database/price_recovery.py',
     'database/migrator.py', *(path.relative_to(settings.BASE_DIR).as_posix() for _, _, path in discover_migrations()))))
@@ -44,16 +44,39 @@ def code_identity(target=None):
     return hashes
 
 
-def collect_recovery(db, *, from_preflight, provider=None, max_rows=5):
+def _validate_selection_options(max_rows, offset, include_warmup):
     if type(max_rows) is not int or not 1 <= max_rows <= 50:
         raise ValueError('سقف نمونه بازیابی باید صحیح و بین یک و پنجاه باشد')
+    if type(offset) is not int or not 0 <= offset <= 10000 or type(include_warmup) is not bool:
+        raise ValueError('آغاز دسته باید صحیح بین صفر و ده هزار و انتخاب سابقه صریح باشد')
+
+
+def _selection(preflight, *, max_rows, offset, include_warmup):
+    _validate_selection_options(max_rows, offset, include_warmup)
+    phases = {'development', 'prior_history'} if include_warmup else {'development'}
+    eligible = sorted((row for row in preflight['price_issues'] if row['phase'] in phases
+                       and row['reasons'] and set(row['reasons']) <= RECOVERABLE.keys()),
+                      key=lambda row: (row['date'], row['symbol'], row['ins_code']), reverse=True)
+    if offset > len(eligible):
+        raise ValueError('آغاز دسته از تعداد موارد واجد شرایط در همین گزارش بیشتر است')
+    selected = eligible[offset:offset + max_rows]
+    next_offset = offset + len(selected)
+    return selected, dict(selection_offset=offset, next_offset=next_offset,
+                          eligible_rows_in_frame=len(eligible), frame_issue_rows=len(preflight['price_issues']),
+                          include_warmup=include_warmup,
+                          sampling_frame_complete=preflight.get('price_details_truncated') is False,
+                          frame_exhausted=next_offset == len(eligible),
+                          selected_phases=dict(Counter(row['phase'] for row in selected)))
+
+
+def collect_recovery(db, *, from_preflight, provider=None, max_rows=5, offset=0, include_warmup=False):
+    # اعتبار ورودی پیش از هر دسترسی فایل یا شبکه؛ انتخاب فقط از چارچوب ثابت محفوظ است.
+    _validate_selection_options(max_rows, offset, include_warmup)
     if db.conn.in_transaction or provider is not None and getattr(provider, 'name', None) != 'tsetmc':
         raise ValueError('بازیابی فقط از تأمین‌کننده TSETMC و بیرون از تراکنش شبکه انجام می‌شود')
     code = code_identity()
     preflight = _archived_preflight(db, from_preflight, None)
-    eligible = [row for row in preflight['price_issues'] if row['phase'] == 'development'
-                and row['reasons'] and set(row['reasons']) <= RECOVERABLE.keys()]
-    selected = sorted(eligible, key=lambda row: (row['date'], row['symbol'], row['ins_code']), reverse=True)[:max_rows]
+    selected, selection = _selection(preflight, max_rows=max_rows, offset=offset, include_warmup=include_warmup)
     if not all(_local_rows_unchanged(db, selected)):
         raise ValueError('هویت یا داده نمونه پس از گزارش کیفیت تغییر کرده است')
     run_id = 'RECOVER-' + uuid.uuid4().hex
@@ -63,10 +86,10 @@ def collect_recovery(db, *, from_preflight, provider=None, max_rows=5):
     if code_identity(folder / 'code') != code:
         raise ValueError('کد هنگام ثبت برنامه بازیابی تغییر کرد')
     report_path = write_private_report(folder / 'preflight.json', preflight)
-    plan = dict(version=VERSION, run_id=run_id, registered_at=now_tehran_iso(), code=code,
+    plan = dict(version=VERSION, run_id=run_id, registered_at=now_tehran_iso(), code=code, **selection,
                 cutoff=preflight['end_exclusive'], selected=selected, max_rows=max_rows,
                 preflight_sha256=sha(report_path), preflight_basis='archived_sampling_frame_only',
-                selection='latest development missing open/last; descending date,symbol,ins_code; no returns used',
+                selection='missing open/last in fixed preflight frame; descending date,symbol,ins_code; explicit offset; no returns used',
                 network_requested=provider is not None, current_global_quality_verified=False,
                 automatic_apply=False, accepted_for_signals=False,
                 limitations=['Decoded provider JSON is preserved, not original HTTP bytes.',
@@ -92,10 +115,11 @@ def collect_recovery(db, *, from_preflight, provider=None, max_rows=5):
     for name, digest in code.items():
         if sha(folder / 'code' / name) != digest:
             raise ValueError('کپی کد بازیابی تغییر کرد')
-    result = dict(version=VERSION, run_id=run_id, completed_at=now_tehran_iso(), observations=observations,
+    result = dict(version=VERSION, run_id=run_id, completed_at=now_tehran_iso(), observations=observations, **selection,
                   artifacts_sha256=artifacts, statuses=dict(Counter(item['candidate']['status'] for item in observations)),
                   selected_rows=len(selected), requests_made=len(selected) if provider is not None else 0,
-                  applied=False, accepted_for_signals=False, profitability_proven=False)
+                  current_global_quality_verified=False, applied=False,
+                  accepted_for_signals=False, profitability_proven=False)
     write_private_report(folder / 'result.json', result)
     return result, folder
 
@@ -110,6 +134,11 @@ def verified_recovery(folder):
             or plan.get('cutoff') > settings.RESEARCH_CONFIG['holdout_start']):
         raise ValueError('قرارداد، کد یا مرز بازیابی با وضعیت فعلی سازگار نیست')
     observations = result['observations']
+    selected, selection = _selection(read_private_report(folder / 'preflight.json'), max_rows=plan['max_rows'],
+                                     offset=plan['selection_offset'], include_warmup=plan['include_warmup'])
+    if plan['selected'] != selected or any(plan.get(key) != value or result.get(key) != value
+                                          for key, value in selection.items()):
+        raise ValueError('دسته بازیابی با ترتیب و چارچوب محفوظ بازتولید نمی‌شود')
     if len(observations) != len(plan['selected']) or result['selected_rows'] != len(observations):
         raise ValueError('نمونه بازیابی ناقص یا تغییرکرده است')
     expected = {'plan.json', 'preflight.json'}
@@ -168,13 +197,15 @@ def main(argv=None):
     mode.add_argument('--apply-run')
     parser.add_argument('--fetch', action='store_true')
     parser.add_argument('--max-rows', type=int, default=5)
+    parser.add_argument('--offset', type=int, default=0)
+    parser.add_argument('--include-warmup', action='store_true')
     parser.add_argument('--review-note', default=None)
     args = parser.parse_args(argv)
     from database.db import DatabaseManager
     try:
         if args.apply_run:
-            if args.fetch:
-                raise ValueError('اعمال شاهد محفوظ هیچ دریافت شبکه‌ای انجام نمی‌دهد')
+            if args.fetch or args.offset or args.include_warmup:
+                raise ValueError('اعمال شاهد محفوظ دریافت یا انتخاب دسته تازه ندارد')
             verified_recovery(args.apply_run)
             with DatabaseManager() as db:
                 report, path = apply_recovery_run(db, args.apply_run, review_note=args.review_note)
@@ -186,7 +217,8 @@ def main(argv=None):
                     provider = TsetmcProvider()
                 with DatabaseManager(read_only=True) as db:
                     report, path = collect_recovery(db, from_preflight=args.from_preflight,
-                                                    provider=provider, max_rows=args.max_rows)
+                                                    provider=provider, max_rows=args.max_rows,
+                                                    offset=args.offset, include_warmup=args.include_warmup)
             finally:
                 if provider is not None:
                     provider.session.close()
