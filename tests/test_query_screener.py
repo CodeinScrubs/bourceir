@@ -251,6 +251,9 @@ def test_query_dashboard_opens_verified_result(db,tmp_path,monkeypatch):
     make_query(db,tmp_path,monkeypatch)
     at=AppTest.from_string('from dashboard.query_screener import page_query_screener\npage_query_screener()',default_timeout=30).run()
     assert not at.exception and len(at.get('download_button'))==3
+    assert 'شمسی' in at.text_input[0].label and 'شمسی' in at.text_input[1].label
+    at.text_input[0].set_value('۱۴۰۵/۱۳/۳۲').run()
+    assert not at.exception and at.error and at.button[0].disabled
 
 
 def test_parser_exposes_safe_contract_and_explicit_network_budget():
