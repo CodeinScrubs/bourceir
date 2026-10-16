@@ -161,34 +161,41 @@ def check_jev(report: DoctorReport) -> None:
                    FOREIGN_SITE_HINT.format(domain="api.typesafe.ai"))
 
 
-def check_database(report: DoctorReport) -> None:
+def check_database(report: DoctorReport, *, read_only: bool = False) -> None:
     from core.timeutils import now_tehran
     from database.db import DatabaseManager
     from database.migrator import discover_migrations
 
     try:
-        db = DatabaseManager()
+        db = DatabaseManager(read_only=read_only)
     except Exception as e:
-        report.add("پایگاه داده", ERROR, f"باز نشد: {e}", "فایل data/brs.db را بررسی کنید یا از پوشه data/backups بازیابی کنید.")
+        report.add("پایگاه داده", ERROR, f"باز نشد: {type(e).__name__}", "فایل data/brs.db را بررسی کنید یا از پوشه data/backups بازیابی کنید.")
         return
+    own_snapshot = not db.conn.in_transaction
     try:
+        if own_snapshot:
+            db.conn.execute('BEGIN')
         integrity = db.integrity_check()
         if integrity == "ok":
             report.add("سلامت فایل دیتابیس", OK, "بدون خرابی")
         else:
-            report.add("سلامت فایل دیتابیس", ERROR, f"خرابی: {integrity}",
+            report.add("سلامت فایل دیتابیس", ERROR, 'بررسی یکپارچگی ناموفق بود؛ جزئیات خصوصی صادر نمی‌شوند',
                        "برنامه را ببندید و آخرین نسخه پشتیبان از پوشه data/backups را جایگزین data/brs.db کنید.")
         violations = db.conn.execute("PRAGMA foreign_key_check;").fetchall()
         if violations:
             report.add("رابطه‌های دیتابیس", ERROR, f"{len(violations)} ردیف به رکورد ناموجود اشاره می‌کند",
                        "برنامه را ببندید و آخرین نسخه پشتیبان از پوشه data/backups را جایگزین data/brs.db کنید.")
         latest = discover_migrations()[-1][0]
-        version = db.schema_version()
-        counts = db.table_counts()
-        universe = len(db.get_universe_symbols())
+        recorded_schema = db.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+        ).fetchone()
+        version = db.schema_version() if recorded_schema else 0
         status = OK if version == latest else ERROR
         report.add("ساختار پایگاه داده", status, f"نسخه {version} از {latest}",
                    "" if status == OK else "برنامه را یک بار دیگر اجرا کنید تا مایگریشن‌ها اعمال شوند.")
+        if version != latest:
+            return  # خواننده تشخیصی نباید ستون تازه را از ساختار قدیمی بخواند یا مایگریشن اجرا کند.
+        universe = len(db.get_universe_symbols())
         if universe == 0:
             report.add("جامعه سهام", WARN, "هنوز نمادی از کل بازار ثبت نشده",
                        "در داشبورد دکمه «به‌روزرسانی داده‌ها» را بزنید (یا: python brs.py update).")
@@ -199,18 +206,23 @@ def check_database(report: DoctorReport) -> None:
             report.add("تازگی داده روزانه", WARN, "هنوز قیمتی ثبت نشده", "به‌روزرسانی داده‌ها را اجرا کنید.")
         else:
             age = (now_tehran().date() - datetime.fromisoformat(last).date()).days
-            status = OK if age <= 4 else WARN
-            report.add("تازگی داده روزانه", status, f"آخرین روز: {last} ({age} روز پیش) — {counts.get('daily_prices', 0):,} رکورد",
+            count = db.conn.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0]
+            status = OK if 0 <= age <= 4 else WARN
+            report.add("تازگی داده روزانه", status, f"آخرین روز: {last} ({age} روز پیش) — {count:,} رکورد",
                        "" if status == OK else "به‌روزرسانی داده‌ها را اجرا کنید.")
+    except Exception as e:
+        report.add('خواندن پایگاه داده', ERROR, type(e).__name__, 'گزارش فقط‌خواندنی خطا را اصلاح نمی‌کند.')
     finally:
+        if own_snapshot and db.conn.in_transaction:
+            db.conn.rollback()
         db.close()
 
 
-def run_doctor(include_network: bool = True) -> DoctorReport:
+def run_doctor(include_network: bool = True, *, read_only: bool = False) -> DoctorReport:
     report = DoctorReport()
     check_python(report)
     check_packages(report)
-    check_database(report)
+    check_database(report, read_only=read_only)
     if include_network:
         server_time = check_tsetmc(report)
         check_clock(report, server_time)

@@ -56,7 +56,8 @@ def summary_table(result):
 def write_report(folder, result):
     caps, spec = result['caps'], result['protocol']['spec']
     export_csv(folder/'companies.csv', caps['rows'], ('symbol_fa','name_fa','ins_code','sector_code','shares_outstanding',
-        'metadata_observed_at','price_rial','price_date','price_captured_at','market_cap_rial','rank_lower','rank_upper','slice_membership'))
+        'metadata_observed_at','price_rial','price_date','price_captured_at','price_provider_timestamp','price_received_at',
+        'price_kind','market_cap_rial','rank_lower','rank_upper','slice_membership'))
     export_csv(folder/'summary.csv', result['results'], ('symbol_fa','ins_code','sector_code','market_cap_rial','rank_lower',
         'rank_upper','slice_membership','confirmed_count','possible_count','ambiguous_count','invalid_sessions','observed_sessions',
         'valid_sessions','missing_market_dates','avg_value_rial','event_rate_among_valid_pct','where_result','full_year_count_verified'))

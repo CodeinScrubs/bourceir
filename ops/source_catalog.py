@@ -69,7 +69,8 @@ def catalog_site(archive_path):
     if not records:
         raise ValueError('آرشیو سایت خالی است')
     base=records[0]['url'].split('/robots.txt')[0].rstrip('/')+'/'
-    archive=PublicSiteArchive(base,root)
+    # متن مشتق‌شده خوانده نمی‌شود؛ از بدنه‌ای که هش آن تطبیق دارد دوباره ساخته می‌شود.
+    archive=PublicSiteArchive(base,root,verify_derived_text=False)
     latest={url:record for record in archive.records if (url:=public_url(record['url'],base))}
     pages=[]
     origins=defaultdict(list)
