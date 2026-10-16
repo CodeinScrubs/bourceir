@@ -4,7 +4,10 @@ from config import settings
 from core.risk import RiskProfile, finite_number
 
 
-def summarize_executions(events: list, profile: RiskProfile, marks: dict) -> dict:
+def summarize_executions(events: list, profile: RiskProfile, marks: dict, *, sell_fee_rate=None) -> dict:
+    sell_fee = finite_number(settings.FEES['sell'] if sell_fee_rate is None else sell_fee_rate, positive=False)
+    if sell_fee >= 1:
+        raise ValueError('نرخ کارمزد فروش باید کمتر از یک باشد')
     cash, realized, fees = float(profile.capital_rial), 0.0, 0.0
     holdings = {}
     for event in events:
@@ -45,7 +48,7 @@ def summarize_executions(events: list, profile: RiskProfile, marks: dict) -> dic
             unknown.append(symbol)
             continue
         # Mark to net liquidation value; the price is observed, an immediate fill is not promised.
-        value = pos["quantity"] * price * (1 - settings.FEES["sell"])
+        value = pos["quantity"] * price * (1 - sell_fee)
         pos["mark_rial"], pos["liquidation_value_rial"] = price, value
         pos["unrealized_net_rial"] = value - pos["cost_rial"]
         marked += value

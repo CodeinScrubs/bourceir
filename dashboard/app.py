@@ -24,6 +24,7 @@ from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from dashboard.broker import page_broker  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
+from dashboard.paper import page_paper  # noqa: E402
 from dashboard.stock_study import page_stock_study  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
 from data_collector.monitor import DataFreshnessMonitor  # noqa: E402
@@ -682,6 +683,7 @@ PAGES = {
     "🔎 فهرست بررسی": page_shortlist,
     '🧪 آزمایشگاه فیلترها': page_flow_lab,
     "🛡️ برنامه و دفتر معاملات": page_workbench,
+    '💼 پورتفوی مجازی': page_paper,
     '🗓️ دفتر مشاهده آینده': page_forward_observations,
     "🏦 حساب و تطبیق فارابی": page_broker,
     "📊 بررسی نماد": page_symbol,

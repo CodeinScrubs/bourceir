@@ -27,6 +27,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | مسیر | مسئولیت |
 | :--- | :--- |
 | `core/` | منطق خالص دامنه: `market_rules` (کارمزد، صف قفل، بازده PIT)، `text` (ی/ک عربی)، `timeutils` (تهران، شمسی) |
+| `core/paper.py` + `database/paper.py` + `dashboard/paper.py` | پورتفوی مجازی مستقل با سرمایه/هزینه ثابت، تحلیل پیشین، نقد مشترک و بهای هر تحلیل؛ سناریوی دستی جدا از شبیه‌سازی مظنه تازه است. Migration 013، داده/اقدام شرکتی نامعلوم مانع سود عددی است؛ هیچ سفارش واقعی یا سیگنال پذیرفته‌شده ندارد. [راهنما](docs/paper-portfolio.md). |
 | `data_collector/tsetmc.py` | تنها نقطه تماس با TSETMC (پیاده‌سازی `BaseDataProvider`) |
 | `data_collector/scheduler.py` | `DataCollector`: هماهنگی گردآوری و ثبت در دیتابیس |
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |
