@@ -2,6 +2,7 @@
 
 import json
 
+import pandas as pd
 import pytest
 
 from brs import build_parser
@@ -11,7 +12,7 @@ from ops.price_recovery import apply_recovery_run, collect_recovery, verified_re
 from ops.report_files import write_private_report
 from ops.research_preflight import research_preflight
 from tests.test_price_recovery import stored  # noqa: F401 (fixture)
-from tests.test_query_screener import trades
+from tests.test_query_screener import bar, trades
 
 
 @pytest.fixture
@@ -113,3 +114,114 @@ def test_recovery_cli_and_migration_are_explicit_and_repeatable(db):
     _run_sql_migration(db.conn, path)
     db.conn.commit()
     assert db.conn.execute('SELECT count(*) FROM price_recoveries').fetchone()[0] == 0
+
+
+@pytest.fixture
+def multi_source(db, source):
+    sid = db.conn.execute('SELECT id FROM symbols').fetchone()[0]
+    db.upsert_daily_prices_df(sid, pd.DataFrame([bar(date=day, open_raw=None)
+        for day in ('2024-02-05', '2024-02-06', '2010-02-03', '2025-03-24')]))
+    write_private_report(source, research_preflight(db))
+    return source
+
+
+class PagedProvider:
+    name = 'tsetmc'
+    def __init__(self, db, root):
+        self.db, self.root, self.calls = db, root, []
+
+    def get_trade_session(self, ins_code, day):
+        assert not self.db.conn.in_transaction
+        plans = [json.loads(path.read_bytes()) for path in (self.root / 'private/price-recovery').glob('*/plan.json')]
+        assert any(plan['network_requested'] and any(row['date'] == day and row['ins_code'] == ins_code
+                                                   for row in plan['selected']) for plan in plans)
+        self.calls.append((ins_code, day))
+        result = trades(requested_date=day)
+        for row in result['response']['tradeHistory']:
+            row['dEven'] = int(day.replace('-', ''))
+        return result
+
+
+def test_next_page_keeps_fixed_frame_after_first_page_is_applied(db, multi_source, tmp_path):
+    provider = PagedProvider(db, tmp_path)
+    first, first_folder = collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=1)
+    assert first['eligible_rows_in_frame'] == 3 and first['next_offset'] == 1 and not first['frame_exhausted']
+    apply_recovery_run(db, first_folder, review_note='اعمال اولین دسته فقط در دیتابیس موقت آزمون')
+    second, second_folder = collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=1, offset=1)
+    assert provider.calls == [('123', '2024-02-06'), ('123', '2024-02-05')]
+    assert second['next_offset'] == 2 and not second['current_global_quality_verified']
+    assert verified_recovery(second_folder)[2][0][0]['date'] == '2024-02-05'
+    with pytest.raises(ValueError, match='تغییر'):
+        collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=1)
+    assert len(provider.calls) == 2
+
+
+def test_warmup_is_explicit_and_never_includes_the_sealed_period(db, multi_source, tmp_path):
+    provider = PagedProvider(db, tmp_path)
+    result, folder = collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=50,
+                                      offset=3, include_warmup=True)
+    assert result['eligible_rows_in_frame'] == 4 and result['selected_phases'] == {'prior_history': 1}
+    assert result['next_offset'] == 4 and result['frame_exhausted']
+    assert provider.calls == [('123', '2010-02-03')]
+    assert verified_recovery(folder)[2][0][0]['phase'] == 'prior_history'
+    with pytest.raises(ValueError, match='بیشتر'):
+        collect_recovery(db, from_preflight=multi_source, offset=4)
+
+
+def test_exhausting_truncated_frame_does_not_claim_a_complete_census(db, multi_source):
+    write_private_report(multi_source, research_preflight(db, detail_limit=1))
+    result, folder = collect_recovery(db, from_preflight=multi_source, include_warmup=True)
+    assert result['frame_exhausted'] and not result['sampling_frame_complete']
+    assert result['frame_issue_rows'] == result['eligible_rows_in_frame'] == 1
+    plan = json.loads((folder / 'plan.json').read_bytes())
+    assert not plan['current_global_quality_verified'] and not result['accepted_for_signals']
+
+
+def test_exact_frame_end_is_an_explicit_empty_page_without_requests(db, multi_source, tmp_path):
+    provider = PagedProvider(db, tmp_path)
+    result, folder = collect_recovery(db, from_preflight=multi_source, provider=provider, offset=3)
+    assert result['frame_exhausted'] and result['sampling_frame_complete']
+    assert result['selected_rows'] == result['requests_made'] == 0 and not provider.calls
+    assert verified_recovery(folder)[2] == []
+
+
+@pytest.mark.parametrize('offset', [-1, True, 1.5, 10001])
+def test_invalid_page_options_do_not_request_or_register_a_run(db, source, tmp_path, offset):
+    provider = PagedProvider(db, tmp_path)
+    with pytest.raises(ValueError):
+        collect_recovery(db, from_preflight=source, provider=provider, offset=offset)
+    assert not provider.calls and not (tmp_path / 'private/price-recovery').exists()
+
+
+def test_reconstructed_selection_rejects_a_changed_offset_even_with_an_updated_plan_hash(db, multi_source, tmp_path):
+    from ops.price_recovery import sha
+
+    _, folder = collect_recovery(db, from_preflight=multi_source, provider=PagedProvider(db, tmp_path), max_rows=1)
+    plan = json.loads((folder / 'plan.json').read_bytes())
+    plan['selection_offset'] = 1
+    write_private_report(folder / 'plan.json', plan)
+    result = json.loads((folder / 'result.json').read_bytes())
+    result['artifacts_sha256']['plan.json'] = sha(folder / 'plan.json')
+    write_private_report(folder / 'result.json', result)
+    with pytest.raises(ValueError, match='چارچوب'):
+        verified_recovery(folder)
+
+
+def test_page_cli_forwards_options(monkeypatch):
+    from ops import price_recovery
+
+    argv = []
+    monkeypatch.setattr(price_recovery, 'main', lambda args: argv.extend(args) or 0)
+    args = build_parser().parse_args(['recover-prices', '--from-preflight', 'test.json', '--offset', '50', '--include-warmup'])
+    assert args.func(args) == 0
+    assert argv == ['--from-preflight', 'test.json', '--max-rows', '5', '--offset', '50', '--include-warmup']
+
+
+@pytest.mark.parametrize('options', [['--offset', '1'], ['--include-warmup'], ['--fetch']])
+def test_apply_rejects_new_selection_or_network_before_reading_a_run(monkeypatch, options):
+    from ops import price_recovery
+
+    monkeypatch.setattr(price_recovery, 'verified_recovery', lambda *_: pytest.fail('نباید برنامه خوانده شود'))
+    with pytest.raises(SystemExit) as raised:
+        price_recovery.main(['--apply-run', 'not-a-real-folder', *options])
+    assert raised.value.code == 2
