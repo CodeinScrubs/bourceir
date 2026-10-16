@@ -37,7 +37,10 @@ def verified_baseline_inputs(root, experiment_id=None):
     folder = root / experiment_id
     label_manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     feature_manifest = (payload['params'].get('research_provenance') or {}).get('feature_manifest') or {}
-    if feature_manifest.get('version') != FEATURE_SET_VERSION or label_manifest.get('version') != LABEL_SET_VERSION:
+    from features.provenance import INPUT_VERSION
+    raw_contract = (feature_manifest.get('provenance') or {}).get('raw_inputs') or {}
+    if (feature_manifest.get('version') != FEATURE_SET_VERSION or label_manifest.get('version') != LABEL_SET_VERSION
+            or raw_contract.get('version') != INPUT_VERSION):
         raise ValueError('قرارداد قیمت رسمی/فیچر/برچسب منبع قدیمی است؛ پژوهش پایه را دوباره اجرا کنید')
     assert_compatible_environment(feature_manifest)
     if label_manifest.get('fees') != dict(settings.FEES):

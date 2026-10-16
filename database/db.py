@@ -336,6 +336,11 @@ class DatabaseManager:
                 o, h, lo, c, _none_if_nan(r.get("close_final_raw")), _none_if_nan(r.get("ref_price_raw")), 1.0,
             ))
         with self.conn:
+            from database.price_recovery import preserve_recoveries
+
+            if not self.conn.in_transaction:
+                self.conn.execute('BEGIN IMMEDIATE')
+            params = preserve_recoveries(self.conn, symbol_id, params)
             self.conn.executemany(self._DAILY_UPSERT, params)
         if recompute:
             self.recompute_adjustments(symbol_id, source=source)
@@ -364,12 +369,17 @@ class DatabaseManager:
         c_raw = close_raw if close_raw is not None else close
         try:
             with self.conn:
+                from database.price_recovery import preserve_recoveries
+
+                if not self.conn.in_transaction:
+                    self.conn.execute('BEGIN IMMEDIATE')
+                params = (symbol_id, date, o_raw, h_raw, l_raw, c_raw, adj_close, volume, value, trade_count,
+                          price_unit, source, now_tehran_iso(), o_raw, h_raw, l_raw, c_raw, close_final_raw, ref_price_raw,
+                          adjustment_factor if adjustment_factor is not None else 1.0)
+                params = preserve_recoveries(self.conn, symbol_id, [params])[0]
                 cur = self.conn.execute(
                     self._DAILY_UPSERT,
-                    (symbol_id, date, o_raw, h_raw, l_raw, c_raw, adj_close, volume, value, trade_count,
-                     price_unit, source, now_tehran_iso(),
-                     o_raw, h_raw, l_raw, c_raw, close_final_raw, ref_price_raw,
-                     adjustment_factor if adjustment_factor is not None else 1.0),
+                    params,
                 )
                 if adj_close is not None or adjustment_factor is not None:
                     self.conn.execute(

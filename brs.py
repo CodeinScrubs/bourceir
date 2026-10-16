@@ -280,6 +280,18 @@ def cmd_research_recheck(args) -> int:
     return main(argv)
 
 
+def cmd_price_recovery(args) -> int:
+    from ops.price_recovery import main
+
+    argv = ['--from-preflight', args.from_preflight] if args.from_preflight else ['--apply-run', args.apply_run]
+    argv += ['--max-rows', str(args.max_rows)]
+    if args.fetch:
+        argv += ['--fetch']
+    if args.review_note is not None:
+        argv += ['--review-note', args.review_note]
+    return main(argv)
+
+
 def cmd_research_preflight(args) -> int:
     from ops.research_preflight import main as preflight
 
@@ -639,6 +651,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--from-preflight', default=None, help='نمونه از گزارش خصوصی محفوظ؛ سلامت فعلی کل دیتابیس را بررسی نمی‌کند')
     p.add_argument('--fetch', action='store_true', help='دریافت واقعی؛ بدون این گزینه فقط برنامه محلی ثبت می‌شود')
     p.set_defaults(func=cmd_research_recheck)
+
+    p = sub.add_parser('recover-prices', help='بازیابی گشایش/آخرین معامله گمشده از مسیر کامل؛ اعمال صریح با رسید و پشتیبان')
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--from-preflight', help='گزارش خصوصی کیفیت جاری برای انتخاب نمونه')
+    mode.add_argument('--apply-run', help='پوشه برنامه/شواهد محفوظ؛ هیچ دریافت شبکه‌ای ندارد')
+    p.add_argument('--fetch', action='store_true', help='دریافت واقعی ریزمعاملات؛ پیش‌فرض بدون شبکه')
+    p.add_argument('--max-rows', type=int, default=5, help='یک تا پنجاه مورد؛ ابتدا تازه‌ترین نقص‌های توسعه')
+    p.add_argument('--review-note', default=None, help='توضیح بررسی برای اعمال صریح؛ تصدیق انسانی/بیرونی نیست')
+    p.set_defaults(func=cmd_price_recovery)
 
     p = sub.add_parser('research-uncertainty', help='عدم قطعیت اختلاف بازده روزانه دو منحنی توسعه؛ تأیید سودآوری نیست')
     p.add_argument('--strategy', required=True, help='Parquet با date و equity_rial؛ فقط دوره توسعه')

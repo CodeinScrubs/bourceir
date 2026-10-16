@@ -278,7 +278,7 @@ def test_upgrade_from_thirteen_preserves_journal_and_backups(tmp_path, monkeypat
             old.upsert_symbol(dict(symbol_fa='آزمون', ins_code='987', instrument_type_code=300))
             assert old.schema_version() == 13
     with DatabaseManager(db_path=path) as updated:
-        assert updated.schema_version() == 14
+        assert updated.schema_version() == original()[-1][0]
         assert updated.get_symbol('آزمون')['ins_code'] == '987'
         migrator._run_sql_migration(updated.conn, migrator.MIGRATIONS_DIR / '014_paper_opening_holdings.sql')
         updated.conn.commit()

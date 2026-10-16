@@ -145,6 +145,7 @@ def _provenance(db: DatabaseManager, parquet: Path) -> dict:
         "known_limitations": [
             "universe = currently known ordinary TSE/IFB registry including inactive symbols; historical membership is unverified",
             "history reconstructed from TSETMC's current archive, not as originally published in real time",
+            "surviving-trade price recovery receipts are hashed with inputs; historical availability remains unverified",
         ],
     }
 
