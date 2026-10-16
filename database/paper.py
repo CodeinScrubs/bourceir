@@ -9,6 +9,7 @@ from config import settings
 from core.paper import (
     HORIZONS,
     MODES,
+    SUPPORTED_VERSIONS,
     VERSION,
     aware,
     canonical,
@@ -23,10 +24,13 @@ from core.risk import finite_number
 from core.screening import current_daily_row, current_snapshot, expected_completed_session
 from core.text import normalize_symbol
 from core.timeutils import TEHRAN_TZ, is_trading_session, now_tehran
+from database.broker import BrokerRepository
 
 CODE_FILES = ('core/paper.py', 'core/journal.py', 'core/risk.py', 'core/screening.py',
               'core/market_rules.py', 'core/timeutils.py', 'database/paper.py',
-              'core/text.py', 'config/settings.py', 'database/migrations/013_paper_portfolios.sql', 'requirements.lock.txt')
+              'core/text.py', 'config/settings.py', 'database/broker.py',
+              'database/migrations/013_paper_portfolios.sql', 'database/migrations/014_paper_opening_holdings.sql',
+              'requirements.lock.txt')
 
 
 def code_identity():
@@ -46,7 +50,7 @@ class PaperRepository:
     def portfolios(self):
         return [dict(r) for r in self.db.conn.execute('SELECT * FROM paper_portfolios ORDER BY created_at,id')]
 
-    def create(self, *, name, capital_rial, rationale, mode='manual'):
+    def _protocol(self, *, name, capital_rial, rationale, mode):
         name, rationale = text(name, 'نام پورتفو', 120), text(rationale, 'روش و معیار ارزیابی')
         capital = integer(capital_rial)
         if capital < 10 or mode not in MODES:
@@ -63,22 +67,131 @@ class PaperRepository:
                         trading_hours=dict(settings.TRADING_HOURS), trading_days=list(settings.TRADING_DAYS),
                         accepted_for_signals=False, profitability_proven=False, externally_timestamped=False,
                         cash_interest_rial=0, corporate_action_model='unresolved_blocks_performance',
-                        actual_account_linked=False)
+                        actual_account_linked=False, opening_kind='cash')
+        return protocol
+
+    def _insert_protocol(self, protocol):
+        self.db.conn.execute('INSERT INTO paper_portfolios VALUES(?,?,?,?,?,?,?,?)',
+                             tuple(protocol[k] for k in ('id', 'name', 'created_at', 'capital_rial', 'max_loss_rial', 'mode'))
+                             + (canonical(protocol), digest(protocol)))
+
+    def create(self, *, name, capital_rial, rationale, mode='manual'):
+        protocol = self._protocol(name=name, capital_rial=capital_rial, rationale=rationale, mode=mode)
         with self.db.conn:
-            self.db.conn.execute('INSERT INTO paper_portfolios VALUES(?,?,?,?,?,?,?,?)',
-                                 (key, name, at, capital, capital // 10, mode, canonical(protocol), digest(protocol)))
+            self._insert_protocol(protocol)
+        return protocol['id']
+
+    def _source(self, import_id):
+        row = self.db.conn.execute("SELECT * FROM broker_imports WHERE id=? AND kind='portfolio'", (import_id,)).fetchone()
+        if row is None:
+            raise ValueError('گزارش معتبر سبد فارابی پیدا نشد')
+        source = {**dict(row), **json.loads(row['metadata_json'])}
+        source.pop('metadata_json')
+        source['rows'] = [json.loads(r[0]) for r in self.db.conn.execute(
+            'SELECT record_json FROM broker_records WHERE import_id=? ORDER BY ordinal', (import_id,))]
+        return source
+
+    def create_from_broker(self, import_id, *, name='کپی مجازی سبد فارابی', mode='observed', request_id=None):
+        request = dict(import_id=import_id, name=text(name, 'نام پورتفو', 120), mode=mode)
+        request_id = text(request_id or 'broker-opening-' + import_id, 'شناسه درخواست', 160)
+        with self.db.conn:
+            self.db.conn.execute('BEGIN IMMEDIATE')
+            prior = self.db.conn.execute('SELECT * FROM paper_openings WHERE request_id=?', (request_id,)).fetchone()
+            if prior:
+                protocol, _, _, _ = self._load(prior['portfolio_id'])
+                if self._opening(protocol)['request'] != request:
+                    raise ValueError('شناسه تکراری برای کپی متفاوت استفاده شده است')
+                return prior['portfolio_id']
+            source = self._source(import_id)
+            at = now_tehran().astimezone(TEHRAN_TZ)
+            age = (at - aware(source['captured_at'])).total_seconds()
+            if not 0 <= age <= 900:
+                raise ValueError('کپی سبد جاری به برداشت حداکثر ۱۵ دقیقه اخیر نیاز دارد؛ ابتدا فارابی را دوباره بخوان')
+            rows, summary = source['rows'], source['summary']
+            if not rows or len(rows) != source['expected_positions'] or len({normalize_symbol(r['symbol_fa']) for r in rows}) != len(rows):
+                raise ValueError('تعداد یا نام‌های گزارش سبد سازگار نیستند')
+            cash = finite_number(summary['cash_rial'], positive=False)
+            power = finite_number(summary['buying_power_rial'], positive=False)
+            blocked = finite_number(summary['blocked_rial'], positive=False)
+            if not all(v.is_integer() for v in (cash, power, blocked)) or blocked > cash:
+                raise ValueError('نقد یا وجه بلوکه‌شده نیازمند تطبیق است؛ اعتبار به پول مجازی تبدیل نمی‌شود')
+            available = int(min(power, cash - blocked))
+            capital = integer(summary['net_assets_rial'])
+            rounding = capital - int(cash) - sum(r['value_rial'] for r in rows)
+            if abs(rounding) > len(rows) + 1 or abs(capital - cash - summary['portfolio_value_rial']) > 1:
+                raise ValueError('ارزش سبد و نقد با خلاصه فارابی سازگار نیست')
+            protocol = self._protocol(name=request['name'], capital_rial=capital,
+                                      rationale='کپی موجودی گزارش‌شده فارابی؛ سنجش تغییرات از شروع کپی، بدون بازسازی خریدهای گذشته', mode=mode)
+            key, created = protocol['id'], protocol['created_at']
+            positions, passive, opening_ideas = {}, [], []
+            for row in rows:
+                symbol = normalize_symbol(row['symbol_fa'])
+                quantity = integer(row['quantity'])
+                finite_number(row['value_rial'], positive=False)
+                finite_number(row['last_price_rial'], positive=False)
+                meta = BrokerRepository(self.db).valuation_metadata(symbol)
+                known = self.db.get_symbol(symbol)
+                kind = meta.get('instrument_type_code') if meta else None
+                eligible = bool(known and known['instrument_type_code'] in (300, 303) and known['is_active']
+                                and row['value_rial'] > 0 and row['last_price_rial'] > 0)
+                holding = dict(symbol_fa=symbol, quantity=quantity, cost_rial=row['value_rial'],
+                               source_price_rial=row['last_price_rial'], instrument_type_code=kind,
+                               ins_code=str(meta['ins_code']) if meta and meta.get('ins_code') else None,
+                               source_row=dict(row), tradable=eligible)
+                if not eligible:
+                    passive.append(holding)
+                    continue
+                idea_id = 'IDEA-' + uuid.uuid4().hex
+                holding['symbol_id'] = known['id']
+                positions[idea_id] = holding
+                opening_ideas.append(dict(id=idea_id, portfolio_id=key, symbol_id=known['id'], symbol_fa=symbol,
+                    ins_code=known['ins_code'], created_at=created, label='موجودی آغازین — ' + symbol,
+                    thesis='انتقال تعداد موجود از گزارش فارابی؛ تحلیل خرید پیشین ثبت نشده و فرضیه خرید جدید نیست',
+                    invalidation='برای فروش مجازی، دلیل تصمیم اکنون را ثبت کن؛ خرید بیشتر نیازمند تحلیل تازه است',
+                    horizon=None, stop_rial=None, target_rial=None, origin='broker_opening',
+                    historical_purchase_analysis_known=False, market=self._market(known['id'], aware(created)),
+                    code_sha256=protocol['code']['sha256']))
+            opening = dict(portfolio_id=key, created_at=created, source_captured_at=source['captured_at'],
+                source=source, source_sha256=digest(source), request=request, request_id=request_id,
+                positions=positions, passive=passive, available_cash_rial=available,
+                locked_cash_rial=int(cash) - available, rounding_rial=rounding,
+                rounding_is_spendable=False, purchases_generated=0, historical_profit_known=False)
+            protocol.update(opening_kind='broker_snapshot', opening_sha256=digest(opening))
+            self._insert_protocol(protocol)
+            self.db.conn.execute('INSERT INTO paper_openings VALUES(?,?,?,?,?,?,?)',
+                (key, import_id, request_id, created, source['captured_at'], canonical(opening), digest(opening)))
+            self.db.conn.executemany('INSERT INTO paper_ideas VALUES(?,?,?,?,?,?)',
+                [(p['id'], key, p['symbol_id'], created, canonical(p), digest(p)) for p in opening_ideas])
         return key
+
+    def _opening(self, protocol):
+        if protocol.get('opening_kind', 'cash') == 'cash':
+            return None
+        row = self.db.conn.execute('SELECT * FROM paper_openings WHERE portfolio_id=?', (protocol['id'],)).fetchone()
+        if row is None:
+            raise ValueError('موجودی آغازین پورتفو پیدا نشد')
+        payload = json.loads(row['payload_json'])
+        if (digest(payload) != row['payload_sha256'] or row['payload_sha256'] != protocol['opening_sha256'] or
+            payload['portfolio_id'] != protocol['id'] or payload['created_at'] != protocol['created_at'] or
+            row['created_at'] != protocol['created_at'] or row['request_id'] != payload['request_id'] or
+            row['source_captured_at'] != payload['source_captured_at'] or
+            row['broker_import_id'] != payload['source']['id'] or
+            digest(self._source(row['broker_import_id'])) != payload['source_sha256'] or
+            digest(payload['source']) != payload['source_sha256']):
+            raise ValueError('منبع یا موجودی آغازین پورتفو مخدوش است')
+        return payload
 
     def _load(self, key):
         row = self.db.conn.execute('SELECT * FROM paper_portfolios WHERE id=?', (key,)).fetchone()
         if row is None:
             raise ValueError('پورتفوی مجازی پیدا نشد')
         protocol = json.loads(row['protocol_json'])
-        if digest(protocol) != row['protocol_sha256'] or protocol.get('version') != VERSION:
+        if digest(protocol) != row['protocol_sha256'] or protocol.get('version') not in SUPPORTED_VERSIONS:
             raise ValueError('پروتکل پورتفو مخدوش یا نسخه آن پشتیبانی‌نشده است')
         for field in ('id', 'name', 'created_at', 'capital_rial', 'max_loss_rial', 'mode'):
             if protocol[field] != row[field]:
                 raise ValueError('فراداده پورتفو با پروتکل یکسان نیست')
+        opening = self._opening(protocol)
         ideas = {}
         for item in self.db.conn.execute('SELECT * FROM paper_ideas WHERE portfolio_id=? ORDER BY created_at,id', (key,)):
             payload = json.loads(item['payload_json'])
@@ -86,6 +199,10 @@ class PaperRepository:
                 ('id', 'portfolio_id', 'symbol_id', 'created_at')) or aware(item['created_at']) < aware(row['created_at']):
                 raise ValueError('تحلیل پورتفو مخدوش است')
             ideas[item['id']] = payload
+        if opening and (not set(opening['positions']) <= set(ideas) or any(
+            ideas[k].get('origin') != 'broker_opening' or ideas[k]['symbol_id'] != p['symbol_id'] or
+            ideas[k]['symbol_fa'] != p['symbol_fa'] for k, p in opening['positions'].items())):
+            raise ValueError('موجودی آغازین با شناسه‌های دفتر یکسان نیست')
         events, previous, last_time = [], row['protocol_sha256'], aware(row['created_at'])
         for event in self.db.conn.execute('SELECT * FROM paper_events WHERE portfolio_id=? ORDER BY id', (key,)):
             payload = json.loads(event['payload_json'])
@@ -155,10 +272,12 @@ class PaperRepository:
         return [dict(e['payload'], idea_id=e['idea_id'], recorded_at=e['recorded_at'])
                 for e in events if e['kind'] == 'trade']
 
-    def _integrity(self, idea, trades, end_date, calendar, snapshot):
+    def _integrity(self, idea, trades, end_date, calendar, snapshot, opening_position=None, opening_started_at=None):
         """وقفه و شکست مرجع در دوره نگهداری؛ هیچ حق یا سود نقدی مصنوعی ساخته نمی‌شود."""
         own = [t for t in trades if t['idea_id'] == idea['id']]
-        intervals, opened, quantity = [], None, 0
+        quantity = opening_position['quantity'] if opening_position else 0
+        opened = aware(opening_started_at).date().isoformat() if opening_position else None
+        intervals = []
         for trade in own:
             day = aware(trade['recorded_at']).astimezone(TEHRAN_TZ).date().isoformat()
             if not quantity and trade['side'] == 'buy':
@@ -211,6 +330,8 @@ class PaperRepository:
     def _report(self, protocol, ideas, events, at):
         trades, observations, marks, integrity = self._trades(events), {}, {}, {}
         calendar = self.db.get_market_calendar()
+        opening = self._opening(protocol)
+        opening_positions = opening['positions'] if opening else {}
         for key, idea in ideas.items():
             market = self._market(idea['symbol_id'], at)
             snapshot, daily = market['snapshot'], market['daily']
@@ -231,10 +352,13 @@ class PaperRepository:
                 except ValueError:
                     pass
             own = [t for t in trades if t['idea_id'] == key]
-            open_quantity = sum(t['quantity'] * (1 if t['side'] == 'buy' else -1) for t in own)
-            problems = self._integrity(idea, trades, mark_date or expected_completed_session(at, calendar=calendar), calendar, snapshot)
+            initial = opening_positions.get(key)
+            open_quantity = (initial['quantity'] if initial else 0) + sum(t['quantity'] * (1 if t['side'] == 'buy' else -1) for t in own)
+            problems = self._integrity(idea, trades, mark_date or expected_completed_session(at, calendar=calendar), calendar, snapshot,
+                                       initial, opening['created_at'] if initial else None)
             if open_quantity:
-                latest_trade_day = aware(own[-1]['recorded_at']).astimezone(TEHRAN_TZ).date().isoformat()
+                latest_trade_day = (expected_completed_session(aware(opening['created_at']), calendar=calendar) if initial
+                                    else aware(own[-1]['recorded_at']).astimezone(TEHRAN_TZ).date().isoformat())
                 if price is None or mark_date < latest_trade_day:
                     price = None
                     problems.append('قیمت پس از معامله هنوز موجود نیست')
@@ -242,12 +366,31 @@ class PaperRepository:
                     problems.append('قیمت ارزش‌گذاری روزانه کهنه است')
                 if price is not None:
                     marks[key] = price
-            integrity[key] = sorted(set(problems)) if own else []
+            integrity[key] = sorted(set(problems)) if own or initial else []
             observations[key] = dict(market, mark_rial=price, mark_date=mark_date, basis=basis,
                                      sale_proven=False, issues=integrity[key])
-        state = portfolio_state(protocol, ideas, trades, marks, integrity=integrity)
+        passive_values, passive_observations = {}, {}
+        if opening and opening['passive']:
+            latest = BrokerRepository(self.db).latest('portfolio')
+            by_symbol = {r['symbol_fa']: r for r in latest['rows']} if latest else {}
+            for holding in opening['passive']:
+                symbol = holding['symbol_fa']
+                row = by_symbol.get(symbol)
+                current = bool(latest and aware(latest['captured_at']) <= at and
+                    expected_completed_session(aware(latest['captured_at']), calendar=calendar) == expected_completed_session(at, calendar=calendar))
+                same_quantity = bool(row and row['quantity'] == holding['quantity'])
+                value = row['value_rial'] if current and same_quantity and row['value_rial'] > 0 else None
+                passive_values[symbol] = value
+                passive_observations[symbol] = dict(source_import_id=latest['id'] if latest else None,
+                    captured_at=latest['captured_at'] if latest else None, market_date=latest.get('market_date') if latest else None,
+                    value_rial=value, current_report_observation=current, quantity_unchanged=same_quantity,
+                    quote_session_verified=bool(latest and latest.get('market_date')), sale_proven=False,
+                    basis='broker_reported_value_only', issue=None if value is not None else 'گزارش تازه با تعداد ثابت این دارایی موجود نیست')
+        state = portfolio_state(protocol, ideas, trades, marks, integrity=integrity,
+                                opening=opening, passive_values=passive_values)
         state.update(protocol=protocol, ideas=ideas, events=events, observations=observations, evaluated_at=at.isoformat(),
-                     calendar_exceptions=calendar, runtime_matches=self._runtime_matches(protocol))
+                     opening=opening, passive_observations=passive_observations, calendar_exceptions=calendar,
+                     runtime_matches=self._runtime_matches(protocol))
         if not state['runtime_matches']:
             state['equity_rial'], state['total_net_rial'], state['return_pct'] = None, None, None
             state['loss_limit_reached'] = None
@@ -294,6 +437,8 @@ class PaperRepository:
             if idea_id not in ideas:
                 raise ValueError('تحلیل به این پورتفو مربوط نیست')
             idea = ideas[idea_id]
+            if side == 'buy' and idea.get('origin') == 'broker_opening':
+                raise ValueError('موجودی آغازین تحلیل خرید تازه نیست؛ برای خرید بیشتر تحلیل جدید ثبت کن')
             at = self._clock(protocol, events)
             if at < aware(idea['created_at']):
                 raise ValueError('معامله قبل از زمان ثبت تحلیل مجاز نیست')
@@ -339,7 +484,8 @@ class PaperRepository:
                          idea_sha256=digest(idea), mode=protocol['mode'], request_id=request_id)
             candidate = self._trades(events) + [dict(trade, idea_id=idea_id, recorded_at=at.isoformat())]
             marks = {key: item['mark_rial'] for key, item in report['observations'].items() if item['mark_rial'] is not None}
-            checked = portfolio_state(protocol, ideas, candidate, marks)  # نقد مشترک، تعداد و بهای میانگین پیش از ثبت.
+            checked = portfolio_state(protocol, ideas, candidate, marks, opening=report['opening'],
+                                      passive_values=report['passive_values'])  # نقد مشترک و موجودی واقعی آغاز آزمایش.
             if side == 'buy' and checked['loss_limit_reached']:
                 raise ValueError('این خرید با هزینه و قیمت مشاهده‌شده، سبد را به کف زیان می‌رساند')
             self._append(portfolio_id, idea_id, 'trade', at, trade, previous, request_id)
@@ -352,12 +498,14 @@ class PaperRepository:
             at = self._clock(protocol, events)
             report = self._report(protocol, ideas, events, at)
             payload = {k: report[k] for k in ('evaluated_at', 'ledger', 'equity_rial', 'total_net_rial', 'return_pct',
-                                             'observations', 'integrity', 'runtime_matches', 'calendar_exceptions')}
+                                             'observations', 'integrity', 'runtime_matches', 'calendar_exceptions',
+                                             'passive_observations', 'passive_values', 'locked_cash_rial', 'opening_rounding_rial')}
             self._append(portfolio_id, None, 'valuation', at, payload, previous, uuid.uuid4().hex)
         return payload
 
     def export(self, portfolio_id):
         report = self.report(portfolio_id)
         return dict(protocol=report['protocol'], ideas=report['ideas'], events=report['events'],
+                    opening=report['opening'],
                     exported_at=now_tehran().isoformat(), report=report,
                     accepted_for_signals=False, self_contained_replay=False)
