@@ -103,7 +103,7 @@ def test_precreated_public_archive_reloads_manifest_after_other_writer_finishes(
     result = second.crawl()
     assert second_session.calls == ['https://example.test/robots.txt', 'https://example.test/sitemap.xml']
     assert result['sitemap_successful'] == 1
-    on_disk = [json.loads(line) for line in (tmp_path / 'sources.jsonl').read_text().splitlines()]
+    on_disk = [json.loads(line) for line in (tmp_path / 'sources.jsonl').read_text(encoding='utf-8').splitlines()]
     assert len(second.records) == len(on_disk)
 
 
@@ -144,19 +144,19 @@ def test_archive_reader_uses_registered_source_list_but_reevaluation_requires_cu
     before, _ = read_query(folder)
     # Model an older source inventory: its captured output remains readable.
     code_file = 'config/production.yaml'
-    protocol = json.loads((folder / 'protocol.json').read_text())
+    protocol = json.loads((folder / 'protocol.json').read_text(encoding='utf-8'))
     protocol['code'].pop(code_file)
-    inputs = json.loads((folder / 'inputs.json').read_text())
+    inputs = json.loads((folder / 'inputs.json').read_text(encoding='utf-8'))
     inputs.pop('code/' + code_file)
     (folder / 'protocol.json').write_text(json.dumps(protocol))
     inputs['protocol.json'] = hashlib.sha256((folder / 'protocol.json').read_bytes()).hexdigest()
     (folder / 'inputs.json').write_text(json.dumps(inputs))
-    pointer = json.loads((folder / 'current.json').read_text())
+    pointer = json.loads((folder / 'current.json').read_text(encoding='utf-8'))
     revision = folder / pointer['revision']
-    result = json.loads((revision / 'result.json').read_text())
+    result = json.loads((revision / 'result.json').read_text(encoding='utf-8'))
     result['protocol'] = protocol
     (revision / 'result.json').write_text(json.dumps(result))
-    hashes = json.loads((revision / 'checksums.json').read_text())
+    hashes = json.loads((revision / 'checksums.json').read_text(encoding='utf-8'))
     hashes['result.json'] = hashlib.sha256((revision / 'result.json').read_bytes()).hexdigest()
     (revision / 'checksums.json').write_text(json.dumps(hashes))
     pointer['result_sha256'] = hashes['result.json']

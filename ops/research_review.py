@@ -106,7 +106,12 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
     values = pd.to_numeric(equity['equity_rial'], errors='coerce').to_numpy(dtype=float)
     if any(isinstance(v, (str, bool)) for v in equity['equity_rial']):
         raise ValueError('مقدار سرمایه باید عددی باشد')
-    for column in ('positions', 'stale_positions'):
+    count_columns = ['positions', 'stale_positions']
+    if protocol['portfolio_version'] == 'portfolio-v4':
+        if 'stale_fractional_exposures' not in equity:
+            raise ValueError('شمار ارزش‌گذاری کهنه کسر سهم در قرارداد جدید موجود نیست')
+        count_columns.append('stale_fractional_exposures')
+    for column in count_columns:
         if any(not finite(v) or v < 0 or v != int(v) for v in equity[column].tolist()):
             raise ValueError('شمار پوزیشن‌های منحنی باید عدد صحیح نامنفی باشد')
     if equity['stale_positions'].gt(equity['positions']).any():
@@ -141,7 +146,10 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
             raise ValueError('شمار شواهد برش نامعتبر است')
     if metrics['executions'] != len(fills) or metrics['open_positions'] != int(equity['positions'].iloc[-1]):
         raise ValueError('شمار اجرا یا پوزیشن با خروجی محفوظ سازگار نیست')
-    stale = int(equity['stale_positions'].gt(0).sum())
+    stale_days = equity['stale_positions'].gt(0)
+    if protocol['portfolio_version'] == 'portfolio-v4':
+        stale_days |= equity['stale_fractional_exposures'].gt(0)
+    stale = int(stale_days.sum())
     if metrics['stale_mark_days'] != stale:
         raise ValueError('شمار قیمت کهنه با منحنی سازگار نیست')
     if metrics['actual_corporate_entitlements_verified'] is not (metrics['corporate_action_events'] == 0):
@@ -166,7 +174,7 @@ def review_research(db, experiment_id, *, root=None):
     supported = {'expanding-portfolio-v3': 'PORTFOLIO', 'flow-portfolio-v3': 'FLOW'}
     if (payload['experiment_id'] != experiment_id or protocol.get('version') not in supported
             or '-' + supported[protocol['version']] + '-' not in experiment_id
-            or protocol.get('portfolio_version') != 'portfolio-v3'
+            or protocol.get('portfolio_version') not in ('portfolio-v3', 'portfolio-v4')
             or payload.get('accepted_for_signals') is not False
             or protocol.get('prospective_independence') is not False):
         raise ValueError('این بازبین فقط قراردادهای توسعه شناخته‌شده و فاقد مجوز سیگنال را می‌پذیرد')
@@ -218,6 +226,10 @@ def review_research(db, experiment_id, *, root=None):
         checked[i]['modes'] = {name: _checked_mode(folder, i, name, r, result['fold'], protocol, set(artifacts))
                                for name, r in result['modes'].items()}
     output = summarize_evidence(payload, checked)
+    output['portfolio_version'] = protocol['portfolio_version']
+    output['fractional_valuation_corrected'] = protocol['portfolio_version'] == 'portfolio-v4'
+    if protocol['portfolio_version'] == 'portfolio-v3':
+        output['limitations'].append('portfolio-v3 freezes synthetic fractional value; archives are readable, not corrected replays')
     # تطبیق خلاصه از منحنی بازسازی‌شده؛ خلاصه JSON به‌تنهایی منبع حقیقت نیست.
     for name, summary in output['summaries'].items():
         declared = payload['summary'][name]

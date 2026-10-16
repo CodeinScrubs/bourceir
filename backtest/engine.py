@@ -9,10 +9,9 @@
 - خرید در روز «قفل صف خرید» و فروش در روز «قفل صف فروش» انجام نمی‌شود
   (سفارش فروش تا اولین روز قابل خروج منتظر می‌ماند)
 - سقف مشارکت: حجم سفارش حداکثر ۵٪ حجم معاملات روز
-- اقدام شرکتی (سود نقدی، افزایش سرمایه، حق تقدم) روی پوزیشن باز: افت قیمت مرجع زیان نیست. تعداد سهم با
-  ضریب «قیمت پایانی دیروز ÷ قیمت مرجع امروز» تعدیل می‌شود (ارزش پوزیشن ثابت می‌ماند) — همان قرارداد «بازده
-  کل» که فیچرها و برچسب‌ها با pit_daily_returns دارند. ساده‌سازی آگاهانه: تأخیر پرداخت سود نقدی و ثبت سهام
-  جایزه لحاظ نمی‌شود (در نوسان‌گیری چندروزه عبور از مجمع نادر است؛ تعداد آن در متریک‌ها گزارش می‌شود)
+- تغییر مرجع روی پوزیشن باز با ضریب «قیمت پایانی دیروز ÷ قیمت مرجع امروز» به تعداد مصنوعی سهم تبدیل
+  می‌شود. کسر سهم غیرقابل خرج و غیرقابل معامله است؛ با قیمت مشاهده‌شده و تغییر مرجع بعدی ارزش‌گذاری
+  می‌شود. این فرض، نوع اقدام، حقوق واقعی، وصول سود نقدی یا قابلیت فروش سهام جایزه را اثبات نمی‌کند.
 """
 
 import logging
@@ -21,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
+from backtest.fractions import SyntheticFractionBook
 from backtest.models import ClosedTrade, OrderSide, PerformanceMetrics, Position, Trade
 from config import settings
 from core import market_rules
@@ -69,8 +69,7 @@ class BacktestEngine:
             raise ValueError("تناوب سالانه باید مثبت باشد")
         self.periods_per_year = periods_per_year
         self._daily_used: Dict[tuple, List[float]] = {}
-        self.corporate_action_receivable = 0.0   # ارزش کسر سهم (کمتر از یک سهم) پس از تعدیل؛ نقد قابل خرج نیست
-        self.corporate_action_receivable_cost = 0.0  # بهای تخصیص‌یافته به طلب، مستقل از بهای سهام قابل فروش
+        self._fractions = SyntheticFractionBook()  # موتور قدیمی ارزش ناخالص دارد؛ سبد مشترک خالص کارمزد خروج است.
         self.corporate_action_events = 0
         # جمع خرید و فروش هر پوزیشن از باز شدن تا بسته شدن کامل (یک معامله رفت‌وبرگشت)
         self._round_trips: Dict[str, Dict[str, float]] = {}
@@ -281,7 +280,8 @@ class BacktestEngine:
         """
         pos = self.positions.get(symbol_fa)
         prev_close = self.last_prices.get(symbol_fa)
-        if not pos or pos.quantity <= 0:
+        whole_exposure = pos is not None and pos.quantity > 0
+        if not whole_exposure and symbol_fa not in self._fractions.exposures:
             return 1.0
         if not self._valid_number(prev_close) or not self._valid_number(ref_price):
             raise ValueError('قیمت مرجع یا پایانی قبلی پوزیشن باز نامعلوم/نامعتبر است')
@@ -291,18 +291,23 @@ class BacktestEngine:
         if ratio < 1:
             logger.warning("قیمت مرجع «%s» در %s بالاتر از پایانی قبل است (%s > %s).",
                            symbol_fa, date, ref_price, prev_close)
+        self._fractions.adjust(symbol_fa, ratio)
+        self.corporate_action_events += 1
+        if not whole_exposure:
+            self.last_prices[symbol_fa] = ref_price
+            self._fractions.mark(symbol_fa, ref_price, date)
+            return ratio
         exact = pos.quantity * ratio
-        new_quantity = int(exact)
-        fraction = exact - new_quantity
+        new_quantity = math.floor(exact + 1e-9)
+        fraction = max(0., exact - new_quantity)
         fraction_cost = pos.total_cost * fraction / exact
-        self.corporate_action_receivable += fraction * ref_price
-        self.corporate_action_receivable_cost += fraction_cost
+        self._fractions.add(symbol_fa, fraction, fraction_cost)
+        self._fractions.mark(symbol_fa, ref_price, date)
         pos.total_cost = pos.total_cost - fraction_cost if new_quantity else 0.0
         if symbol_fa in self._round_trips:
             trip = self._round_trips[symbol_fa]
             trip['receivable_cost'] = trip.get('receivable_cost', 0.0) + fraction_cost
             trip['corporate_action_events'] = trip.get('corporate_action_events', 0) + 1
-        self.corporate_action_events += 1
         logger.info("اقدام شرکتی «%s» در %s: تعداد سهم %d → %d (ضریب %.4f).",
                     symbol_fa, date, pos.quantity, new_quantity, ratio)
         pos.quantity = new_quantity
@@ -312,6 +317,14 @@ class BacktestEngine:
             pos.opened_at = None
         self.last_prices[symbol_fa] = ref_price
         return ratio
+
+    @property
+    def corporate_action_receivable(self):
+        return self._fractions.value(self.last_prices)
+
+    @property
+    def corporate_action_receivable_cost(self):
+        return self._fractions.cost
 
     def mark_to_market(self) -> float:
         """ارزش کل پرتفوی = نقد + ارزش روز سهام‌ها (با آخرین قیمت شناخته‌شده هر نماد) + طلب اقدام شرکتی."""
@@ -447,9 +460,10 @@ class BacktestEngine:
 
             # ۰. اقدام شرکتی روی پوزیشن باز (قیمت مرجع امروز ≠ قیمت پایانی دیروز)
             pos = self.positions.get(symbol_fa)
-            if pos and pos.quantity > 0 and any(c.endswith('_raw') for c in prices_df.columns) and not self._valid_number(row.get('ref_price_raw')):
+            exposed = (pos is not None and pos.quantity > 0) or symbol_fa in self._fractions.exposures
+            if exposed and any(c.endswith('_raw') for c in prices_df.columns) and not self._valid_number(row.get('ref_price_raw')):
                 raise ValueError(f"قیمت مرجع پوزیشن باز در {date_str} نامعلوم/نامعتبر است؛ بازده قابل محاسبه نیست")
-            if pos and pos.quantity > 0 and not self._valid_number(row['_mark']):
+            if exposed and not self._valid_number(row['_mark']):
                 raise ValueError(f"قیمت ارزش‌گذاری پوزیشن باز در {date_str} نامعلوم است؛ بازده قابل محاسبه نیست")
             if "ref_price_raw" in row and pd.notna(row["ref_price_raw"]):
                 self.apply_corporate_action(symbol_fa, float(row["ref_price_raw"]), date_str)
@@ -482,6 +496,7 @@ class BacktestEngine:
             # ۳. ارزش‌گذاری پرتفوی با قیمت پایانی امروز
             if pd.notna(row["_mark"]):
                 self.last_prices[symbol_fa] = float(row["_mark"])
+                self._fractions.mark(symbol_fa, float(row['_mark']), date_str)
             self.record_equity(date_str)
             prev_volume = day_volume
 

@@ -2,11 +2,13 @@
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
 from config import settings
-from ops.report_files import private_report_path, write_private_report
+from ops.report_files import private_report_path, read_private_report, write_private_report
 
 
 @pytest.fixture
@@ -20,7 +22,7 @@ def private(tmp_path, monkeypatch):
 
 def test_success_replaces_a_complete_json_report(private):
     assert write_private_report(private, dict(unknown=None, note='نامعلوم')) == private
-    assert json.loads(private.read_text()) == dict(unknown=None, note='نامعلوم')
+    assert json.loads(private.read_text(encoding='utf-8')) == dict(unknown=None, note='نامعلوم')
     assert list(private.parent.iterdir()) == [private]
 
 
@@ -61,3 +63,29 @@ def test_input_alias_and_hardlink_cannot_be_a_report(private):
     with pytest.raises(ValueError):
         write_private_report(alias, {}, forbidden_paths=[private])
     assert private.read_bytes() == before and alias.read_bytes() == before
+
+
+@pytest.mark.parametrize('body', [b'[]', b'{"x": NaN}', b'{"x": Infinity}', b'{"x": 1e999}',
+                                b'{"x": 1, "x": 2}', b'{"inner": {"x": 1, "x": 2}}', b'\xff'])
+def test_reader_rejects_ambiguous_or_nonfinite_json(private, body):
+    private.write_bytes(body)
+    with pytest.raises(ValueError):
+        read_private_report(private)
+
+
+def test_reader_bounds_bytes_and_cannot_read_outside_private(private):
+    with pytest.raises(ValueError, match='اندازه'):
+        read_private_report(private, max_bytes=2)
+    with pytest.raises(ValueError):
+        read_private_report(private.parent.parent / 'outside.json')
+
+
+def test_persian_private_json_reads_with_python_utf8_mode_disabled(private):
+    write_private_report(private, dict(note='نامعلوم'))
+    code = ('import json,sys; from pathlib import Path; from config import settings; '
+            'from ops.report_files import read_private_report; '
+            'assert sys.flags.utf8_mode == 0; settings.DATA_DIR=Path(sys.argv[1]); '
+            'print(json.dumps(read_private_report(sys.argv[2]), ensure_ascii=True))')
+    completed = subprocess.run([sys.executable, '-X', 'utf8=0', '-c', code, str(settings.DATA_DIR), str(private)],
+                               check=True, capture_output=True, encoding='ascii')
+    assert json.loads(completed.stdout) == dict(note='نامعلوم')

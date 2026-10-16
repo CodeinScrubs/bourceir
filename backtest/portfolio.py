@@ -6,11 +6,12 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pandas as pd
 
+from backtest.fractions import SyntheticFractionBook
 from config import settings
 from core import market_rules
 from core.risk import finite_number
 
-PORTFOLIO_VERSION = "portfolio-v3"
+PORTFOLIO_VERSION = "portfolio-v4"
 
 
 @dataclass(frozen=True)
@@ -93,8 +94,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     positions, pending, executions, decisions, curve = {}, [], [], [], []
     cash, realized, fees = float(config.initial_capital_rial), 0.0, 0.0
     equity = cash
-    receivable = receivable_cost = 0.0
     buy_fee, sell_fee = settings.FEES["buy"], settings.FEES["sell"]
+    fractions = SyntheticFractionBook(sell_fee=sell_fee)
     slip, stopped, invalid, action_count = config.slippage_bps / 10000, False, False, 0
     day_position = {day: i for i, day in enumerate(calendar)}
 
@@ -113,34 +114,40 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         session, used = by_day.get(day, {}), {}
         index = day_position[day]
         # Adjust only already-held shares, before any current-day fills. Halts retain the last observed mark.
-        for symbol, pos in list(positions.items()):
+        for symbol in sorted(set(positions) | set(fractions.exposures)):
+            pos = positions.get(symbol)
             row = session.get(symbol)
             if row is None:
                 continue
             factor = row["action"]
-            if not row["valid"] or not math.isfinite(factor) or factor <= 0:
+            known_mark = all(math.isfinite(row[key]) and row[key] > 0 for key in ('mark', 'ref_price_raw'))
+            if not known_mark or (pos is not None and not row['valid']) or not math.isfinite(factor) or factor <= 0:
                 note(day, symbol, "unknown_open_position")
                 invalid = True
                 break
             if abs(factor - 1) > 1e-6:
-                exact = pos['quantity'] / factor
-                whole = math.floor(exact + 1e-9)
-                fraction = max(0.0, exact - whole)
-                # A synthetic fractional entitlement is a non-cash receivable, never a tradable share.
-                receivable += fraction * row['ref_price_raw'] * (1 - sell_fee)
-                fraction_cost = pos['cost'] * fraction / exact
-                receivable_cost += fraction_cost
-                pos['cost'] -= fraction_cost
-                pos['quantity'] = whole
-                if dip_rule is not None:
-                    pos['target'] *= factor
+                # کسر قبلی هم تعدیل می‌شود؛ حتی اگر از یک سهم بیشتر شود، قابل فروش فرض نمی‌شود.
+                fractions.adjust(symbol, 1 / factor)
+                if pos is not None:
+                    exact = pos['quantity'] / factor
+                    whole = math.floor(exact + 1e-9)
+                    fraction = max(0.0, exact - whole)
+                    fraction_cost = pos['cost'] * fraction / exact
+                    fractions.add(symbol, fraction, fraction_cost)
+                    pos['cost'] -= fraction_cost
+                    pos['quantity'] = whole
+                    if dip_rule is not None:
+                        pos['target'] *= factor
+                    if whole == 0:
+                        del positions[symbol]
+                        pos = None
                 action_count += 1
-                if whole == 0:
-                    del positions[symbol]
-                    continue
-            pos["mark"], pos["mark_date"] = row["mark"], day
+            fractions.mark(symbol, row['mark'], day)
+            if pos is not None:
+                pos["mark"], pos["mark_date"] = row["mark"], day
         if invalid:
-            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions), stale_positions=0))
+            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
+                              stale_positions=0, stale_fractional_exposures=0))
             break
         # Pending purchase budget was fixed after the preceding session, not today's high/low/close.
         for decision in pending:
@@ -198,7 +205,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             used[symbol] = (float(quantity), quantity * price)
         pending = []
         if invalid:
-            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions), stale_positions=0))
+            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
+                              stale_positions=0, stale_fractional_exposures=0))
             break
         for symbol, pos in list(positions.items()):
             if dip_rule is None and index < pos["due"]:
@@ -261,15 +269,17 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             else:
                 note(day, symbol, "partial_exit_wait")
         if invalid:
-            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions), stale_positions=0))
+            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
+                              stale_positions=0, stale_fractional_exposures=0))
             break
+        receivable = fractions.value()
         equity = cash + receivable + sum(p["quantity"] * p["mark"] * (1 - sell_fee) for p in positions.values())
         # Research circuit breaker: no new buys after breaching the user's starting-capital loss floor.
         # It does not assume that held positions can be sold at the floor.
         stopped |= equity <= config.initial_capital_rial * (1 - config.max_loss_pct)
         curve.append(dict(date=day, equity_rial=equity, cash_rial=cash, positions=len(positions),
                           stale_positions=sum(p["mark_date"] != day for p in positions.values()), risk_stopped=stopped,
-                          noncash_receivable_rial=receivable))
+                          stale_fractional_exposures=fractions.stale_count(day), noncash_receivable_rial=receivable))
         if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped:
             reservable_cash = cash
             slots = config.max_positions - len(positions)
@@ -294,12 +304,15 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                    max_drawdown=None if invalid else float(-drawdown.min()), final_equity_rial=final,
                    initial_capital_rial=config.initial_capital_rial, realized_net_rial=realized, fees_rial=fees,
                    executions=len(executions), open_positions=len(positions), corporate_action_events=action_count,
-                   noncash_receivable_rial=receivable, noncash_receivable_cost_rial=receivable_cost,
+                   noncash_receivable_rial=fractions.value(), noncash_receivable_cost_rial=fractions.cost,
+                   fractional_exposures=fractions.records(),
                    actual_corporate_entitlements_verified=action_count == 0,
-                   stopped_new_entries=stopped, stale_mark_days=int(equity_frame["stale_positions"].gt(0).sum()))
+                   stopped_new_entries=stopped, stale_mark_days=int((equity_frame['stale_positions'].gt(0)
+                       | equity_frame.get('stale_fractional_exposures', pd.Series(0, index=equity_frame.index)).gt(0)).sum()))
     assumptions = dict(version=PORTFOLIO_VERSION, config=asdict(config), fees=dict(settings.FEES),
         execution_model="bounded_daily_vwap_proxy" if not config.stress else "buy_high_sell_low_stress",
         corporate_action_model="synthetic_whole_shares_plus_noncash_fraction", same_day_sale_cash_reused=False,
+        fractional_valuation='current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed',
         mark_basis="last_observed_official_close_net_sell_fee", shorting=False, queue_position_proven=False,
         historical_same_day_resale_permissions_verified=False,
         limitations=["historical universe incomplete", "synthetic corporate actions are not actual entitlements",

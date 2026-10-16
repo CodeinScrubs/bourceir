@@ -102,3 +102,4 @@ class PerformanceMetrics:
     equity_curve: List[Dict[str, Any]] = field(default_factory=list)
     execution_model: str = "daily_aggregate_proxy"
     corporate_action_assumption: str = "reference_ratio_share_multiplier"
+    fractional_valuation: str = "observed_price_gross_and_subsequent_reference_factors; noncash_without_settlement"
