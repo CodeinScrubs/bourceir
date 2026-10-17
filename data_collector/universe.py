@@ -20,10 +20,6 @@ from database.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-# فهرست دریافتی باید حداقل این نسبت از جامعه فعال فعلی باشد تا غیرفعال‌سازی انجام شود
-MIN_COMPLETE_RATIO = 0.9
-
-
 class UniverseManager:
     """مدیریت دایره نمادهای تحت پوشش (سهام بورس و فرابورس)."""
 
@@ -61,8 +57,8 @@ class UniverseManager:
     def sync_universe(self) -> Dict[str, int]:
         """
         دریافت فهرست کامل سهام داخل دامنه از منبع داده و ثبت/به‌روزرسانی در دیتابیس.
-        نمادهایی که دیگر در بازار نیستند غیرفعال می‌شوند (داده‌شان حذف نمی‌شود — برای جلوگیری از سوگیری بقا)،
-        ولی فقط وقتی فهرست دریافتی کامل به نظر برسد (حداقل MIN_COMPLETE_RATIO از نمادهای فعال فعلی).
+        حضور، مجوز به‌روزرسانی مثبت است؛ غیبت در دیده‌بان، حذف یا توقف قطعی نیست.
+        حتی پاسخ هم‌اندازه پاسخ قبلی، کامل بودن عضویت را اثبات نمی‌کند.
         """
         if self.provider is None:
             raise RuntimeError("برای همگام‌سازی جامعه نمادها، provider لازم است.")
@@ -71,6 +67,7 @@ class UniverseManager:
         if not universe:
             logger.error("فهرست نمادها از منبع داده دریافت نشد؛ دیتابیس دست‌نخورده باقی ماند.")
             return {"received": 0, "saved": 0, "failed": 0, "deactivated": 0}
+        active_before = self.db.get_universe_symbols()
         saved = failed = 0
         for meta in universe:
             if self.db.upsert_symbol(meta):
@@ -78,17 +75,14 @@ class UniverseManager:
             else:
                 failed += 1
 
-        deactivated = 0
-        active_before = self.db.get_universe_symbols()
         received_codes = {m["ins_code"] for m in universe}
-        if active_before and len(universe) >= MIN_COMPLETE_RATIO * len(active_before):
-            stale = [s["id"] for s in active_before if s.get("ins_code") and s["ins_code"] not in received_codes]
-            deactivated = self.db.set_symbols_active(stale, False)
-        elif active_before:
-            logger.warning("فهرست دریافتی (%d) خیلی کوچک‌تر از جامعه فعلی (%d) است؛ هیچ نمادی غیرفعال نشد.",
-                           len(universe), len(active_before))
-        logger.info("همگام‌سازی جامعه سهام: %d ثبت/به‌روز، %d ناموفق، %d غیرفعال.", saved, failed, deactivated)
-        return {"received": len(universe), "saved": saved, "failed": failed, "deactivated": deactivated}
+        missing = sorted(s['symbol_fa'] for s in active_before if s.get('ins_code') not in received_codes)
+        if missing:
+            logger.warning('%d نماد فعال محلی در پاسخ نیستند؛ وضعیت قبلی حفظ شد و علت غیبت نامعلوم است.', len(missing))
+        logger.info('همگام‌سازی جامعه سهام: %d ثبت/به‌روز، %d ناموفق، %d غیبت نامعلوم.', saved, failed, len(missing))
+        return dict(received=len(universe), saved=saved, failed=failed, deactivated=0,
+                    missing_from_response=len(missing), missing_symbols=missing,
+                    absence_reason_verified=False)
 
     def get_tracked_symbols(self) -> List[str]:
         """نمادهای داخل دامنه که در دیتابیس ثبت شده‌اند."""

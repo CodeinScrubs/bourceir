@@ -73,15 +73,16 @@ def _meta(i):
     return {"symbol_fa": f"سهم{chr(1570 + i)}", "ins_code": str(i), "instrument_type_code": 300}
 
 
-def test_delisted_symbols_are_deactivated_not_deleted(db):
+def test_ninety_percent_watch_coverage_does_not_prove_a_missing_symbol_delisted(db):
     UniverseManager(db=db, provider=_StaticProvider([_meta(i) for i in range(10)])).sync_universe()
     sym_id = db.get_symbol_id(_meta(9)["symbol_fa"])
     db.insert_daily_price(sym_id, "2026-10-10", 100, 110, 90, 105, volume=1, value=1.0)
 
     result = UniverseManager(db=db, provider=_StaticProvider([_meta(i) for i in range(9)])).sync_universe()
-    assert result["deactivated"] == 1
-    assert len(db.get_universe_symbols()) == 9
-    assert db.get_symbol(_meta(9)["symbol_fa"])["is_active"] == 0
+    assert result['deactivated'] == 0 and result['missing_from_response'] == 1
+    assert result['missing_symbols'] == [_meta(9)['symbol_fa']] and not result['absence_reason_verified']
+    assert len(db.get_universe_symbols()) == 10
+    assert db.get_symbol(_meta(9)["symbol_fa"])["is_active"] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM daily_prices WHERE symbol_id = ?;", (sym_id,)).fetchone()[0] == 1
 
 
@@ -89,6 +90,27 @@ def test_suspiciously_small_universe_does_not_deactivate(db):
     UniverseManager(db=db, provider=_StaticProvider([_meta(i) for i in range(10)])).sync_universe()
     result = UniverseManager(db=db, provider=_StaticProvider([_meta(0)])).sync_universe()
     assert result["deactivated"] == 0 and len(db.get_universe_symbols()) == 10
+
+
+def test_returning_instrument_can_be_reactivated_from_positive_source_evidence(db):
+    manager = UniverseManager(db=db, provider=_StaticProvider([_meta(i) for i in range(10)]))
+    manager.sync_universe()
+    sid = db.get_symbol_id(_meta(9)['symbol_fa'])
+    db.set_symbols_active([sid], False)
+    result = manager.sync_universe()
+    assert result['missing_from_response'] == 0
+    assert db.get_symbol(_meta(9)['symbol_fa'])['is_active'] == 1
+
+
+def test_universe_collection_reports_unknown_absence_as_partial(db):
+    from data_collector.scheduler import DataCollector
+
+    UniverseManager(db=db, provider=_StaticProvider([_meta(i) for i in range(10)])).sync_universe()
+    collector = DataCollector(db=db, provider=_StaticProvider([_meta(i) for i in range(9)]))
+    result = collector.sync_universe()
+    assert result['status'] == 'partial'
+    assert result['symbols_requested'] == 10 and result['symbols_succeeded'] == 9 and result['symbols_failed'] == 1
+    assert result['missing_from_response'] == 1 and result['deactivated'] == 0
 
 
 def test_symbol_conflict_never_returns_another_symbols_id(db):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brs-quant-engine"
-version = "0.7.13"
+version = "0.7.14"
 description = "سامانه هوشمند نوسان‌گیری درون‌روزی و کوتاه‌مدت سهام بورس و فرابورس تهران"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"

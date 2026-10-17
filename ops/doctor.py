@@ -162,6 +162,7 @@ def check_jev(report: DoctorReport) -> None:
 
 
 def check_database(report: DoctorReport, *, read_only: bool = False) -> None:
+    from core.screening import expected_completed_session
     from core.timeutils import now_tehran
     from database.db import DatabaseManager
     from database.migrator import discover_migrations
@@ -195,20 +196,35 @@ def check_database(report: DoctorReport, *, read_only: bool = False) -> None:
                    "" if status == OK else "برنامه را یک بار دیگر اجرا کنید تا مایگریشن‌ها اعمال شوند.")
         if version != latest:
             return  # خواننده تشخیصی نباید ستون تازه را از ساختار قدیمی بخواند یا مایگریشن اجرا کند.
-        universe = len(db.get_universe_symbols())
+        instruments = db.get_universe_symbols()
+        universe = len(instruments)
         if universe == 0:
             report.add("جامعه سهام", WARN, "هنوز نمادی از کل بازار ثبت نشده",
                        "در داشبورد دکمه «به‌روزرسانی داده‌ها» را بزنید (یا: python brs.py update).")
         else:
             report.add("جامعه سهام", OK, f"{universe} نماد سهام بورس و فرابورس")
-        last = db.conn.execute("SELECT MAX(date) FROM daily_prices;").fetchone()[0]
+        at = now_tehran()
+        today = at.date().isoformat()
+        ids = [item['id'] for item in instruments]
+        marks = ','.join('?' for _ in ids)
+        if ids:
+            row = db.conn.execute(f'''SELECT MAX(CASE WHEN date<=? THEN date END) AS latest,
+                COUNT(*) AS total, SUM(CASE WHEN date>? THEN 1 ELSE 0 END) AS future
+                FROM daily_prices WHERE source='tsetmc' AND symbol_id IN ({marks})''', (today, today, *ids)).fetchone()
+            last, count, future = row['latest'], row['total'], row['future'] or 0
+        else:
+            last, count, future = None, 0, 0
         if not last:
             report.add("تازگی داده روزانه", WARN, "هنوز قیمتی ثبت نشده", "به‌روزرسانی داده‌ها را اجرا کنید.")
         else:
-            age = (now_tehran().date() - datetime.fromisoformat(last).date()).days
-            count = db.conn.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0]
-            status = OK if 0 <= age <= 4 else WARN
-            report.add("تازگی داده روزانه", status, f"آخرین روز: {last} ({age} روز پیش) — {count:,} رکورد",
+            expected = expected_completed_session(at, calendar=db.get_market_calendar())
+            covered = db.conn.execute(f'''SELECT COUNT(DISTINCT symbol_id) FROM daily_prices
+                WHERE date=? AND source='tsetmc' AND symbol_id IN ({marks})''', (last, *ids)).fetchone()[0]
+            status = OK if last == expected and not future and covered == universe else WARN
+            report.add("تازگی داده روزانه", status,
+                       f"آخرین روز: {last}؛ جلسه مورد انتظار تقویم: {expected} — {count:,} رکورد؛ "
+                       f"پوشش آخرین روز {covered}/{universe}؛ ردیف تاریخ آینده {future}. "
+                       "علت نبود هر نماد و کامل بودن انتشار با بیشترین تاریخ به‌تنهایی معلوم نیست.",
                        "" if status == OK else "به‌روزرسانی داده‌ها را اجرا کنید.")
     except Exception as e:
         report.add('خواندن پایگاه داده', ERROR, type(e).__name__, 'گزارش فقط‌خواندنی خطا را اصلاح نمی‌کند.')

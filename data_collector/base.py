@@ -78,3 +78,19 @@ class BaseDataProvider(ABC):
     def get_trade_session(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
         """پاسخ خام ریزمعاملات یک تاریخ مشخص با نشانی و زمان دریافت؛ کامل بودن هنوز اثبات نشده."""
         raise NotImplementedError
+
+    def get_market_observation(self) -> Optional[Dict[str, Any]]:
+        """دیده‌بان با هویت ابزار و خام محفوظ؛ تاریخ نامعلوم از زمان دریافت ساخته نمی‌شود."""
+        raise NotImplementedError
+
+    def get_closing_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        """آخرین کندل هر ابزار، با تاریخ مستقل خود منبع و پاسخ محفوظ."""
+        raise NotImplementedError
+
+    def get_market_overview(self, flow: int) -> Optional[Dict[str, Any]]:
+        """شاخص‌های رسمی یک بازار؛ دامنه آن با جمع سهام عادی یکسان فرض نمی‌شود."""
+        raise NotImplementedError
+
+    def get_sector_names(self) -> Optional[Dict[str, str]]:
+        """نام صنایع؛ نبود نام، مجوز حدس صنعت نیست."""
+        raise NotImplementedError
