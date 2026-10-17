@@ -18,7 +18,7 @@ from tests.conftest import ROOT_DIR, FakeSession
 DASHBOARD = str(ROOT_DIR / "dashboard" / "app.py")
 ROOT_APP = str(ROOT_DIR / "app.py")
 
-PAGES = ["🏠 خانه", "🔎 فهرست بررسی", '🧪 آزمایشگاه فیلترها', "🛡️ برنامه و دفتر معاملات", '💼 پورتفوی مجازی', "🏦 حساب و تطبیق فارابی", "📊 بررسی نماد", "📡 دیده‌بان زنده",
+PAGES = ["🏠 خانه", '🌐 بررسی بازار امروز', "🔎 فهرست بررسی", '🧪 آزمایشگاه فیلترها', "🛡️ برنامه و دفتر معاملات", '💼 پورتفوی مجازی', "🏦 حساب و تطبیق فارابی", "📊 بررسی نماد", "📡 دیده‌بان زنده",
          '🗓️ دفتر مشاهده آینده', "📰 اطلاعیه‌های کدال", "🔬 پژوهش", "📚 مطالعه رشد نمادها", "🩺 سلامت سامانه", "ℹ️ راهنما"]
 
 
@@ -89,6 +89,46 @@ def test_root_app_renders_on_every_run(dashboard_db):
         at = AppTest.from_file(ROOT_APP, default_timeout=60).run()
         assert not at.exception
         assert any("BRS" in t.value for t in at.title)
+
+
+def test_home_labels_historical_partial_coverage_and_does_not_invent_queue(dashboard_db):
+    from tests.test_client_quality import coherent_history
+
+    prices, _ = coherent_history()
+    frame = prices.head(2).copy()
+    frame['date'] = ['2024-01-01', '2099-01-01']
+    with DatabaseManager(db_path=dashboard_db) as db:
+        first = db.upsert_symbol(dict(symbol_fa='کیان', ins_code='1', instrument_type_code=300))
+        db.upsert_symbol(dict(symbol_fa='دیگر', ins_code='2', instrument_type_code=303))
+        db.upsert_daily_prices_df(first, frame)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception
+    assert any('گزارش بازار امروز نیست' in value.value for value in at.warning)
+    assert any('فاقد ردیف این جلسه' in value.value for value in at.warning)
+    assert any('تک‌قیمت' in value.label for value in at.metric)
+    assert not any('صف خرید /' in value.label for value in at.metric)
+    assert any('۱۴۰۲' in value.value for value in at.subheader)
+
+
+def test_market_review_renders_unambiguous_counts_and_isolated_signed_return(dashboard_db, monkeypatch):
+    from datetime import datetime
+
+    from core.timeutils import TEHRAN_TZ
+    from ops.market_review import collect_market_review
+    from tests.test_market_review import NOW, ReviewProvider
+
+    root = settings.DATA_DIR / 'private' / 'market-reviews'
+    monkeypatch.setattr('ops.market_review.now_tehran', lambda: datetime(2026, 10, 17, 13, 16, tzinfo=TEHRAN_TZ))
+    monkeypatch.setattr('ops.market_review.now_tehran_iso', lambda: NOW)
+    collect_market_review(ReviewProvider(root), output_root=root)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🌐 بررسی بازار امروز').run()
+    assert not at.exception
+    values = {value.label: value.value for value in at.metric}
+    assert values['کندل معتبر'] == '۱' and values['سهم منفی'] == '۰'
+    assert values['میانه بازده پایانی'] == '\u2066+۱.۰۰٪\u2069'
+    assert any('۱ سهم مثبت؛ ۰ سهم بدون تغییر' in item.value for item in at.caption)
+    assert 'معامله با کندل معتبر' in set(at.dataframe[0].value['وضعیت داده'])
 
 
 def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dashboard_db):

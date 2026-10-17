@@ -24,6 +24,7 @@ from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from dashboard.broker import page_broker  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
+from dashboard.market_review import page_market_review  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
 from dashboard.query_screener import page_query_screener  # noqa: E402
 from dashboard.stock_study import page_stock_study  # noqa: E402
@@ -91,12 +92,13 @@ def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
 def fa_num(value, digits: int = 0) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"
-    return to_fa_digits(f"{value:,.{digits}f}")
+    formatted = to_fa_digits(f"{value:,.{digits}f}")
+    return '\u2066' + formatted + '\u2069' if value < 0 else formatted
 
 
 def billion_toman(rial_value) -> float:
     """تبدیل ریال به میلیارد تومان (فقط برای نمایش؛ ذخیره‌سازی همیشه ریالی است)."""
-    return rial_value / 10 / 1e9
+    return None if rial_value is None else rial_value / 10 / 1e9
 
 
 @st.cache_data(ttl=60)
@@ -108,14 +110,16 @@ def symbol_list() -> list:
 @st.cache_data(ttl=60)
 def market_pulse() -> dict:
     """نبض بازار در آخرین روز معاملاتی ثبت‌شده (فقط سهام داخل دامنه پروژه)."""
-    from core.client_quality import coherent_side
+    from core.market_summary import summarize_daily_market
+    from core.timeutils import now_tehran
 
     with ro_db() as db:
         ids = [s["id"] for s in db.get_universe_symbols()]
     if not ids:
         return {}
     placeholders = ",".join("?" for _ in ids)
-    last = query_df(f"SELECT MAX(date) AS d FROM daily_prices WHERE source = 'tsetmc' AND symbol_id IN ({placeholders});", tuple(ids))["d"].iloc[0]
+    last = query_df(f"SELECT MAX(date) AS d FROM daily_prices WHERE source = 'tsetmc' AND date <= ? "
+                    f"AND symbol_id IN ({placeholders});", (now_tehran().date().isoformat(), *ids))["d"].iloc[0]
     if not last:
         return {}
     df = query_df(
@@ -127,16 +131,7 @@ def market_pulse() -> dict:
         LEFT JOIN client_types_daily ct ON ct.symbol_id = dp.symbol_id AND ct.date = dp.date
         WHERE dp.date = ? AND dp.source = 'tsetmc' AND dp.symbol_id IN ({placeholders});
         """, (last, *ids))
-    flags = market_rules.lock_flags(df)
-    ret = market_rules.pit_daily_returns(df)
-    net = coherent_side(df, df, 'buy')[2] - coherent_side(df, df, 'sell')[2]
-    return {
-        "date": last, "count": len(df), "up": int((ret > 0).sum()), "down": int((ret < 0).sum()),
-        "locked_up": int(flags["locked_up"].sum()), "locked_down": int(flags["locked_down"].sum()),
-        "value": float(df["value"].sum()),
-        "real_flow": float(net.sum(min_count=1)) if net.notna().any() else None,
-        "flow_coverage": int(net.notna().sum()),
-    }
+    return dict(date=last, **summarize_daily_market(df, expected_count=len(ids)))
 
 
 @st.cache_data(ttl=60)
@@ -190,6 +185,7 @@ def latest_snapshots() -> pd.DataFrame:
 # ═══════════════════════════════════════════════
 
 JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پایش زنده بازار", "codal": "اطلاعیه‌های کدال", "research": "پژوهش استراتژی‌های پایه",
+              'market-review': 'بررسی مستند بازار امروز',
               "research-dip": "آزمون روش خرید در اصلاح", 'research-portfolio': 'پژوهش پرتفوی با نقد مشترک',
               'research-flow': 'پژوهش فیلترهای ثابت جریان حقیقی', 'research-preflight': 'بررسی قرارداد داده پژوهش'}
 
@@ -234,13 +230,21 @@ def page_home() -> None:
     pulse = market_pulse()
     if pulse:
         st.subheader(f"نبض بازار — {to_jalali(pulse['date'])}")
-        st.caption(f"{fa_num(pulse['count'])} سهم بورس و فرابورس — مبالغ به میلیارد تومان")
+        st.caption(f"پوشش {fa_num(pulse['count'])} از {fa_num(pulse['expected_count'])} سهم جامعه جاری — مبالغ به میلیارد تومان")
+        if pulse['date'] != now.date().isoformat():
+            st.warning('این نبض مربوط به آخرین جلسه ثبت‌شده است و گزارش بازار امروز نیست. '
+                       'برای دریافت مستقل جلسه جاری، صفحه «بررسی بازار امروز» را باز کنید.')
+        if pulse['missing_count'] or pulse['return_unknown_count']:
+            st.warning(f"{fa_num(pulse['missing_count'])} سهم فاقد ردیف این جلسه و "
+                       f"{fa_num(pulse['return_unknown_count'])} ردیف فاقد بازده معتبر است؛ در شمار مثبت و منفی وارد نشده‌اند.")
         row1 = st.columns(2)
-        row1[0].metric("📈 مثبت / 📉 منفی", f"{fa_num(pulse['up'])} / {fa_num(pulse['down'])}")
-        row1[1].metric("🟢 صف خرید / 🔴 صف فروش", f"{fa_num(pulse['locked_up'])} / {fa_num(pulse['locked_down'])}",
-                       help="نمادهایی که کل روز در سقف یا کف دامنه نوسان قفل بودند")
+        row1[0].metric("📈 مثبت / 📉 منفی", f"\u2066{fa_num(pulse['up'])} / {fa_num(pulse['down'])}\u2069")
+        row1[1].metric("معاملات تک‌قیمت صعودی / نزولی", f"\u2066{fa_num(pulse['locked_up'])} / {fa_num(pulse['locked_down'])}\u2069",
+                       help="قرینه کندلی است؛ بدون مظنه و دامنه معتبر، وجود صف یا امکان اجرای سفارش را اثبات نمی‌کند")
         row2 = st.columns(2)
         row2[0].metric("💵 ارزش معاملات", fa_num(billion_toman(pulse["value"])))
+        if pulse['value_coverage'] < pulse['count']:
+            st.caption(f"ارزش معتبر برای {fa_num(pulse['value_coverage'])} از {fa_num(pulse['count'])} ردیف موجود است؛ جمع ناقص است.")
         if pulse["real_flow"] is not None:
             partial = pulse["flow_coverage"] < pulse["count"]
             row2[1].metric("👥 ورود پول حقیقی" + (" (ناقص)" if partial else ""), fa_num(billion_toman(pulse["real_flow"])),
@@ -689,6 +693,7 @@ ensure_database()
 
 PAGES = {
     "🏠 خانه": page_home,
+    '🌐 بررسی بازار امروز': lambda: page_market_review(job_panel),
     "🔎 فهرست بررسی": page_shortlist,
     '🧪 آزمایشگاه فیلترها': page_flow_lab,
     "🛡️ برنامه و دفتر معاملات": page_workbench,

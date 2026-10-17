@@ -12,6 +12,7 @@
 """
 
 import logging
+import math
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -23,7 +24,7 @@ from urllib3.util.retry import Retry
 
 from config import settings
 from core.text import normalize_fa, normalize_symbol
-from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, now_tehran, now_tehran_iso
+from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
 from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, DAILY_COLUMNS, BaseDataProvider
 from data_collector.validator import DataValidator
 
@@ -71,7 +72,10 @@ class TsetmcProvider(BaseDataProvider):
         try:
             response = self.session.get(url, timeout=timeout or self.timeout)
             response.raise_for_status()
-            return response.json()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError('ریشه پاسخ TSETMC باید شیء JSON باشد')
+            return payload
         except Exception as e:
             logger.error("خطا در دریافت داده از TSETMC (%s): %s", url, e)
             return None
@@ -352,7 +356,21 @@ class TsetmcProvider(BaseDataProvider):
     def get_client_types_today(self) -> Dict[str, Dict[str, Any]]:
         """حقیقی/حقوقی امروز برای کل بازار در یک درخواست: {ins_code: {...}}"""
         data = self._get_json(f"{BASE_URL}/ClientType/GetClientTypeAll", rate_limit=False)
-        return {str(r["insCode"]): r for r in (data or {}).get("clientTypeAllDto", [])}
+        rows = data.get('clientTypeAllDto') if isinstance(data, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) or not row.get('insCode') for row in rows):
+            logger.error('ساختار آمار حقیقی/حقوقی دیده‌بان نامعتبر است')
+            return {}
+        result, duplicates = {}, set()
+        for row in rows:
+            key = str(row['insCode'])
+            if key in result:
+                duplicates.add(key)
+            result[key] = row
+        for key in duplicates:
+            result.pop(key)
+        if duplicates:
+            logger.error('آمار حقیقی/حقوقی تکراری برای %s شناسه؛ مؤلفه مبهم مصرف نشد', len(duplicates))
+        return result
 
     @staticmethod
     def _provider_timestamp(heven: Any, deven: Any = None) -> Optional[str]:
@@ -365,7 +383,7 @@ class TsetmcProvider(BaseDataProvider):
             return None
         try:
             stamp = datetime.fromisoformat(f"{deven_to_iso(deven)}T{heven_to_time(heven)}")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         return stamp.replace(tzinfo=TEHRAN_TZ).isoformat()
 
@@ -378,7 +396,7 @@ class TsetmcProvider(BaseDataProvider):
             "symbol_fa": normalize_symbol(row.get("lva", "")),
             "captured_at": captured_at,
             "provider_timestamp": cls._provider_timestamp(row.get("hEven"), row.get("dEven")),
-            "last_trade_time": heven_to_time(row["hEven"]) if row.get("hEven") else None,
+            "last_trade_time": None,
             "last_price": row.get("pdv"),
             "close_price": row.get("pcl"),
             "open_price": row.get("pf"),
@@ -394,16 +412,33 @@ class TsetmcProvider(BaseDataProvider):
             "source": "tsetmc",
             "price_unit": settings.PRICE_UNIT,
         }
-        for level in row.get("blDs") or []:
-            n = level.get("n")
-            if not n or n > 5:
+        try:
+            time_text = heven_to_time(row['hEven'])
+            datetime.strptime(time_text, '%H:%M:%S')
+            snap['last_trade_time'] = time_text
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+        levels = row.get('blDs')
+        seen_levels, duplicate_levels = set(), set()
+        for level in levels if isinstance(levels, list) else []:
+            if not isinstance(level, dict):
                 continue
+            n = level.get("n")
+            if type(n) is not int or not 1 <= n <= 5:
+                continue
+            if n in seen_levels:
+                duplicate_levels.add(n)
+            seen_levels.add(n)
             snap[f"bid_price_{n}"] = level.get("pmd")
             snap[f"bid_vol_{n}"] = level.get("qmd")
             snap[f"bid_count_{n}"] = level.get("zmd")
             snap[f"ask_price_{n}"] = level.get("pmo")
             snap[f"ask_vol_{n}"] = level.get("qmo")
             snap[f"ask_count_{n}"] = level.get("zmo")
+        for n in duplicate_levels:
+            for side in ('bid', 'ask'):
+                for field in ('price', 'vol', 'count'):
+                    snap[f'{side}_{field}_{n}'] = None
         # صف خرید/فروش فقط وقتی معنا دارد که بهترین مظنه روی سقف/کف دامنه نوسان باشد
         limit_up, limit_down = snap["price_limit_up"], snap["price_limit_down"]
         # بدون دامنه مجاز روز، وجود صف نامعلوم است (None)، نه صفر
@@ -427,8 +462,12 @@ class TsetmcProvider(BaseDataProvider):
     def get_market_date(self, ins_code: str) -> Optional[str]:
         """تاریخ آخرین روز معاملاتی که داده دیده‌بان به آن تعلق دارد (از روی یک نماد معامله‌شده)."""
         data = self._get_json(f"{BASE_URL}/ClosingPrice/GetClosingPriceInfo/{ins_code}")
-        final_date = ((data or {}).get("closingPriceInfo") or {}).get("finalLastDate")
-        return deven_to_iso(final_date) if final_date else None
+        info = data.get('closingPriceInfo') if isinstance(data, dict) else None
+        try:
+            final_date = deven_to_iso(info.get('finalLastDate')) if isinstance(info, dict) else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return final_date if is_canonical_iso_date(final_date) else None
 
     def get_session_candles(self) -> Optional[Dict[str, Any]]:
         """
@@ -437,7 +476,11 @@ class TsetmcProvider(BaseDataProvider):
         خروجی: {'date': 'YYYY-MM-DD', 'candles': [{'ins_code', ستون‌های DAILY_COLUMNS}, ...]}
         """
         data = self._get_json(MARKET_WATCH_STOCKS, rate_limit=False)
-        rows = [r for r in (data or {}).get("marketwatch", []) if (r.get("qtj") or 0) > 0]
+        rows = data.get('marketwatch') if isinstance(data, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            return None
+        rows = [row for row in rows if type(row.get('qtj')) in (int, float)
+                and math.isfinite(row['qtj']) and row['qtj'] > 0]
         if not rows:
             return None
         dated = []
@@ -469,14 +512,88 @@ class TsetmcProvider(BaseDataProvider):
 
     def get_market_snapshots(self) -> Optional[List[Dict[str, Any]]]:
         data = self._get_json(MARKET_WATCH_STOCKS, rate_limit=False)
-        if not data:
+        rows = data.get('marketwatch') if isinstance(data, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            logger.error('ساختار دیده‌بان بازار نامعتبر است')
             return None
         client_types = self.get_client_types_today()
         captured_at = now_tehran_iso()  # زمانی که هر دو پاسخ واقعاً در دست ماست (نه قبل از درخواست)
         return [
             self.snapshot_from_market_watch(row, client_types.get(str(row.get("insCode"))), captured_at)
-            for row in data.get("marketwatch", [])
+            for row in rows
         ]
+
+    def get_market_observation(self) -> Optional[Dict[str, Any]]:
+        # مسیر مخصوص سهام گاهی yVal/flow ندارد؛ نوع ابزار از نام یا ISIN حدس زده نمی‌شود.
+        data = self._get_json(MARKET_WATCH_ALL, rate_limit=False, timeout=max(self.timeout, 120))
+        rows = data.get('marketwatch') if isinstance(data, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            logger.error('ساختار دیده‌بان برای بررسی بازار نامعتبر است')
+            return None
+        received = now_tehran_iso()
+        instruments = []
+        for row in rows:
+            try:
+                if isinstance(row.get('yVal'), bool) or not float(row.get('yVal')).is_integer():
+                    raise ValueError('نوع ابزار صحیح نیست')
+                metadata = self._meta_from_market_watch(row)
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                metadata = dict(ins_code=str(row.get('insCode')), symbol_fa=normalize_symbol(row.get('lva', '')),
+                                instrument_type_code=None)
+            instruments.append(dict(metadata=metadata, snapshot=self.snapshot_from_market_watch(row, None, received)))
+        return dict(source=self.name, url=MARKET_WATCH_ALL, received_at=received,
+                    instruments=instruments, payload=data)
+
+    def get_closing_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        if not str(ins_code).isdigit():
+            raise ValueError('شناسه ابزار باید عددی باشد')
+        url = f'{BASE_URL}/ClosingPrice/GetClosingPriceInfo/{ins_code}'
+        data = self._get_json(url)
+        info = data.get('closingPriceInfo') if isinstance(data, dict) else None
+        if not isinstance(info, dict):
+            return None
+        dates = []
+        for key in ('dEven', 'finalLastDate'):
+            try:
+                value = deven_to_iso(info.get(key))
+            except (TypeError, ValueError, OverflowError):
+                value = None
+            dates.append(value if is_canonical_iso_date(value) else None)
+        # تاریخ آخرین روز به جای تاریخ خود کندل گذاشته نمی‌شود؛ تعارض صریح است.
+        trade_date = dates[0] if dates[0] and dates[0] == dates[1] else None
+        candle = dict(date=trade_date, open_raw=info.get('priceFirst'), high_raw=info.get('priceMax'),
+                      low_raw=info.get('priceMin'), close_raw=info.get('pDrCotVal'),
+                      close_final_raw=info.get('pClosing'), ref_price_raw=info.get('priceYesterday'),
+                      volume=info.get('qTotTran5J'), value=info.get('qTotCap'), trade_count=info.get('zTotTran'))
+        return dict(source=self.name, url=url, ins_code=str(ins_code), received_at=now_tehran_iso(),
+                    date_status='matched' if trade_date else 'missing_or_conflicting', candle=candle,
+                    provider_timestamp=self._provider_timestamp(info.get('hEven'), info.get('dEven')),
+                    identity_attestation=('request_url_only' if info.get('insCode') in (None, 0, '0')
+                                          else 'response_matches_request' if str(info.get('insCode')) == str(ins_code)
+                                          else 'conflicting_response'), payload=data)
+
+    def get_market_overview(self, flow: int) -> Optional[Dict[str, Any]]:
+        if type(flow) is not int or flow not in (1, 2):
+            raise ValueError('بازار باید بورس یا فرابورس باشد')
+        url = f'{BASE_URL}/MarketData/GetMarketOverview/{flow}'
+        data = self._get_json(url, rate_limit=False)
+        info = data.get('marketOverview') if isinstance(data, dict) else None
+        if not isinstance(info, dict):
+            return None
+        return dict(source=self.name, url=url, received_at=now_tehran_iso(), flow=flow, payload=data,
+                    provider_timestamp=self._provider_timestamp(info.get('marketActivityHEven'), info.get('marketActivityDEven')),
+                    index_value=info.get('indexLastValue'), index_change=info.get('indexChange'),
+                    equal_weight_value=info.get('indexEqualWeightedLastValue'),
+                    equal_weight_change=info.get('indexEqualWeightedChange'),
+                    market_state=info.get('marketStateTitle'))
+
+    def get_sector_names(self) -> Optional[Dict[str, str]]:
+        data = self._get_json(f'{BASE_URL}/MarketData/GetSectorsSummary', rate_limit=False)
+        rows = data.get('sectorSummeries') if isinstance(data, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            return None
+        return {str(row['cSecVal']).strip(): normalize_fa(row['lSecVal']) for row in rows
+                if row.get('cSecVal') and isinstance(row.get('lSecVal'), str)}
 
     def get_intraday_trades(self, ins_code: str) -> Optional[pd.DataFrame]:
         data = self._get_json(f"{BASE_URL}/Trade/GetTrade/{ins_code}")

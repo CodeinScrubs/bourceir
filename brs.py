@@ -583,6 +583,31 @@ def cmd_catalog_sources(args) -> int:
     return 0
 
 
+def cmd_market_review(args) -> int:
+    from data_collector.tsetmc import TsetmcProvider
+    from ops.market_review import collect_market_review, reanalyze_market_review
+    from ops.report_files import private_report_path, write_private_report
+
+    target = private_report_path(args.json, forbidden_paths=[settings.DB_PATH])
+    archive_root = (settings.DATA_DIR / 'private' / 'market-reviews').resolve()
+    if target.is_relative_to(archive_root) or (args.from_run and target.is_relative_to(Path(args.from_run).resolve())):
+        raise ValueError('گزارش خروجی نمی‌تواند داخل آرشیو شواهد نوشته شود')
+    from database.db import DatabaseManager
+
+    registry = None
+    if settings.DB_PATH.exists():
+        with DatabaseManager(read_only=True) as db:
+            fields = ('ins_code', 'symbol_fa', 'instrument_type_code', 'sector_code', 'is_active')
+            registry = [{key: row.get(key) for key in fields} for row in db.get_universe_symbols(include_inactive=True)]
+    result = (reanalyze_market_review(args.from_run, registry=registry) if args.from_run else
+              collect_market_review(TsetmcProvider(), provider_factory=TsetmcProvider, workers=args.workers, registry=registry))
+    write_private_report(target, result['report'])
+    summary = result['report']['summary']
+    print(f"گزارش بازار: {result['report']['status']} | کندل معتبر {summary['traded_count']} "
+          f"از {summary['scope_count']} نماد | {result['folder']}")
+    return 0 if result['report']['status'] == 'observed' else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BRS — سامانه نوسان‌گیری هوشمند بورس و فرابورس")
     parser.add_argument("-v", "--verbose", action="store_true", help="نمایش جزئیات بیشتر")
@@ -597,6 +622,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("audit", help="گزارش فقط‌خواندنی کیفیت آرشیو واقعی، بدون اتصال اینترنت")
     p.add_argument("--json", default="logs/data-audit.json", help="مسیر گزارش کیفیت داده")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser('market-review', help='بررسی توصیفی جلسه جاری با تاریخ مستقل هر سهم و شواهد محفوظ')
+    p.add_argument('--workers', type=int, choices=(1, 2, 3, 4), default=3)
+    p.add_argument('--from-run', default='', help='بازحساب آفلاین آرشیو اصلی؛ زمان قدیمی بازار حفظ می‌شود')
+    p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'market-review.json'))
+    p.set_defaults(func=cmd_market_review)
 
     p = sub.add_parser('broker-import', help='ورود محلی گزارش فارابی بدون اتصال به حساب یا ثبت سفارش')
     p.add_argument('files', nargs='+', help='فایل سبد JSON و خروجی‌های رسمی XLSX')

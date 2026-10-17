@@ -26,6 +26,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 ## نقشه کد
 | مسیر | مسئولیت |
 | :--- | :--- |
+| `core/market_review.py` + `ops/market_review.py` + `dashboard/market_review.py` | گزارش توصیفی جلسه با نوع ابزار و تاریخ مستقل هر سهم، شاخص/صنعت/پوشش، برنامه و شواهد محفوظ، بازحساب آفلاین با زمان اصلی؛ `market-review-v1`. صف واقعی و خالص ارزش حقیقی نامعلوم از کندل/حجم ساخته نمی‌شود؛ [راهنما](docs/research/current-market-review-fa.md). `core/market_summary.py` پوشش و unknown را در خانه مشترک می‌کند. |
 | `core/query_screener.py` + `ops/query_screener.py` + `dashboard/query_screener.py` | پرسش توصیفی ثبت‌شده پیش از خواندن، رتبه ارزش بازار جاری با کران نامعلوم/هم‌ارزش، ترتیب منفی→مثبت با اثبات کندلی محدود و تیک تطبیق‌شده؛ `market-query-v4`. چند نسخه ابطال‌شده در مسیر فعال نیست؛ تعارض فعال/ابطال یا مجموع/مسیر کامل، قطعیت نمی‌سازد. سیگنال/اجرای سفارش/جامعه تاریخی PIT نیست. [راهنما](docs/research/market-queries.md). |
 | `data_collector/trade_archive.py` + `data_collector/public_site.py` + `ops/source_catalog.py` | خام فشرده ریزمعاملات، برداشت قابل ادامه سایت عمومی و فهرست ادعاها بدون اجرای کد ناشناس. فقط provider با TSETMC حرف می‌زند. [راهنما](docs/algosaham-public-archive.md). |
 | `core/` | منطق خالص دامنه: `market_rules` (کارمزد، صف قفل، بازده PIT)، `text` (ی/ک عربی)، `timeutils` (تهران، شمسی) |
