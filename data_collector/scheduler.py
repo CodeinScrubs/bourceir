@@ -121,8 +121,11 @@ class DataCollector:
         started_at = now_tehran_iso()
         result = self.universe.sync_universe()
         errors = [] if result["received"] else ["فهرست نمادها از TSETMC دریافت نشد"]
-        return self._finish("universe", started_at, result["received"], result["saved"],
-                            result["failed"] + (0 if result["received"] else 1), errors, result)
+        missing = result.get('missing_from_response', 0)
+        if missing:
+            errors.append(f'{missing} نماد فعال محلی در پاسخ دیده نشد؛ علت غیبت نامعلوم و وضعیت قبلی محفوظ است')
+        return self._finish("universe", started_at, result["received"] + missing, result["saved"],
+                            result["failed"] + missing + (0 if result["received"] else 1), errors, result)
 
     # ═══════════════════════════════════════════════
     # تاریخچه روزانه

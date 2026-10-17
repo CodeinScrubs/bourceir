@@ -1,5 +1,7 @@
 """نمایش محلی گزارش جلسه؛ بدون دریافت پنهانی یا پذیرش سیگنال."""
 
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -8,6 +10,7 @@ from core.market_review import STATUS_LABELS_FA
 from core.text import to_fa_digits
 from core.timeutils import now_tehran, to_jalali
 from ops.market_review import load_market_review, render_html
+from ops.report_files import read_private_report
 
 
 def page_market_review(job_panel):
@@ -22,10 +25,34 @@ def page_market_review(job_panel):
     if not folders:
         st.info('هنوز گزارش جلسه‌ای ثبت نشده است. برای دریافت، دکمه بالا را بزنید.')
         return
-    labels = []
-    for folder in folders:
-        labels.append(folder.name)
-    chosen = st.selectbox('گزارش محفوظ', labels, index=len(labels) - 1)
+    labels, previews, useful = [folder.name for folder in folders], {}, []
+    for index, folder in enumerate(folders):
+        try:
+            preview = read_private_report(folder / 'report.json')
+            stamp = datetime.fromisoformat(preview['observed_at'])
+            count = preview['summary']['traded_count']
+            if stamp.tzinfo is None or stamp > now_tehran() or type(count) is not int:
+                raise ValueError('زمان یا شمار گزارش نامعتبر است')
+            previews[folder.name] = preview
+            if count > 0:
+                useful.append((stamp, index))
+        except (KeyError, TypeError, ValueError, OSError):
+            pass
+    default = max(useful)[1] if useful else len(labels) - 1
+    if default != len(labels) - 1:
+        latest = previews.get(labels[-1])
+        if latest is None or latest['summary']['traded_count'] <= 0:
+            st.warning('آخرین تلاش گزارش قابل جمع‌بندی نداشت؛ گزارش محفوظ قبلی با زمان واقعی خودش انتخاب شده است. '
+                       'این نمایش به معنی دریافت تازه نیست؛ آخرین تلاش هم از فهرست قابل بررسی است.')
+        else:
+            st.info('گزارش دارای جدیدترین زمان واقعی داده انتخاب شده است؛ تاریخ ساخت فایل یا بازحساب جای تازگی بازار نیست.')
+
+    def label(key):
+        preview = previews.get(key)
+        return (to_jalali(preview['observed_at'], with_time=True) + ' — '
+                + to_fa_digits(preview['summary']['traded_count']) + ' کندل معتبر — ' + key[-6:]) if preview else key
+
+    chosen = st.selectbox('گزارش محفوظ', labels, index=default, format_func=label)
     try:
         report = load_market_review(root / chosen)
     except (ValueError, OSError) as exc:

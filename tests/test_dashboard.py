@@ -131,6 +131,25 @@ def test_market_review_renders_unambiguous_counts_and_isolated_signed_return(das
     assert 'معامله با کندل معتبر' in set(at.dataframe[0].value['وضعیت داده'])
 
 
+def test_empty_new_attempt_does_not_silently_replace_last_useful_market_report(dashboard_db, monkeypatch):
+    from datetime import datetime
+
+    from core.timeutils import TEHRAN_TZ
+    from ops.market_review import collect_market_review
+    from tests.test_market_review import NOW, ReviewProvider
+
+    root = settings.DATA_DIR / 'private' / 'market-reviews'
+    monkeypatch.setattr('ops.market_review.now_tehran', lambda: datetime(2026, 10, 17, 13, 16, tzinfo=TEHRAN_TZ))
+    monkeypatch.setattr('ops.market_review.now_tehran_iso', lambda: NOW)
+    useful = collect_market_review(ReviewProvider(root), output_root=root)
+    collect_market_review(ReviewProvider(root, count=0), output_root=root)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🌐 بررسی بازار امروز').run()
+    assert not at.exception
+    assert at.selectbox[0].value == useful['report']['run_id']
+    assert any('آخرین تلاش گزارش قابل جمع‌بندی نداشت' in value.value for value in at.warning)
+
+
 def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dashboard_db):
     from tests.test_flow_filters import history
     p, _ = history(45)
