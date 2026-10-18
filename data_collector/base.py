@@ -94,3 +94,7 @@ class BaseDataProvider(ABC):
     def get_sector_names(self) -> Optional[Dict[str, str]]:
         """نام صنایع؛ نبود نام، مجوز حدس صنعت نیست."""
         raise NotImplementedError
+
+    def get_instrument_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        """پاسخ مشخصات یک تاریخ با نشانی/زمان دریافت؛ اعتبار تاریخی خودکار تأیید نمی‌شود."""
+        raise NotImplementedError

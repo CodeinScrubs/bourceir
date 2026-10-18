@@ -401,6 +401,35 @@ def cmd_capital_review(args) -> int:
     return 0
 
 
+def cmd_instrument_history(args) -> int:
+    import json
+
+    from data_collector.tsetmc import TsetmcProvider
+    from database.db import DatabaseManager
+    from ops.instrument_history import capture_instrument_history
+
+    symbols = list(dict.fromkeys(_symbols(args.symbols) or []))
+    with DatabaseManager(read_only=True) as db:
+        instruments = [db.get_symbol(symbol) for symbol in symbols]
+    if any(item is None for item in instruments):
+        raise ValueError('نماد در فهرست محلی ثبت نشده است؛ حدس هویت انجام نمی‌شود')
+    result = capture_instrument_history(TsetmcProvider(), instruments, args.dates.split(','))
+    print(json.dumps(dict(folder=result['folder'], attempts=len(result['cases']), status_counts=result['status_counts'],
+                          candidate_fields_complete=result['candidate_fields_complete'], feature_eligible=False), ensure_ascii=False))
+    return 0 if all(case['assessment']['status'] == 'observed_unverified' for case in result['cases']) else 1
+
+
+def cmd_instrument_history_review(args) -> int:
+    import json
+
+    from ops.instrument_history import load_instrument_history
+
+    result = load_instrument_history(args.study)
+    print(json.dumps(dict(artifacts_verified=True, attempts=len(result['cases']), status_counts=result['status_counts'],
+                          feature_eligible=False, accepted_for_signals=False), ensure_ascii=False))
+    return 0
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -754,6 +783,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('capital-review', help='بازحساب نقد و هزینه از تمام شواهد محفوظ مطالعه ظرفیت')
     p.add_argument('--study', required=True, help='مسیر خصوصی CAPACITY-...')
     p.set_defaults(func=cmd_capital_review)
+
+    p = sub.add_parser('instrument-history', help='آرشیو مشخصات تاریخی نماد؛ بدون تغییر دیتابیس، فیچر یا پذیرش اعتبار تاریخی')
+    p.add_argument('--symbols', required=True, help='نمادهای ثبت‌شده سهام عادی، جداشده با کاما؛ حداکثر ۲۰')
+    p.add_argument('--dates', required=True, help='تاریخ‌های میلادی پیش از holdout، جداشده با کاما؛ حداکثر ۲۰ و مجموع ۱۰۰ درخواست')
+    p.set_defaults(func=cmd_instrument_history)
+
+    p = sub.add_parser('instrument-history-review', help='بازبینی آفلاین کد، پاسخ و حدود شاهد مشخصات تاریخی')
+    p.add_argument('--study', required=True, help='مسیر خصوصی HISTORY-...')
+    p.set_defaults(func=cmd_instrument_history_review)
 
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
