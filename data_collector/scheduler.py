@@ -278,7 +278,8 @@ class DataCollector:
     # اسنپ‌شات لحظه‌ای
     # ═══════════════════════════════════════════════
 
-    def collect_market_snapshot(self, symbols: Optional[List[str]] = None, *, instruments=None) -> Dict[str, Any]:
+    def collect_market_snapshot(self, symbols: Optional[List[str]] = None, *, instruments=None,
+                                quote_source='market-watch') -> Dict[str, Any]:
         """
         اسنپ‌شات لحظه‌ای کل سهام بازار با یک درخواست؛ فقط نمادهای ثبت‌شده در دیتابیس (یا لیست ورودی)
         ذخیره می‌شوند. اسنپ‌شات نامعتبر ذخیره نمی‌شود و در جدول کیفیت داده ثبت می‌شود.
@@ -289,8 +290,30 @@ class DataCollector:
         known = {str(s['ins_code']): s for s in scope
                  if s.get('ins_code') and (not wanted or s['symbol_fa'] in wanted)}
         unresolved = wanted - {s['symbol_fa'] for s in known.values()} if wanted else set()
+        from core.legacy_quotes import MAX_INSTRUMENTS, QUOTE_SOURCES, archive_observation, parse_quote
+
+        if quote_source not in QUOTE_SOURCES:
+            raise ValueError('منبع مظنه شناخته‌شده نیست')
+        source_records, source_errors = {}, {}
         observations, errors, rows = [], [], []
-        snapshots = self.provider.get_market_snapshots()
+        if quote_source == 'dated-quote':
+            if not (wanted or instruments is not None) or not 1 <= len(known) + len(unresolved) <= MAX_INSTRUMENTS:
+                raise ValueError('منبع تاریخ‌دار به دامنه صریح حداکثر ده نماد نیاز دارد')
+            if any(meta.get('instrument_type_code') not in (300, 303) for meta in known.values()):
+                raise ValueError('دامنه منبع تاریخ‌دار فقط سهام عادی بورس و فرابورس است')
+            snapshots = []
+            for code, meta in known.items():
+                try:
+                    source = self.provider.get_legacy_quote_observation(code)
+                    if source is not None:
+                        source_records[code] = archive_observation(source)
+                        if source.get('ins_code') != code:
+                            raise ValueError('شناسه پاسخ با دامنه درخواست ناسازگار است')
+                        snapshots.append(parse_quote(source, meta['symbol_fa']))
+                except (ValueError, KeyError, TypeError, NotImplementedError) as exc:
+                    source_errors[code] = type(exc).__name__
+        else:
+            snapshots = self.provider.get_market_snapshots()
         grouped = defaultdict(list)
         for snap in snapshots or []:
             grouped[str(snap.get('ins_code'))].append(snap)
@@ -298,8 +321,14 @@ class DataCollector:
             matches = grouped[ins_code]
             item = dict(ins_code=ins_code, status='missing', provider_timestamp=None, captured_at=None)
             observations.append(item)
+            if quote_source == 'dated-quote':
+                item['source_observation'] = source_records.get(ins_code)
+                if ins_code in source_errors:
+                    item.update(status='rejected', source_error=source_errors[ins_code])
+                    errors.append(f"{sym['symbol_fa']}: ساختار یا تاریخ مظنه تک‌نماد تأیید نشد")
+                    continue
             if not matches:
-                errors.append(f"{sym['symbol_fa']}: در پاسخ دیده‌بان موجود نیست؛ علت توقف/حذف معلوم نیست")
+                errors.append(f"{sym['symbol_fa']}: در پاسخ منبع موجود نیست؛ علت توقف/حذف معلوم نیست")
                 continue
             if len(matches) > 1:
                 item['status'] = 'duplicate'
@@ -352,6 +381,8 @@ class DataCollector:
                         unchanged=counts['unchanged'], missing=counts['missing'] + len(unresolved),
                         rejected=counts['rejected'], duplicate=counts['duplicate'],
                         unresolved_symbols=sorted(unresolved), per_instrument=observations)
+        if quote_source == 'dated-quote':
+            coverage['quote_source'] = quote_source
         return self._finish("snapshot", started_at, coverage['expected'], saved, failed or (0 if known else 1), errors,
                             {"market_rows": len(snapshots or []), "unchanged_skipped": counts['unchanged'],
                              "valid_observations": valid, 'coverage': coverage, "snapshots": [s for _, s in rows]})

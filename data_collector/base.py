@@ -102,3 +102,7 @@ class BaseDataProvider(ABC):
     def get_dividend_observation(self, ins_code: str, symbol_fa: str) -> Optional[Dict[str, Any]]:
         """پاسخ بایتی منبع عمومی سود نقدی؛ مبلغ/هویت/زمان انتشار هنوز تأیید نیست."""
         raise NotImplementedError
+
+    def get_legacy_quote_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        """پاسخ یکپارچه قدیمی قیمت/دفتر سفارش؛ تاریخ و ساختار باید مستقل بررسی شوند."""
+        raise NotImplementedError

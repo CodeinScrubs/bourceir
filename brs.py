@@ -538,6 +538,9 @@ def cmd_live(args) -> int:
     if args.interval <= 0 or args.cycles < 0:
         raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
     selected = _symbols(args.symbols)
+    quote_source = getattr(args, 'quote_source', 'market-watch')
+    if quote_source == 'dated-quote' and not 1 <= len(selected or []) <= 10:
+        raise ValueError('برای منبع تاریخ‌دار، یک تا ده نماد صریح تعیین کنید')
     collector = DataCollector(symbols=selected)
     cycles = 0
     returncode = 0
@@ -560,7 +563,7 @@ def cmd_live(args) -> int:
         calendar = collector.db.get_market_calendar()
         journal = CaptureRepository(collector.db)
         run_id = journal.start(instruments, interval=args.interval, cycles=args.cycles, forced=args.force,
-                               provider=collector.provider.name, explicit_scope=bool(selected))
+                               provider=collector.provider.name, explicit_scope=bool(selected), quote_source=quote_source)
         print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
         print(f'شناسه ثبت مستقل پایش: {run_id}', flush=True)
         while True:
@@ -574,7 +577,8 @@ def cmd_live(args) -> int:
             else:
                 journal.append(run_id, cycle, 'poll_started')
                 try:
-                    report = collector.collect_market_snapshot(instruments=instruments)
+                    options = dict(quote_source=quote_source) if quote_source != 'market-watch' else {}
+                    report = collector.collect_market_snapshot(instruments=instruments, **options)
                 except Exception as exc:
                     journal.append(run_id, cycle, 'poll_finished', dict(status='error', error_type=type(exc).__name__,
                                    elapsed_seconds=time.monotonic() - started, coverage=None))
@@ -929,6 +933,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=int, default=settings.POLLING_INTERVAL_SECONDS)
     p.add_argument("--cycles", type=int, default=0, help="تعداد چرخه (۰ = بی‌پایان)")
     p.add_argument("--force", action="store_true", help="اجرا حتی خارج از ساعات بازار")
+    p.add_argument('--quote-source', choices=('market-watch', 'dated-quote'), default='market-watch',
+                   help='منبع پیش‌فرض دیده‌بان یا پاسخ تاریخ‌دار تک‌نماد برای حداکثر ده نماد صریح')
     p.set_defaults(func=cmd_live)
 
     p = sub.add_parser("backup", help="نسخه پشتیبان از دیتابیس")

@@ -27,6 +27,8 @@ from urllib3.util.retry import Retry
 from config import settings
 from core.dividend_evidence import MAX_BYTES, dividend_request
 from core.instrument_history import history_request
+from core.legacy_quotes import MAX_BYTES as QUOTE_MAX_BYTES
+from core.legacy_quotes import quote_request
 from core.text import normalize_fa, normalize_symbol
 from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
 from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, DAILY_COLUMNS, BaseDataProvider
@@ -575,6 +577,41 @@ class TsetmcProvider(BaseDataProvider):
             self.snapshot_from_market_watch(row, client_types.get(str(row.get("insCode"))), captured_at)
             for row in rows
         ]
+
+    def get_legacy_quote_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        """بایت محدود از پاسخ یکپارچه؛ بدون دنبال‌کردن تغییرمسیر یا ساختن تاریخ."""
+        code, url = quote_request(ins_code)
+        requested, started = now_tehran_iso(), time.monotonic()
+        try:
+            if settings.RATE_LIMIT_DELAY > 0:
+                time.sleep(settings.RATE_LIMIT_DELAY)
+            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+                                        stream=True, allow_redirects=False, headers={'Accept': 'text/plain'})
+            try:
+                response.raise_for_status()
+                if response.status_code != 200 or response.url != url:
+                    raise ValueError('پاسخ جزئی یا تغییرمسیر منبع معتبر نیست')
+                length = response.headers.get('Content-Length', '')
+                if length.isdigit() and int(length) > QUOTE_MAX_BYTES:
+                    raise ValueError('پاسخ مظنه از حد حجم گذشت')
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > QUOTE_MAX_BYTES or time.monotonic() - started > 30:
+                        raise ValueError('پاسخ مظنه از حد حجم یا زمان گذشت')
+                    chunks.append(chunk)
+                content = b''.join(chunks)
+                if not content or b'<' in content or b'>' in content or b'\x00' in content:
+                    raise ValueError('پاسخ خالی یا HTML به جای مظنه')
+                content.decode('utf-8-sig')
+                return dict(source=self.name, ins_code=code, url=url, requested_at=requested,
+                            received_at=now_tehran_iso(), content=content, response_bytes=len(content),
+                            body_sha256=hashlib.sha256(content).hexdigest())
+            finally:
+                response.close()
+        except (requests.RequestException, ValueError, UnicodeError) as error:
+            logger.warning('دریافت مظنه یکپارچه ناموفق بود: %s', type(error).__name__)
+            return None
 
     def get_market_observation(self) -> Optional[Dict[str, Any]]:
         # مسیر مخصوص سهام گاهی yVal/flow ندارد؛ نوع ابزار از نام یا ISIN حدس زده نمی‌شود.
