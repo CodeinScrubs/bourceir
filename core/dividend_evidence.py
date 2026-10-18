@@ -87,10 +87,11 @@ def parse_dividend_source(content, *, end_exclusive):
     for row in rows:
         groups.setdefault((row['stated_meeting_date'], row['stated_fiscal_year_end']), []).append(row)
     for group in groups.values():
+        conflicting = len({Decimal(row['candidate_dps_amount']) for row in group
+                           if row['candidate_dps_amount'] is not None}) > 1
         for row in group:
             row['duplicate_meeting'] = len(group) > 1
-            row['conflicting_amounts'] = len({Decimal(r['candidate_dps_amount']) for r in group
-                                              if r['candidate_dps_amount'] is not None}) > 1
+            row['conflicting_amounts'] = conflicting
     return dict(version=VERSION, status='observed_unverified' if raw_rows else 'empty_response', end_exclusive=end_exclusive,
         source_rows=len(raw_rows), development_rows=len(rows), quarantined_rows=quarantined,
         withheld_rows=withheld, rows=rows, amount_status_counts=dict(Counter(row['amount_status'] for row in rows)),

@@ -76,6 +76,22 @@ def test_duplicate_revisions_are_retained_not_summed_or_silently_replaced(other,
     assert all(item['duplicate_meeting'] and item['conflicting_amounts'] is conflicting for item in parsed['rows'])
 
 
+def test_duplicate_group_does_not_repeat_decimal_comparisons_for_every_row(monkeypatch):
+    original = evidence.Decimal
+    calls = []
+
+    def counted(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(evidence, 'Decimal', counted)
+    count = 100
+    parsed = parse(row('100.00') * count)
+    assert len(parsed['rows']) == count
+    assert all(item['duplicate_meeting'] and not item['conflicting_amounts'] for item in parsed['rows'])
+    assert len(calls) <= 3 * count
+
+
 @pytest.mark.parametrize('dates', [dict(published='1405/01/01'),dict(meeting='1405/01/01'),dict(fiscal='1405/12/29')])
 def test_sealed_rows_are_gated_before_any_amount_parsing(monkeypatch, dates):
     monkeypatch.setattr(evidence, '_amount', lambda _:pytest.fail('Sealed financial value was parsed'))

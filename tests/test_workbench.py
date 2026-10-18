@@ -187,6 +187,7 @@ def test_workbench_intraday_queue_uses_the_live_book_in_the_ui(dashboard_db, mon
                                 bid_vol_1=500000, ask_price_1=0, ask_vol_1=0, ask_count_1=0)
     monkeypatch.setattr(risk, 'now_tehran', lambda: clock)
     monkeypatch.setattr(screening, 'now_tehran', lambda: clock)
+    monkeypatch.setattr('dashboard.workbench.now_tehran', lambda: clock)
     with DatabaseManager(db_path=dashboard_db) as db:
         WorkbenchRepository(db).save_profile(RiskProfile(1_000_000, 100_000))
         sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
