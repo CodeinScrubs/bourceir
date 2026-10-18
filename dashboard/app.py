@@ -25,6 +25,7 @@ from dashboard.broker import page_broker  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
 from dashboard.market_review import page_market_review  # noqa: E402
+from dashboard.operator_status import operator_panel  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
 from dashboard.probability import page_probability  # noqa: E402
 from dashboard.query_screener import page_query_screener  # noqa: E402
@@ -228,6 +229,7 @@ def page_home() -> None:
         unsafe_allow_html=True,
     )
 
+    operator_panel()
     pulse = market_pulse()
     if pulse:
         st.subheader(f"نبض بازار — {to_jalali(pulse['date'])}")

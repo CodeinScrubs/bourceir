@@ -53,9 +53,10 @@ def summarize_evidence(payload, checked_results):
     protocol = payload['protocol']
     modes = list(checked_results[0]['modes'])
     summaries = {name: mode_summary([fold['modes'][name]['metrics'] for fold in checked_results]) for name in modes}
-    candidates = ['selected', 'dip'] if protocol['version'] == 'expanding-portfolio-v3' else [
+    candidates = protocol['candidate_modes'] if protocol['version'] == 'flow-portfolio-v4' else (
+        ['selected', 'dip'] if protocol['version'] == 'expanding-portfolio-v3' else [
         name for name in modes if name not in ('past_baseline', 'past_baseline_stress')
-        and not name.endswith(('-stress', '-random'))]
+        and not name.endswith(('-stress', '-random'))])
     reviews = {}
     for candidate in candidates:
         if candidate == 'selected':
@@ -71,11 +72,19 @@ def summarize_evidence(payload, checked_results):
         if candidate == 'dip':
             comparisons['selected_past_baseline'] = paired_comparison(checked_results, candidate, 'selected')
             comparisons['stressed_selected_past_baseline'] = paired_comparison(checked_results, stress, 'stress')
+        if protocol['version'] == 'flow-portfolio-v4':
+            for seed in (97, 173):
+                comparisons[f'random_{seed}'] = paired_comparison(checked_results, candidate, candidate + f'-random{seed}')
+            for suffix in ('-random', '-random97', '-random173'):
+                comparisons['stress' + suffix] = paired_comparison(checked_results, stress, candidate + suffix + '-stress')
         normal, stressed = summaries[candidate], summaries[stress]
         blockers = ['development_data_already_seen', 'independent_future_test_missing',
                     'fills_and_queue_position_unverified', 'historical_universe_incomplete',
                     'historical_fee_schedule_unverified', 'multiple_testing_and_uncertainty_not_established',
                     'risk_matched_benchmark_not_established', 'one_random_seed_only']
+        if protocol['version'] == 'flow-portfolio-v4':
+            blockers.remove('one_random_seed_only')
+            blockers.append('historical_total_trial_count_unknown')
         if normal['unknown_folds'] or stressed['unknown_folds']:
             blockers.append('unknown_fold_results')
         if normal['nonpositive_all_fold_mean']:

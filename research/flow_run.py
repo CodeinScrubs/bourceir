@@ -56,7 +56,13 @@ def _summary(metrics):
 
 
 def run_flow_research(db, *, source_id=None, initial_capital_rial=None, min_train_sessions=504,
-                      test_sessions=252, horizons=(2, 3), random_seed=41):
+                      test_sessions=252, horizons=(2, 3), random_seed=41, family='v3', replications=20000):
+    if family == 'v4':
+        from research.flow_v4_run import run_flow_v4
+        return run_flow_v4(db, source_id=source_id, initial_capital_rial=initial_capital_rial,
+                          min_train_sessions=min_train_sessions, test_sessions=test_sessions, replications=replications)
+    if family != 'v3':
+        raise ValueError('خانواده فیلتر باید v3 یا v4 باشد')
     cfg = dict(settings.RESEARCH_CONFIG)
     horizons = tuple(horizons)
     if not horizons or any(isinstance(h, bool) or h not in cfg['horizons'] or not isinstance(h, int) for h in horizons):
@@ -208,6 +214,13 @@ def format_flow_report(payload):
         lines.append(f"| {mode} | {summary['valid_folds']}/{summary['folds']} | {summary['positive_folds']} | "
             f"{pct(summary['mean_fold_return'])} | {pct(summary['median_fold_return'])} | "
             f"{pct(summary['worst_fold_drawdown'])} | {pct(summary['worst_initial_loss'])} |")
+    if payload['protocol']['version'] == 'flow-portfolio-v4':
+        lines += ['', 'دو فرضیه چندعاملی مستقل از v3؛ سه بذر ثابت با شمار نامزد برابر، در اجرای عادی و فشار.',
+                  'حجم مبنای تاریخی در ورودی موجود نیست؛ نوع DIP وابسته به آن قابل ارزیابی اعلام نشده است.',
+                  'همه نتایج، کران نامعلوم و عدم قطعیت بلوکی محفوظ‌اند؛ شاخص هم‌وزنِ ناخالص، محصول قابل خرید یا کنترل هم‌ریسک نیست.',
+                  'تعداد آزمون در خانواده حاضر ثبت شده؛ کل جست‌وجوهای قبلی پروژه معلوم نیست و اصلاح کامل انتخاب ادعا نمی‌شود.',
+                  'هیچ مجوز سیگنال یا بازکردن دوره نهایی ایجاد نشده است.']
+        return '\n'.join(lines) + '\n'
     lines += ['', 'مقایسه مستقیم فقط روی برش‌های مشترک معلوم معتبر است؛ میانگین برش‌های معلوم با مخرج متفاوت رتبه مالی نمی‌سازد.',
         'قواعد، پنجره‌ها، افق‌ها و مرتب‌سازی پیش از نتیجه ثابت‌اند؛ برتری بهترین حالتِ دیده‌شده، آزمون مستقل نیست.',
         'فیلتر ۹ شرطی اصلی به علت شناوری تاریخی، سقف مجاز روز و تعریف میانگین بازار تکمیل نشده؛ جایگزینی پنهان انجام نشده است.',

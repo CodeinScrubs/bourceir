@@ -161,6 +161,8 @@ def page_workbench():
                                          locked_up=bool(locks["locked_up"]), locked_down=bool(locks["locked_down"]),
                                          account_complete=mode == "paper" or not actual_incomplete)
                 calculation['account_risk_evidence'] = account_evidence
+                # بودجه اولیه برای بازحساب محفوظ است؛ از تعداد گرد‌شده حدس زده نمی‌شود.
+                calculation['operator_inputs'] = dict(trade_loss_budget_rial=budget * 10)
                 if calculation["blockers"]:
                     st.warning("؛ ".join(calculation["blockers"]))
                 else:

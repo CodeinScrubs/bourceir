@@ -12,6 +12,15 @@ METRICS = {'market_cap_rial', 'confirmed_count', 'ambiguous_count', 'possible_co
            'observed_sessions', 'avg_value_rial', 'sector_code', 'symbol_fa'}
 
 
+def hypothesis_evidence(metrics, name):
+    """پرسش توصیفی از فرضیه ثبت‌شده؛ با رتبه ارزش شرکت یا سیگنال یکی نیست."""
+    from core.flow_filters import FLOW_FILTER_V4_VERSION, filter_diagnostics_v4
+
+    return dict(version=FLOW_FILTER_V4_VERSION, diagnostics=filter_diagnostics_v4(metrics, name),
+                rank_basis='observed prior traded value, not company market capitalization',
+                next_session_execution_verified=False, accepted_for_signals=False)
+
+
 def decimal(value):
     try:
         number = Decimal(str(value))

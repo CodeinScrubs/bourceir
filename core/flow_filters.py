@@ -23,6 +23,14 @@ FILTER_NAMES = {
     'special_original': 'فیلتر ۹ شرطی پیوست — تعریف و داده ناکامل',
 }
 
+# قرارداد v3 و خروجی آرشیوهای آن تغییر نمی‌کنند؛ خانواده تازه جدا انتخاب می‌شود.
+FLOW_FILTER_V4_VERSION = 'flow-filters-v4'
+V4_FILTERS = ('intraday_reversal_accumulation', 'post_surge_pullback')
+V4_FILTER_NAMES = {
+    'intraday_reversal_accumulation': 'بازگشت پایان روز همراه تقویت سرانه — فرضیه',
+    'post_surge_pullback': 'اصلاح کم‌حجم پس از جهش تقاضا — فرضیه',
+}
+
 
 def _divide(a, b):
     return (a / b.where(b > 0)).replace([np.inf, -np.inf], np.nan)
@@ -145,7 +153,10 @@ def filter_conditions(metrics: pd.DataFrame, name: str) -> pd.DataFrame:
 
 
 def filter_diagnostics(metrics: pd.DataFrame, name: str) -> pd.DataFrame:
-    conditions = filter_conditions(metrics, name)
+    return _diagnostics(metrics, filter_conditions(metrics, name))
+
+
+def _diagnostics(metrics, conditions):
     out = metrics[['symbol', 'date']].copy()
     out['known_conditions'] = conditions.notna().sum(axis=1)
     out['total_conditions'] = len(conditions.columns)
@@ -160,3 +171,118 @@ def filter_diagnostics(metrics: pd.DataFrame, name: str) -> pd.DataFrame:
                     for code in np.unique(patterns)}
     out['missing_conditions'] = pd.Series(patterns, index=metrics.index).map(explanations)
     return out
+
+
+def effective_base_volume(values):
+    """حجم مبنای تاریخ‌دار >۱؛ عدد ۱ یا نامعلوم، پوشش مؤثر نمی‌سازد.
+
+    فراخواننده باید سابقه همان روز/نماد را بدهد؛ متادیتای جاری نماد مجاز نیست.
+    نسبت‌های حجم به میانگین مستقل از حجم مبنا هستند و با حذف مبنا باطل نمی‌شوند.
+    """
+    numbers = pd.to_numeric(values, errors='coerce')
+    return numbers.where(np.isfinite(numbers) & (numbers > 1) & (numbers == np.floor(numbers)))
+
+
+def flow_metrics_v4(prices, clients, *, calendar=None):
+    """فیچر جانبی علّی؛ ارزشِ مبنای صدک، ارزش معاملات است و ارزش شرکت نیست."""
+    out = flow_metrics(prices, clients)
+    if out.empty:
+        return out
+    raw = prices.copy()
+    raw['symbol'] = raw.symbol.map(normalize_symbol)
+    raw = raw.sort_values(['symbol', 'date']).reset_index(drop=True)
+    days = sorted(raw.date.unique()) if calendar is None else list(calendar)
+    if not days or days != sorted(set(days)):
+        raise ValueError('تقویم مشاهده‌شده باید یکتا و مرتب باشد')
+    session_position = {day: i for i, day in enumerate(days)}
+    out = out.merge(raw[['symbol', 'date', 'open_raw', 'close_raw', 'close_final_raw', 'ref_price_raw',
+                         'high_raw', 'low_raw']], on=['symbol', 'date'], validate='one_to_one')
+    # کران رتبه، گم‌شده‌ها و هم‌ارزش‌ها را از جامعه مشاهده‌شده حذف نمی‌کند.
+    prior = out['value_prior_20d_mean_rial']
+    grouped = out.groupby('date', sort=False)['value_prior_20d_mean_rial']
+    n = out.groupby('date', sort=False).symbol.transform('size')
+    missing = prior.isna().groupby(out.date).transform('sum')
+    out['turnover_percentile_lower'] = grouped.rank(method='min') / n
+    out['turnover_percentile_upper'] = (grouped.rank(method='max') + missing) / n
+    out['cross_section_observed_rows'] = n
+    out['cross_section_unknown_prior_value'] = missing
+    out['last_to_official'] = _divide(_number(out, 'close_raw'), _number(out, 'close_final_raw'))
+    rows = []
+    for _, group in out.groupby('symbol', sort=False):
+        group = group.copy()
+        ret = market_rules.pit_daily_returns(group)
+        locks = market_rules.lock_flags(group)
+        # نبود مرجع/بازه معتبر را «قفل نیست» معرفی نمی‌کنیم.
+        valid = (_number(group, 'ref_price_raw') > 0) & (_number(group, 'low_raw') > 0)
+        valid &= (_number(group, 'high_raw') >= _number(group, 'low_raw'))
+        valid &= _number(group, 'close_raw').between(_number(group, 'low_raw'), _number(group, 'high_raw'))
+        group['not_locked_up'] = (~locks.locked_up).astype('boolean').where(valid)
+        surge = ((group.volume_ratio_30d >= 2.5) & (group.buyer_power_value >= 1.8)
+                 & (ret > 0)).astype('boolean')
+        surge = surge.where(group.volume_ratio_30d.notna() & group.buyer_power_value.notna() & ret.notna())
+        variants = []
+        positions = group.date.map(session_position)
+        for length in (2, 3, 4):
+            contiguous = (positions - positions.shift(length + 1)).eq(length + 1)
+            # ردیف غایب، تعطیلی یا نبود حرکت را اثبات نمی‌کند؛ پس از شکاف، الگو معلوم نیست.
+            continuity = pd.Series(True, index=group.index, dtype='boolean').where(contiguous)
+            conditions = [surge.shift(length + 1), continuity]
+            for lag in range(1, length + 1):
+                negative = (ret.shift(lag) < 0).astype('boolean').where(ret.shift(lag).notna())
+                below = (group.volume.shift(lag) < group.volume_prior_20d_mean.shift(lag)).astype('boolean')
+                below = below.where(group.volume.shift(lag).notna() & group.volume_prior_20d_mean.shift(lag).notna()
+                                    & group.volume_comparable_20d.shift(lag).eq(True))
+                # هر روز اصلاح نسبت به روز قبلی حجم کمتری دارد، شامل روز جهش.
+                declining = (group.volume.shift(lag) < group.volume.shift(lag + 1)).astype('boolean')
+                declining = declining.where(group.volume.shift(lag).notna() & group.volume.shift(lag + 1).notna())
+                conditions.extend((negative, below, declining))
+            combined = pd.Series(True, index=group.index, dtype='boolean')
+            for condition in conditions:
+                combined &= condition.astype('boolean')
+            variants.append(combined)
+        group['prior_surge_pullback'] = variants[0] | variants[1] | variants[2]
+        rows.append(group)
+    out = pd.concat(rows, ignore_index=True)
+    # پایگاه روزانه فعلی این ستون را ندارد؛ هیچ پیوندی به symbols.base_volume امروز انجام نمی‌دهیم.
+    historical = raw[['symbol', 'date']].copy()
+    historical['historical_base_volume'] = (_number(raw, 'base_volume')
+        if 'base_volume' in raw else pd.Series(np.nan, index=raw.index))
+    out = out.merge(historical, on=['symbol', 'date'], validate='one_to_one')
+    base = effective_base_volume(out.historical_base_volume)
+    out['effective_base_volume'] = base
+    out['base_volume_coverage'] = _divide(out.volume, base)
+    return out
+
+
+def filter_conditions_v4(metrics, name):
+    if name not in V4_FILTERS:
+        raise ValueError('فرضیه ثبت‌شده v4 لازم است')
+    conditions = {}
+
+    def compare(label, left, op, right):
+        a = _number(metrics, left, allow_boolean=True)
+        b = _number(metrics, right, allow_boolean=True) if isinstance(right, str) else pd.Series(right, index=metrics.index)
+        conditions[label] = getattr(a, op)(b).astype('boolean').where(a.notna() & b.notna())
+
+    compare('میانگین ارزش معاملات ۲۰ جلسه قبل > ۲۰ میلیارد ریال', 'value_prior_20d_mean_rial', 'gt', 20_000_000_000)
+    compare('امروز قفل خرید مشاهده نشده؛ اجرای فردا هنوز اثبات نشده', 'not_locked_up', 'eq', 1)
+    if name == 'intraday_reversal_accumulation':
+        low = _number(metrics, 'turnover_percentile_lower')
+        high = _number(metrics, 'turnover_percentile_upper')
+        inside = (low >= .10) & (high <= .50)
+        outside = (high < .10) | (low > .50)
+        conditions['کل کران صدک ارزش معاملات قبلی در ۱۰ تا ۵۰٪ از سمت کوچک'] = inside.astype('boolean').where(inside | outside)
+        compare('آخرین / پایانی رسمی > ۱٫۰۱', 'last_to_official', 'gt', 1.01)
+        compare('موقعیت آخرین در بازه روز ≥ ۰٫۷۵', 'range_position', 'ge', .75)
+        compare('قدرت خریدار ارزشی ≥ ۱٫۸', 'buyer_power_value', 'ge', 1.8)
+        compare('سرانه میانگین ۳ جلسه > ۵ جلسه', 'per_capita_buy_mean_3d_rial', 'gt', 'per_capita_buy_mean_5d_rial')
+        compare('سهم خرید حقوقی < ۳۰٪', 'legal_buy_fraction', 'lt', .30)
+    else:
+        compare('جهش در t−۵ تا t−۳ سپس ۲ تا ۴ اصلاح منفی با حجم کاهشی', 'prior_surge_pullback', 'eq', 1)
+        compare('قدرت خریدار ارزشی امروز ≥ ۱٫۵', 'buyer_power_value', 'ge', 1.5)
+        compare('آخرین امروز > گشایش امروز', 'close_raw', 'gt', 'open_raw')
+    return pd.DataFrame(conditions, index=metrics.index)
+
+
+def filter_diagnostics_v4(metrics, name):
+    return _diagnostics(metrics, filter_conditions_v4(metrics, name))

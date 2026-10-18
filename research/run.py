@@ -173,9 +173,11 @@ def research_panel(labels: pd.DataFrame, features: pd.DataFrame, start: str, end
 
 def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trials: Optional[int] = None,
                  log_experiment: bool = True, holdout_strategy: Optional[str] = None,
-                 holdout_horizon: Optional[int] = None) -> Dict[str, Any]:
+                 holdout_horizon: Optional[int] = None, feature_root: Optional[Path] = None) -> Dict[str, Any]:
     """کل چرخه پژوهش پایه. خروجی: نتایج + مسیر گزارش."""
     cfg = dict(settings.RESEARCH_CONFIG)
+    if unseal_holdout and feature_root is not None:
+        raise ValueError('انبار مستقل توسعه برای بازکردن دوره نهایی استفاده نمی‌شود')
     selected = None
     if unseal_holdout:
         selected = next((s for s in STRATEGIES if s.name == holdout_strategy), None)
@@ -192,7 +194,10 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
         raise ValueError("تعداد آزمون تصادفی باید عدد صحیح مثبت باشد")
     code_sha = research_code_fingerprint()
     filters = None if unseal_holdout else [("date", "<", cfg["holdout_start"])]
-    features, feature_manifest = load_feature_snapshot(filters=filters)
+    loader_options = dict(filters=filters)
+    if feature_root is not None:
+        loader_options['root'] = feature_root
+    features, feature_manifest = load_feature_snapshot(**loader_options)
     if features.empty:
         raise ValueError("انبار فیچر خالی است؛ ابتدا python brs.py features را اجرا کنید")
     RESEARCH_ROOT.mkdir(parents=True, exist_ok=True)

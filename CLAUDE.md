@@ -24,6 +24,9 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 - وابستگی جدید: به `requirements.txt` اضافه کن، سپس `uv pip compile requirements.txt --python-version 3.11 --universal -o requirements.lock.txt` و `uv pip sync --python venv/Scripts/python.exe requirements.lock.txt`.
 
 ## نقشه کد
+
+مسیر جدید 0.7.16: `research/flow_v4_run.py` و `core/flow_filters.py` خانواده مستقل v4 را با سه کنترل تصادفی/دو اجرا و bootstrap محفوظ ارزیابی می‌کنند؛ تعریف v3 عوض نمی‌شود. `core/dip_diagnostics.py` + `ops/dip_diagnostics.py` فقط آرشیو DIP را کالبدشکافی می‌کنند. `ops/operator_status.py` + `dashboard/operator_status.py` نمای محلی مشترک دو دفترند. `codal-normalize` محدود به جدول با واحد/دوره صریح است؛ هویت/دسترسی تاریخی را حدس نمی‌زند. [قرارداد](docs/research/flow-v4-protocol-fa.md).
+
 | مسیر | مسئولیت |
 | :--- | :--- |
 | `research/probability.py` + `research/probability_run.py` + `dashboard/probability.py` | آزمایش `temporal-frequency-v1` از منبع BASELINES صریح؛ فراوانی گذشته با purge واقعی/embargo، پیش‌بینی محفوظ قبل از نتیجه، Brier زوجی و نمودار کالیبراسیون، کران نامعلوم و همه ۱۶ قاعده/افق. `core/probability.py` سناریوی دستی هزینه/احتمال است. احتمال اختصاصی سهم یا مجوز معامله ندارد؛ [راهنما](docs/research/probability-lab-fa.md). |

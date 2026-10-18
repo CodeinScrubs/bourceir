@@ -193,12 +193,13 @@ def cmd_update(args) -> int:
         collector.db.close()
 
 
-def _build_features(db) -> dict:
+def _build_features(db, *, development_only=False) -> dict:
     from features.store import build_feature_store
 
     print()
     print("🧮 ساخت انبار فیچر...", flush=True)
-    manifest = build_feature_store(db)
+    manifest = build_feature_store(db, root=settings.DATA_DIR / 'features' / 'development' if development_only else None,
+                                   before=settings.RESEARCH_CONFIG['holdout_start'] if development_only else None)
     print(f"   • نسخه {manifest['version']}: {manifest['rows']:,} ردیف، {manifest['symbols']} نماد، "
           f"تا {manifest['date_max']}", flush=True)
     return manifest
@@ -209,7 +210,7 @@ def cmd_features(args) -> int:
 
     db = DatabaseManager()
     try:
-        _build_features(db)
+        _build_features(db, development_only=args.development_only)
     finally:
         db.close()
     return 0
@@ -223,7 +224,8 @@ def cmd_research(args) -> int:
     try:
         print("🔬 پژوهش استراتژی‌های پایه (چند دقیقه)...", flush=True)
         out = run_research(db, unseal_holdout=args.unseal_holdout, random_trials=args.trials,
-                           holdout_strategy=args.holdout_strategy, holdout_horizon=args.holdout_horizon)
+                           holdout_strategy=args.holdout_strategy, holdout_horizon=args.holdout_horizon,
+                           feature_root=settings.DATA_DIR / 'features' / 'development' if args.development_features else None)
         print(f"   • آزمایش ثبت شد: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
     finally:
@@ -251,7 +253,7 @@ def cmd_research_portfolio(args) -> int:
     with DatabaseManager() as db:
         print("🔬 پژوهش سرمایه مشترک و ارزیابی زمانی؛ فقط دوره توسعه...", flush=True)
         out = run_portfolio_research(db, source_id=args.source, initial_capital_rial=args.capital_rial,
-                                     dip_selector=args.dip_selector)
+                                     dip_selector=args.dip_selector, use_personal_profile=not args.no_personal_profile)
         print(f"   • آزمایش: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
     return 0
@@ -261,7 +263,8 @@ def cmd_research_flow(args) -> int:
     from database.db import DatabaseManager
     from research.flow_run import run_flow_research
     with DatabaseManager() as db:
-        out = run_flow_research(db, source_id=args.source, initial_capital_rial=args.capital_rial)
+        out = run_flow_research(db, source_id=args.source, initial_capital_rial=args.capital_rial,
+                                family=args.family, replications=args.replications)
         print(f"   • آزمایش فیلترهای ثابت: {out['experiment_id']}")
         print(f"   • گزارش: {out['report_path']}")
     return 0
@@ -322,6 +325,8 @@ def cmd_research_uncertainty(args) -> int:
         argv += ['--calendar', args.calendar]
     if args.trials_attempted is not None:
         argv += ['--trials-attempted', str(args.trials_attempted)]
+    if args.family_comparisons is not None:
+        argv += ['--family-comparisons', str(args.family_comparisons)]
     return uncertainty(argv)
 
 
@@ -417,6 +422,28 @@ def cmd_codal_tables(args) -> int:
     result = capture_codal_tables(args.url, args.expected_tracing_no)
     print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
     return 0 if result['status'] == 'captured' else 1
+
+
+def cmd_codal_normalize(args) -> int:
+    import json
+
+    from ops.codal_tables import normalize_codal_archive
+    result = normalize_codal_archive(args.archive)
+    print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    return 0 if result['normalized']['verified'] else 2
+
+
+def cmd_dip_diagnostics(args) -> int:
+    import json
+
+    from data_collector.tsetmc import TsetmcProvider
+    from database.db import DatabaseManager
+    from ops.dip_diagnostics import run_dip_diagnostics
+    with DatabaseManager(read_only=True) as db:
+        result = run_dip_diagnostics(db, args.experiment, max_trade_days=args.max_trade_days,
+                                     provider=TsetmcProvider() if args.fetch else None)
+    print(json.dumps(dict(report_path=result['report_path'], witnesses=result['intraday_witnesses']), ensure_ascii=False))
+    return 0
 
 
 def cmd_live(args) -> int:
@@ -659,9 +686,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("features", help="ساخت انبار فیچر (فیچرهای روزانه و بازار)")
+    p.add_argument('--development-only', action='store_true', help='فقط پیش از holdout؛ انبار مستقل، بدون بازکردن دوره مهر و موم')
     p.set_defaults(func=cmd_features)
 
     p = sub.add_parser("research", help="برچسب‌های خالص و ارزیابی استراتژی‌های پایه (فاز ۱-ج)")
+    p.add_argument('--development-features', action='store_true', help='استفاده از انبار مستقل توسعه')
     p.add_argument("--unseal-holdout", action="store_true",
                    help="ارزیابی دوره بیرون از نمونه (فقط برای مدل نهایی؛ نتیجه آن نباید در انتخاب مدل استفاده شود)")
     p.add_argument("--trials", type=int, default=None, help="تعداد تکرار انتخاب تصادفی")
@@ -677,12 +706,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help='فرضیه ثابت انتخاب نامزد؛ صف خرید با فرضیه قدرت خریدار یکسان نیست')
     p.add_argument("--source", default=None, help="شناسه پژوهش پایه ثبت‌شده؛ پیش‌فرض آخرین اجرای موفق")
     p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی پژوهش به ریال؛ مستقل از گزارش حساب')
+    p.add_argument('--no-personal-profile', action='store_true', help='استفاده از سقف پژوهشی ثابت؛ بدون خواندن پروفایل شخصی')
     p.set_defaults(func=cmd_research_portfolio)
 
     p = sub.add_parser('research-flow', help='آزمون سه فیلتر ثابت با نقد مشترک و فشار اجرا؛ فقط دوره توسعه')
+    p.add_argument('--family', choices=['v3', 'v4'], default='v3', help='v4: دو فرضیه چندعاملی مستقل؛ بدون تغییر تعریف v3')
+    p.add_argument('--replications', type=int, default=20000, help='تعداد بازنمونه بلوکی برای v4')
     p.add_argument('--source', default=None, help='شناسه پژوهش پایه محفوظ و سازگار با داده خام')
     p.add_argument('--capital-rial', type=float, default=None, help='سرمایه فرضی به ریال؛ پیش‌فرض تنظیمات بکتست')
     p.set_defaults(func=cmd_research_flow)
+
+    p = sub.add_parser('dip-diagnostics', help='کالبدشکافی حسابداری DIP محفوظ؛ شاهد محدود ترتیب معاملات')
+    p.add_argument('--experiment', required=True, help='شناسه صریح PORTFOLIO محفوظ')
+    p.add_argument('--max-trade-days', type=int, default=50)
+    p.add_argument('--fetch', action='store_true', help='دریافت حداکثر ۵۰ روز ریزمعاملات پس از ثبت فهرست')
+    p.set_defaults(func=cmd_dip_diagnostics)
 
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
@@ -723,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--replications', type=int, default=5000)
     p.add_argument('--seed', type=int, default=41)
     p.add_argument('--trials-attempted', type=int, default=None, help='کل روش‌های آزموده‌شده؛ پیش‌فرض نامعلوم')
+    p.add_argument('--family-comparisons', type=int, default=None, help='کل مقایسه‌های خانواده ثبت‌شده، شامل بلوک‌ها/برش‌ها')
     p.add_argument('--calendar', default=None, help='آرایه JSON جلسات مورد انتظار همان برش توسعه؛ اختیاری')
     p.add_argument('--output', default=str(settings.DATA_DIR / 'private' / 'uncertainty.json'))
     p.set_defaults(func=cmd_research_uncertainty)
@@ -800,6 +839,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--url', required=True, help='پیوند رسمی گزارش یک‌ماهه نوع ۵۸')
     p.add_argument('--expected-tracing-no', required=True, type=int, help='شماره پیگیری مستقل از فهرست اطلاعیه‌ها')
     p.set_defaults(func=cmd_codal_tables)
+
+    p = sub.add_parser('codal-normalize', help='تطبیق سخت‌گیر واحد و ستون ماهانه در خروجی مستقل؛ بدون ارتقای هویت سند')
+    p.add_argument('--archive', required=True, help='پوشه CODALTABLE محفوظ')
+    p.set_defaults(func=cmd_codal_normalize)
     return parser
 
 

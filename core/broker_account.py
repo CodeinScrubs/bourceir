@@ -61,7 +61,8 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                 'archive_last_rial': quote.get('close_raw') if quote else None,
                 'sector_code': quote.get('sector_code') if quote else None,
                 'instrument_type_code': quote.get('instrument_type_code') if quote else None,
-                'research_scope_eligible': quote.get('instrument_type_code') in (300, 303) if quote else None,
+                'research_scope_eligible': (None if not quote or quote.get('instrument_type_code') is None else
+                    quote['instrument_type_code'] in (300, 303) and not row['symbol_fa'][-1:].isdigit()),
                 'archive_session_current': bool(quote and current_daily_row(quote.get('date'), calendar=calendar)),
                 'broker_cost_state': ('requires_history_reconciliation'
                     if row['buy_total_rial'] <= 0 or row['broker_net_average_rial'] <= 0
