@@ -27,14 +27,14 @@ from tests.test_dashboard import dashboard_db as dashboard_db
 from tests.test_dividend_evidence import Response, Session
 
 
-def packet(*, price_changes=None, orders='2@400@999@1001@500@3,', extra_column=None):
+def packet(*, price_changes=None, orders='2@400@999@1001@500@3,', extra_column=None, index_info=''):
     fields = ['10:00:00', 'A ', '1000', '1000', '990', '980', '1010', '970',
               '10', '1000', '1000000', '1', '20261014', '100000', '', '']
     for index, value in (price_changes or {}).items():
         fields[index] = value
     if extra_column is not None:
         fields.insert(14, extra_column)
-    return ';'.join([','.join(fields), '', orders, '', '', '', '', '', '']).encode()
+    return ';'.join([','.join(fields), index_info, orders, '', '', '', '', '', '']).encode()
 
 
 def observation(body=None, code='123', received='2026-10-14T10:00:01+03:30'):
@@ -128,6 +128,26 @@ def test_provider_preserves_bytes_and_closes_without_following_redirects():
     assert result['body_sha256'] == hashlib.sha256(packet()).hexdigest()
     assert not session.calls[0][1]['allow_redirects']
     assert 'headers' not in result
+
+
+def test_benign_markup_in_ignored_index_section_does_not_reject_valid_quote():
+    body = packet(index_info="05/07/26 18:00:00,F,123,<div class='mn'>(1.23)</div> -1.03%")
+    parsed = parse_quote(observation(body), 'آزمون')
+    assert parsed['last_price'] == 1000 and parsed['provider_timestamp'].startswith('2026-10-14T')
+
+
+def test_provider_keeps_index_markup_as_unexecuted_raw_text():
+    body = packet(index_info="123,<div class='mn'>(1.23)</div>")
+    response = Response(body=body)
+    result = TsetmcProvider(session=Session(response)).get_legacy_quote_observation('123')
+    assert result is not None and result['content'] == body and response.closed
+
+
+@pytest.mark.parametrize('changes', [dict(price_changes={2: '<div>1000</div>'}),
+                                    dict(orders='2@400@999@<div>1001</div>@500@3,')])
+def test_markup_cannot_become_price_or_depth(changes):
+    with pytest.raises(ValueError):
+        parse_quote(observation(packet(**changes)), 'آزمون')
 
 
 @pytest.mark.parametrize('change', [dict(status=302), dict(status=206), dict(status=403),

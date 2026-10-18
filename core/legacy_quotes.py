@@ -75,11 +75,14 @@ def parse_quote(observation, symbol):
         text = content.decode('utf-8-sig')
     except UnicodeError as exc:
         raise ValueError('رمزگذاری پاسخ مظنه معتبر نیست') from exc
-    if any(char in text for char in ('<', '>', '\x00')):
+    if '\x00' in text or text.lstrip().startswith('<'):
         raise ValueError('پاسخ مظنه ساختار متنی مجاز ندارد')
     sections = text.strip().split(';')
     if len(sections) != 9:
         raise ValueError('تعداد بخش‌های پاسخ مظنه شناخته‌شده نیست')
+    # بخش شاخص می‌تواند برچسب نمایشی داشته باشد؛ هیچ بخش آن اجرا یا تفسیر نمی‌شود.
+    if any(('<' in section or '>' in section) for index, section in enumerate(sections) if index != 1):
+        raise ValueError('برچسب نمایشی بیرون از بخش شاخص مجاز نیست')
     fields = sections[0].split(',')
     if len(fields) == 17:
         if _integer(fields[14]) != _integer(fields[10]):

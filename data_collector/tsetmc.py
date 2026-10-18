@@ -601,9 +601,9 @@ class TsetmcProvider(BaseDataProvider):
                         raise ValueError('پاسخ مظنه از حد حجم یا زمان گذشت')
                     chunks.append(chunk)
                 content = b''.join(chunks)
-                if not content or b'<' in content or b'>' in content or b'\x00' in content:
+                decoded = content.decode('utf-8-sig')
+                if not content or decoded.lstrip().startswith('<') or b'\x00' in content:
                     raise ValueError('پاسخ خالی یا HTML به جای مظنه')
-                content.decode('utf-8-sig')
                 return dict(source=self.name, ins_code=code, url=url, requested_at=requested,
                             received_at=now_tehran_iso(), content=content, response_bytes=len(content),
                             body_sha256=hashlib.sha256(content).hexdigest())
