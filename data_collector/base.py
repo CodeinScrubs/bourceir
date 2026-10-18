@@ -98,3 +98,7 @@ class BaseDataProvider(ABC):
     def get_instrument_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
         """پاسخ مشخصات یک تاریخ با نشانی/زمان دریافت؛ اعتبار تاریخی خودکار تأیید نمی‌شود."""
         raise NotImplementedError
+
+    def get_dividend_observation(self, ins_code: str, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        """پاسخ بایتی منبع عمومی سود نقدی؛ مبلغ/هویت/زمان انتشار هنوز تأیید نیست."""
+        raise NotImplementedError

@@ -25,6 +25,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 
 ## نقشه کد
 
+مسیر 0.7.21: `core/dividend_evidence.py` هفت ستون منبع قدیمی DPS را با کنترل تاریخ پیش از رقم، تکرار/تعارض و Decimal بدون واحد ارزیابی می‌کند؛ `ops/dividend_evidence.py` برنامه، بایت خام و بازبینی آفلاین را نگه می‌دارد. دریافت فقط از provider اصلی و متادیتای DB فقط‌خواندنی است. صفحه سلامت هیچ وجه/حق/فیچر تأییدشده نمی‌سازد. [قرارداد](docs/research/dividend-source-evidence-fa.md).
+
 در 0.7.20، `paper-portfolio-v3` اعتبار سود را در `core/paper.py` اعمال می‌کند؛ ابهام هر تحلیل در خروجی JSON/تصویر جدید هم محفوظ است، سود کل نامعلوم می‌شود و تحلیل مستقل سالم نتیجه خودش را نگه می‌دارد. v1/v2 خواندنی‌اند؛ سابقه بازنویسی نمی‌شود. `ops/operator_status.py` محتوای علت‌ها را می‌سنجد، نه صرف وجود کلید تحلیل. [بازبینی](docs/reviews/2026-10-18-double-check-fa.md).
 
 مسیر جدید 0.7.19: `core/instrument_history.py` هویت/تاریخ/اعداد پاسخ تاریخی را بدون پیش‌فرض ارزیابی می‌کند؛ `ops/instrument_history.py` برنامه و کد پیشین، همه تلاش‌ها و بازبینی آفلاین را نگه می‌دارد. دریافت فقط از provider اصلی و بدون نوشتن دیتابیس است. شواهد در صفحه سلامت دیده می‌شوند؛ `feature_eligible=false` باقی می‌ماند. [قرارداد](docs/research/instrument-history-evidence-fa.md) و [بررسی ۹ مخزن](docs/reviews/2026-10-18-external-projects-fa.md).
