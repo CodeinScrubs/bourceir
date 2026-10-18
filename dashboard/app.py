@@ -26,6 +26,7 @@ from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
 from dashboard.market_review import page_market_review  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
+from dashboard.probability import page_probability  # noqa: E402
 from dashboard.query_screener import page_query_screener  # noqa: E402
 from dashboard.stock_study import page_stock_study  # noqa: E402
 from dashboard.workbench import page_shortlist, page_workbench  # noqa: E402
@@ -704,6 +705,7 @@ PAGES = {
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,
     "🔬 پژوهش": page_research,
+    '🎲 آزمایش احتمال و بازده': lambda: page_probability(job_panel),
     "📚 مطالعه رشد نمادها": page_stock_study,
     '🔎 پرسش‌گر بازار': page_query_screener,
     "🩺 سلامت سامانه": page_health,

@@ -89,13 +89,35 @@ def _cohort_returns(picks: pd.DataFrame, calendar: pd.Index, horizon: int, k: in
     col = f"net_ret_{horizon}d"
     executed = picks[col].notna() & np.isfinite(picks[col])
     status = f"label_status_{horizon}d"
-    known = picks[status].isin(["complete", "entry_blocked"]) if status in picks else pd.Series(True, index=picks.index)
-    known &= executed | picks[col].isna()
+    if status in picks:
+        executed &= picks[status].eq('complete')
+        known = executed | (picks[status].eq('entry_blocked') & picks[col].isna())
+    else:
+        known = executed | picks[col].isna()
     allocated = picks[col].where(executed, 0.0).where(known)
     grouped = allocated.groupby(picks["date"])
     # روز بی‌انتخاب = نقد؛ خروج نامعلوم = NaN. کاهش گروهی برای بازار کامل سریع‌تر از apply است.
     cohort = (grouped.sum() / k).where(grouped.count() == grouped.size())
     return cohort.reindex(calendar, fill_value=0.0)
+
+
+def entry_counts(picks: pd.DataFrame, horizon: int) -> dict:
+    """پرشدن ورود از بسته‌شدن معامله جداست؛ ورود با داده خراب نامعلوم می‌ماند."""
+    col, status = f'net_ret_{horizon}d', f'label_status_{horizon}d'
+    if {'entry_date', 'entry_executable', status} <= set(picks):
+        filled = picks['entry_date'].ne('') & picks['entry_executable'].eq(True)
+        known = filled | (picks['entry_date'].ne('') & picks[status].eq('entry_blocked'))
+    elif status in picks:
+        # در آرشیو بدون ستون ورود، خروج کامل شاهد ورود است؛ خروج سانسورشده شاهد عدم ورود نیست.
+        filled = picks[status].eq('complete') & picks[col].notna() & np.isfinite(picks[col])
+        known = filled | (picks[status].eq('entry_blocked') & picks[col].isna())
+    else:
+        # سازگاری با پنل‌های قدیمی آزمون؛ قرارداد جدید وضعیت ورود صریح دارد.
+        filled = picks[col].notna() & np.isfinite(picks[col])
+        known = pd.Series(True, index=picks.index)
+    return dict(known_entries=int(known.sum()), filled_entries=int(filled.sum()),
+                unknown_entries=int((~known).sum()),
+                fill_rate=float(filled.sum() / known.sum()) if known.any() else float('nan'))
 
 
 def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: int) -> Dict[str, float]:
@@ -106,8 +128,11 @@ def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: i
     executed = picks[col].notna() & np.isfinite(picks[col])
     status_col = f"label_status_{horizon}d"
     # سازگاری با پنل‌های آزمون قدیمی؛ خروجی labels-v2 همواره وضعیت صریح دارد.
-    known = picks[status_col].isin(["complete", "entry_blocked"]) if status_col in picks else pd.Series(True, index=picks.index)
-    known &= executed | picks[col].isna()
+    if status_col in picks:
+        executed &= picks[status_col].eq('complete')
+        known = executed | (picks[status_col].eq('entry_blocked') & picks[col].isna())
+    else:
+        known = executed | picks[col].isna()
     trades = picks.loc[executed, col]
     calendar = market.index.union(pd.Index(picks["date"].unique())).sort_values()
     days = len(calendar)
@@ -115,16 +140,12 @@ def evaluate_picks(picks: pd.DataFrame, market: pd.DataFrame, horizon: int, k: i
     excess = cohort - market.reindex(calendar)
     gains, losses = trades[trades > 0].sum(), -trades[trades < 0].sum()
     by_year = trades.groupby(picks.loc[executed, "date"].str[:4]).mean()
-    entry_known = known
-    entry_filled = executed
-    if {"entry_date", "entry_executable"}.issubset(picks.columns):
-        entry_known = picks["entry_date"] != ""
-        entry_filled = picks["entry_executable"] & entry_known
+    entries = entry_counts(picks, horizon)
     stats = {
         "days": int(days),
         "picks": int(len(picks)),
         "trades": int(executed.sum()),
-        "fill_rate": float(entry_filled.sum() / entry_known.sum()) if entry_known.sum() else float("nan"),
+        **entries,
         "unknown_picks": int((~known).sum()),
         "unknown_cohorts": int(cohort.isna().sum()),
         "days_without_selection": int(days - picks["date"].nunique()),
@@ -154,8 +175,9 @@ def market_benchmark(panel: pd.DataFrame, horizon: int) -> pd.Series:
     status = f"label_status_{horizon}d"
     values = panel[col].copy()
     if status in panel:
-        values = values.where(panel[status].isin(["complete", "entry_blocked"]))
-        values.loc[panel[status] == "entry_blocked"] = 0.0
+        blocked = panel[status].eq('entry_blocked') & panel[col].isna()
+        values = values.where(panel[status].eq('complete') & np.isfinite(values))
+        values.loc[blocked] = 0.0
     grouped = values.groupby(panel["date"])
     return grouped.mean().where(grouped.count() == grouped.size())
 
@@ -188,10 +210,13 @@ def run_baselines(panel: pd.DataFrame, horizons: List[int], k: int, random_trial
     results: Dict[str, Dict] = {}
     for h in horizons:
         market = market_benchmark(panel, h)
-        all_trades = panel[f"net_ret_{h}d"].dropna()
+        all_trades = panel[f"net_ret_{h}d"].where(np.isfinite(panel[f"net_ret_{h}d"]))
+        if f'label_status_{h}d' in panel:
+            all_trades = all_trades.where(panel[f'label_status_{h}d'].eq('complete'))
+        all_trades = all_trades.dropna()
         entry = {
             "market": {"mean_trade": float(all_trades.mean()), "mean_cohort": float(market.mean()), "win_rate": float((all_trades > 0).mean()),
-                       "fill_rate": float(panel[f"net_ret_{h}d"].notna().mean()),
+                       **entry_counts(panel, h),
                        "t_cohort": tolerant_t(market, lag=h), "days": int(market.notna().sum())},
             "random": random_benchmark(panel, h, k, random_trials),
             "strategies": {},

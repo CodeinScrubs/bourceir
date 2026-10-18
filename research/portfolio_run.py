@@ -1,5 +1,7 @@
 """Registered development-only walk-forward replay from verified, pinned baseline inputs."""
 
+import hashlib
+import io
 import json
 import os
 import re
@@ -11,7 +13,7 @@ import pandas as pd
 
 from backtest.portfolio import PORTFOLIO_VERSION, PortfolioConfig, replay_portfolio
 from config import settings
-from core.timeutils import now_tehran_iso, to_jalali
+from core.timeutils import is_canonical_iso_date, now_tehran_iso, to_jalali
 from database.workbench import WorkbenchRepository
 from features.daily import FEATURE_SET_VERSION
 from features.provenance import assert_compatible_environment
@@ -45,6 +47,13 @@ def verified_baseline_inputs(root, experiment_id=None):
     assert_compatible_environment(feature_manifest)
     if label_manifest.get('fees') != dict(settings.FEES):
         raise ValueError('کارمزد منبع پژوهش پایه با تنظیمات فعلی ناسازگار است')
+    if (label_manifest.get('slippage_bps_each_side') != settings.BACKTEST_CONFIG['default_slippage_bps']
+            or label_manifest.get('lock_min_move_pct') != settings.BACKTEST_CONFIG['lock_min_move_pct']):
+        raise ValueError('لغزش یا آستانه صف منبع پژوهش پایه با تنظیمات فعلی ناسازگار است')
+    declared_labels = payload['params'].get('labels') or {}
+    if (declared_labels.get('version') != LABEL_SET_VERSION
+            or declared_labels.get('sha256') != label_manifest.get('parquet_sha256')):
+        raise ValueError('نسل برچسب با ثبت منبع پژوهش پایه ناسازگار است')
     digests = dict(features=payload["params"]["features"]["sha256"],
                    labels=label_manifest["parquet_sha256"], prices=label_manifest["raw_prices_sha256"])
     cutoff = settings.RESEARCH_CONFIG["holdout_start"]
@@ -54,11 +63,19 @@ def verified_baseline_inputs(root, experiment_id=None):
     frames = {}
     for name, expected in digests.items():
         path = folder / f"{name}.parquet"
-        if _sha256(path) != expected:
+        with path.open('rb') as stream:
+            contents = stream.read(512 * 1024 * 1024 + 1)
+        if len(contents) > 512 * 1024 * 1024:
+            raise ValueError('ورودی محفوظ از سقف ۵۱۲ مگابایت هر فایل بزرگ‌تر است')
+        if hashlib.sha256(contents).hexdigest() != expected:
             raise ValueError("اثر انگشت ورودی پژوهش پایه ناسازگار است")
-        frames[name] = pd.read_parquet(path)
-        if not frames[name].empty and (frames[name]["date"] >= cutoff).any():
+        # تاریخ و مقدار از یک تصویر بایتی خوانده می‌شوند؛ پیش از عبور مرز، بازده باز نمی‌شود.
+        buffer = io.BytesIO(contents)
+        dates = pd.read_parquet(buffer, columns=['date'])['date']
+        if any(not is_canonical_iso_date(day) for day in dates.unique()) or dates.ge(cutoff).any():
             raise ValueError("ورودی پژوهش شامل دوره نهایی است")
+        buffer.seek(0)
+        frames[name] = pd.read_parquet(buffer)
         if _sha256(path) != expected:
             raise ValueError("ورودی پژوهش هنگام خواندن تغییر کرد")
     return experiment_id, frames, digests

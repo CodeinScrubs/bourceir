@@ -325,6 +325,19 @@ def cmd_research_uncertainty(args) -> int:
     return uncertainty(argv)
 
 
+def cmd_research_probability(args) -> int:
+    import json
+
+    from database.db import DatabaseManager
+    from research.probability_run import run_probability_research
+
+    with DatabaseManager() as db:
+        report = run_probability_research(db, source_id=args.source)
+    print(json.dumps(dict(experiment_id=report['experiment_id'], forecast_rows=report['forecast_rows'],
+                          comparisons=len(report['summary']), accepted_for_signals=False), ensure_ascii=False))
+    return 0
+
+
 def cmd_intraday_audit(args) -> int:
     import json
 
@@ -697,6 +710,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--include-warmup', action='store_true', help='سابقه پیش از توسعه برای ورودی فیچر نیز بررسی شود؛ فقط پیش از holdout')
     p.add_argument('--review-note', default=None, help='توضیح بررسی برای اعمال صریح؛ تصدیق انسانی/بیرونی نیست')
     p.set_defaults(func=cmd_price_recovery)
+
+    p = sub.add_parser('research-probability', help='آزمون زمانی احتمال/بازده قواعد ثابت از ورودی محفوظ؛ بدون سیگنال')
+    p.add_argument('--source', required=True, help='شناسه صریح BASELINES؛ دوره توسعه، بدون بازکردن holdout')
+    p.set_defaults(func=cmd_research_probability)
 
     p = sub.add_parser('research-uncertainty', help='عدم قطعیت اختلاف بازده روزانه دو منحنی توسعه؛ تأیید سودآوری نیست')
     p.add_argument('--strategy', required=True, help='Parquet با date و equity_rial؛ فقط دوره توسعه')
