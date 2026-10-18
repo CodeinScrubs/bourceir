@@ -6,6 +6,7 @@ import uuid
 
 from config import settings
 from core.capture_evidence import CAPTURE_VERSION, snapshot_binding, snapshot_sha256
+from core.legacy_quotes import MAX_INSTRUMENTS, QUOTE_SOURCES, VERSION
 from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
 
@@ -13,7 +14,7 @@ CAPTURE_FILES = ('brs.py', 'data_collector/scheduler.py', 'data_collector/tsetmc
                  'data_collector/validator.py', 'database/capture.py', 'database/db.py',
                  'database/migrations/011_capture_evidence.sql', 'core/timeutils.py',
                  'ops/capture_audit.py', 'ops/intraday_audit.py', 'config/settings.py', 'requirements.lock.txt',
-                 'core/capture_evidence.py')
+                 'core/capture_evidence.py', 'core/legacy_quotes.py', 'data_collector/base.py')
 
 
 def canonical_json(value):
@@ -68,7 +69,7 @@ class CaptureRepository:
                 selected[sid] = max(selected.get(sid, 0), row['id'])
         return [cycles[key] for key in sorted(set(selected.values()))]
 
-    def start(self, instruments, *, interval, cycles, forced, provider, explicit_scope):
+    def start(self, instruments, *, interval, cycles, forced, provider, explicit_scope, quote_source='market-watch'):
         if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
             raise ValueError('فاصله دریافت باید عدد صحیح مثبت باشد')
         if isinstance(cycles, bool) or not isinstance(cycles, int) or cycles < 0:
@@ -86,6 +87,9 @@ class CaptureRepository:
                        for r in scope)):
             raise ValueError('دامنه پایش باید سهام عادی با نام و شناسه یکتا باشد')
         scope.sort(key=lambda row: row['symbol_fa'])
+        if quote_source not in QUOTE_SOURCES or (quote_source == 'dated-quote' and
+                (not explicit_scope or len(scope) > MAX_INSTRUMENTS)):
+            raise ValueError('منبع تاریخ‌دار به دامنه صریح حداکثر ده نماد نیاز دارد')
         protocol = dict(version=CAPTURE_VERSION, project_version=settings.VERSION, provider=provider,
                         interval_seconds=interval, planned_cycles=cycles, forced=bool(forced),
                         scope_kind='explicit' if explicit_scope else 'current_active_metadata',
@@ -93,6 +97,8 @@ class CaptureRepository:
                         trading_days=list(settings.TRADING_DAYS), calendar=self.db.get_market_calendar(),
                         code=capture_code_identity(), decisions_preregistered=False,
                         trading_state_feed_available=False, independent_book_clock_available=False)
+        protocol.update(quote_source=quote_source,
+                        quote_contract_version=VERSION if quote_source == 'dated-quote' else None)
         text = canonical_json(protocol)
         run_id = 'CAP-' + uuid.uuid4().hex
         with self.db.conn:

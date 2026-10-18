@@ -57,6 +57,7 @@ def read_capture_audit(db, session_date):
                   valid=0, changed_or_first=0, unchanged=0, missing=0, rejected=0, duplicate=0, outcome_unknown=0,
                   bound_snapshot_receipts=0, snapshot_binding_missing=0, snapshot_binding_conflict=0,
                   snapshot_binding_clock_invalid=0,
+                  quote_source_evidence_invalid=0,
                   price_time_fresh=0, price_time_stale=0, price_time_future=0, price_time_unknown=0)
                   for row in protocol['instruments']}
         counts = Counter()
@@ -112,6 +113,7 @@ def read_capture_audit(db, session_date):
                     problems = ['capture_receipt_time_unknown']
                 label = ('snapshot_binding_missing' if 'snapshot_binding_missing' in problems else
                          'snapshot_binding_conflict' if 'snapshot_binding_conflict' in problems else
+                         'quote_source_evidence_invalid' if 'quote_source_evidence_invalid' in problems else
                          'snapshot_binding_clock_invalid' if problems else 'bound_snapshot_receipts')
                 item[label] += 1
                 receives[row['ins_code']].append(finish)
@@ -139,6 +141,7 @@ def read_capture_audit(db, session_date):
         # دو انتها کافی نیست؛ این فقط شاهد پوشاندن حدود ساعت تنظیم‌شده است.
         run = dict(id=source['id'], started_at=source['started_at'], protocol_sha256=source['protocol_sha256'],
                    capture_version=protocol['version'],
+                   quote_source=protocol.get('quote_source', 'market-watch'),
                    project_version=protocol['project_version'], code_sha256=protocol['code']['sha256'],
                    scope_kind=protocol['scope_kind'], expected_instruments=len(by_ins),
                    interval_seconds=protocol['interval_seconds'], forced=protocol['forced'],

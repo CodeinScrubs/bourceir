@@ -193,7 +193,8 @@ JOB_LABELS = {"update": "به‌روزرسانی داده‌ها", "live": "پا
               'research-flow': 'پژوهش فیلترهای ثابت جریان حقیقی', 'research-preflight': 'بررسی قرارداد داده پژوهش'}
 
 
-def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False) -> None:
+def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable: bool = False,
+              disabled: bool = False) -> None:
     status = jobs.job_status(name)
     cols = st.columns([2, 1])
     with cols[0]:
@@ -207,7 +208,7 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
             if stoppable and st.button("⏹ توقف", key=f"stop-{name}", width="stretch"):
                 jobs.stop_job(name)
                 st.rerun()
-        elif st.button(start_label, key=f"start-{name}", type="primary", width="stretch"):
+        elif st.button(start_label, key=f"start-{name}", type="primary", width="stretch", disabled=disabled):
             jobs.start_job(name, args)
             st.rerun()
     if status["log_tail"]:
@@ -269,9 +270,19 @@ def page_home() -> None:
               "اجرای دوباره، اصلاحات اخیر منبع را نیز بررسی می‌کند.")
 
     st.subheader("📡 پایش زنده بازار")
-    job_panel("live", ["live"], "شروع پایش زنده",
-              "در ساعات بازار هر ۳۰ ثانیه وضعیت همه سهام (قیمت، صف‌ها، ۵ مظنه، حقیقی/حقوقی) را ثبت می‌کند. "
-              "خارج از ساعات بازار منتظر می‌ماند.", stoppable=True)
+    quote_mode = st.selectbox('منبع پایش', ['دیده‌بان همه نمادها', 'قیمت تاریخ‌دار نمونه محدود'], key='live-quote-source')
+    live_args, disabled = ['live'], False
+    if quote_mode == 'قیمت تاریخ‌دار نمونه محدود':
+        selected_quotes = st.multiselect('نمادهای پایش تاریخ‌دار', symbol_list(), max_selections=10,
+                                        key='live-dated-symbols')
+        disabled = not selected_quotes
+        live_args += ['--quote-source', 'dated-quote', '--symbols', ','.join(selected_quotes)]
+        st.info('این مسیر، تاریخ و ساعت قیمت را از همان پاسخ منبع می‌خواند. دامنه مجاز، صف و سرانه تأییدشده '
+                'نمی‌سازد؛ برای ثبت مشاهده آینده است و مجوز معامله نیست.')
+    job_panel("live", live_args, "شروع پایش زنده",
+              'در ساعات بازار با فاصله تنظیم‌شده دریافت می‌کند و خارج ساعت منتظر می‌ماند. '
+              'تاریخ غایب، پاسخ ناموفق و قیمت کهنه در گزارش کیفیت باقی می‌مانند. '
+              'تغییر انتخاب‌ها نیازمند توقف و شروع دوباره پایش است.', stoppable=True, disabled=disabled)
 
     st.divider()
     be = market_rules.breakeven_move() * 100
@@ -632,6 +643,7 @@ def page_health() -> None:
                 stop_labels = {'cycles_completed': 'چرخه‌های تعیین‌شده تمام شدند',
                                'user_interrupted': 'توقف دستی', 'error': 'خطا', None: 'پایان ثبت نشده'}
                 runs = [{'شروع پایش': to_jalali(run['started_at'], with_time=True),
+                         'منبع': 'تاریخ‌دار تک‌نماد' if run.get('quote_source') == 'dated-quote' else 'دیده‌بان',
                          'نمادهای هدف': run['expected_instruments'], 'شروع دریافت': run['attempted_polls'],
                          'نتیجه نامعلوم': run['pending_polls'], 'پاسخ معتبر همه نمادها': run['complete_scope_polls'],
                          'بیشترین فاصله شروع دریافت (ثانیه)': ('نامعلوم' if run['max_poll_start_gap_seconds'] is None
@@ -644,6 +656,7 @@ def page_health() -> None:
                         fields = ('symbol', 'valid', 'unchanged', 'missing', 'duplicate', 'rejected',
                                   'bound_snapshot_receipts', 'snapshot_binding_missing', 'snapshot_binding_conflict',
                                   'snapshot_binding_clock_invalid',
+                                  'quote_source_evidence_invalid',
                                   'outcome_unknown', 'price_time_fresh', 'price_time_stale', 'price_time_future',
                                   'price_time_unknown', 'max_valid_poll_gap_seconds')
                         instruments = pd.DataFrame(run['per_symbol'])[list(fields)]
@@ -654,6 +667,7 @@ def page_health() -> None:
                             'duplicate': 'شناسه تکراری', 'rejected': 'رد شده', 'outcome_unknown': 'نتیجه نامعلوم',
                             'bound_snapshot_receipts': 'رسید متصل به مظنه', 'snapshot_binding_missing': 'پیوند موجود نیست',
                             'snapshot_binding_conflict': 'محتوای ناسازگار', 'snapshot_binding_clock_invalid': 'ساعت ناسازگار',
+                            'quote_source_evidence_invalid': 'شاهد منبع ناسازگار',
                             'price_time_fresh': 'زمان قیمت تازه', 'price_time_stale': 'زمان قیمت قدیمی',
                             'price_time_future': 'زمان قیمت در آینده',
                             'price_time_unknown': 'زمان قیمت نامعلوم',
