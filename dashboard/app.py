@@ -594,6 +594,9 @@ def page_health() -> None:
     with st.expander('شواهد مشخصات تاریخی نمادها'):
         from dashboard.instrument_history import show_instrument_history
         show_instrument_history()
+    with st.expander('شواهد منبع سود نقدی'):
+        from dashboard.dividend_evidence import show_dividend_evidence
+        show_dividend_evidence()
     with st.expander('کیفیت ثبت داده درون‌روزی'):
         st.caption('فاصله اسنپ‌شات‌ها، فاصله تغییرات ذخیره‌شده است؛ پاسخ بدون تغییر دوباره ذخیره نمی‌شود. '
                    'ثبت مستقل چرخه‌ها کیفیت دریافت را جدا نشان می‌دهد. زمان مستقل عمق بازار، وضعیت مجاز معاملات '

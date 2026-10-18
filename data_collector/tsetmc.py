@@ -11,6 +11,7 @@
 هیچ داده ساختگی تولید نمی‌شود: در هر خطا، خطا لاگ شده و None برگردانده می‌شود.
 """
 
+import hashlib
 import logging
 import math
 import time
@@ -23,6 +24,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import settings
+from core.dividend_evidence import MAX_BYTES, dividend_request
 from core.instrument_history import history_request
 from core.text import normalize_fa, normalize_symbol
 from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
@@ -479,6 +481,42 @@ class TsetmcProvider(BaseDataProvider):
             return None
         return dict(source=self.name, url=url, ins_code=code, requested_date=trade_date,
                     received_at=now_tehran_iso(), payload=payload)
+
+    def get_dividend_observation(self, ins_code: str, symbol_fa: str) -> Optional[Dict[str, Any]]:
+        code, symbol, url = dividend_request(ins_code, symbol_fa)
+        requested = now_tehran_iso()
+        started = time.monotonic()
+        try:
+            if settings.RATE_LIMIT_DELAY > 0:
+                time.sleep(settings.RATE_LIMIT_DELAY)
+            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+                stream=True, allow_redirects=False, headers={'Accept': 'text/plain'})
+            try:
+                response.raise_for_status()
+                if response.status_code != 200 or response.url != url:
+                    raise ValueError('پاسخ جزئی یا تغییرمسیر، منبع کامل نیست')
+                length = response.headers.get('Content-Length', '')
+                if length.isdigit() and int(length) > MAX_BYTES:
+                    raise ValueError('پاسخ منبع سود نقدی از حد حجم گذشت')
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > MAX_BYTES or time.monotonic() - started > 60:
+                        raise ValueError('پاسخ منبع سود نقدی از حد حجم یا زمان گذشت')
+                    chunks.append(chunk)
+                content = b''.join(chunks)
+                # صفحه تأیید/ورود، بدنه قابل بایگانی این ابزار عمومی نیست.
+                if b'<' in content or b'>' in content or b'\x00' in content:
+                    raise ValueError('صفحه HTML یا کپچا به‌جای جدول سود نقدی')
+                content.decode('utf-8-sig')
+                return dict(source=self.name, ins_code=code, symbol=symbol, url=url,
+                    requested_at=requested, received_at=now_tehran_iso(), content=content,
+                    response_bytes=len(content), body_sha256=hashlib.sha256(content).hexdigest())
+            finally:
+                response.close()
+        except (requests.RequestException, ValueError, UnicodeError) as error:
+            logger.warning('دریافت منبع عمومی سود نقدی ناموفق بود: %s', type(error).__name__)
+            return None
 
     def get_session_candles(self) -> Optional[Dict[str, Any]]:
         """

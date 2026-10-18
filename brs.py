@@ -430,6 +430,37 @@ def cmd_instrument_history_review(args) -> int:
     return 0
 
 
+def cmd_dividend_source(args) -> int:
+    import json
+
+    from data_collector.tsetmc import TsetmcProvider
+    from database.db import DatabaseManager
+    from ops.dividend_evidence import capture_dividend_evidence
+
+    symbols = list(dict.fromkeys(_symbols(args.symbols) or []))
+    if not 1 <= len(symbols) <= 10:
+        raise ValueError('یک تا ده نماد ثبت‌شده لازم است')
+    with DatabaseManager(read_only=True) as db:
+        instruments = [db.get_symbol(symbol) for symbol in symbols]
+    if any(item is None for item in instruments):
+        raise ValueError('نماد در فهرست محلی نیست؛ هویت حدس زده نمی‌شود')
+    result = capture_dividend_evidence(TsetmcProvider(), instruments)
+    print(json.dumps(dict(folder=result['folder'], attempts=len(result['cases']), status_counts=result['status_counts'],
+        feature_eligible=False, economic_entitlements_verified=False, settlement_verified=False), ensure_ascii=False))
+    return 0 if all(case['status'] == 'observed_unverified' and case['assessment']['development_rows'] > 0 for case in result['cases']) else 1
+
+
+def cmd_dividend_source_review(args) -> int:
+    import json
+
+    from ops.dividend_evidence import load_dividend_evidence
+
+    result = load_dividend_evidence(args.study)
+    print(json.dumps(dict(artifacts_verified=True, attempts=len(result['cases']), status_counts=result['status_counts'],
+        feature_eligible=False, economic_entitlements_verified=False, accepted_for_signals=False), ensure_ascii=False))
+    return 0
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -792,6 +823,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('instrument-history-review', help='بازبینی آفلاین کد، پاسخ و حدود شاهد مشخصات تاریخی')
     p.add_argument('--study', required=True, help='مسیر خصوصی HISTORY-...')
     p.set_defaults(func=cmd_instrument_history_review)
+
+    p = sub.add_parser('dividend-source', help='بایگانی منبع عمومی سود نقدی؛ واحد، استحقاق و وصول خودکار تأیید نمی‌شوند')
+    p.add_argument('--symbols', required=True, help='یک تا ده نماد ثبت‌شده، جداشده با کاما')
+    p.set_defaults(func=cmd_dividend_source)
+
+    p = sub.add_parser('dividend-source-review', help='بازحساب آفلاین منبع سود نقدی با مرز توسعه و تمام تلاش‌ها')
+    p.add_argument('--study', required=True, help='پوشه خصوصی DIVIDENDS-...')
+    p.set_defaults(func=cmd_dividend_source_review)
 
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
