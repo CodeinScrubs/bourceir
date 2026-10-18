@@ -22,6 +22,7 @@ from core import market_rules  # noqa: E402
 from core.text import to_fa_digits  # noqa: E402
 from core.timeutils import is_market_open, now_tehran, to_jalali  # noqa: E402
 from dashboard.broker import page_broker  # noqa: E402
+from dashboard.capital_capacity import page_capital_capacity  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
 from dashboard.market_review import page_market_review  # noqa: E402
@@ -713,6 +714,7 @@ PAGES = {
     "📡 دیده‌بان زنده": page_live,
     "📰 اطلاعیه‌های کدال": page_codal,
     "🔬 پژوهش": page_research,
+    '💸 هزینه و ظرفیت سرمایه': page_capital_capacity,
     '🎲 آزمایش احتمال و بازده': lambda: page_probability(job_panel),
     "📚 مطالعه رشد نمادها": page_stock_study,
     '🔎 پرسش‌گر بازار': page_query_screener,

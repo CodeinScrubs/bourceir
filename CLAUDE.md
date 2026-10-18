@@ -25,6 +25,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 
 ## نقشه کد
 
+مسیر جدید 0.7.18: `core/capital_capacity.py` حساب نقد/هزینه، نامعلوم و سهم غیرنقد را تطبیق می‌دهد؛ `ops/capital_capacity.py` تمام انتخاب‌های FLOW v4 را در اندازه‌های ثابت پس از ثبت برنامه بازاجرا می‌کند. اندازه یک باید با منبع برابر باشد؛ مطالعه، سبد فعلی یا بکتست بدون هزینه نیست. صفحه `dashboard/capital_capacity.py` فقط نتیجه محفوظ را نشان می‌دهد. [قرارداد](docs/research/capital-capacity-fa.md).
+
 مسیر جدید 0.7.17: `core/capture_evidence.py` پیوند همه ستون‌های snapshot را با چرخه دریافت کنترل می‌کند؛ `capture-protocol-v2` و `forward-observation-v2` شکست تازه، تغییر محتوا، کد/هویت و ساعت را مستقل کنترل می‌کنند. گزارش v1 خواندنی است؛ ادامه با کد تازه نیاز به پایش و برنامه تازه دارد. این تطبیق محلی، صحت بیرونی/اجرای معامله/سود نیست. [قرارداد](docs/research/receipt-bound-observations-fa.md).
 
 مسیر جدید 0.7.16: `research/flow_v4_run.py` و `core/flow_filters.py` خانواده مستقل v4 را با سه کنترل تصادفی/دو اجرا و bootstrap محفوظ ارزیابی می‌کنند؛ تعریف v3 عوض نمی‌شود. `core/dip_diagnostics.py` + `ops/dip_diagnostics.py` فقط آرشیو DIP را کالبدشکافی می‌کنند. `ops/operator_status.py` + `dashboard/operator_status.py` نمای محلی مشترک دو دفترند. `codal-normalize` محدود به جدول با واحد/دوره صریح است؛ هویت/دسترسی تاریخی را حدس نمی‌زند. [قرارداد](docs/research/flow-v4-protocol-fa.md).

@@ -377,6 +377,30 @@ def cmd_research_review(args) -> int:
     return 0  # موفقیت بازبینی فایل‌ها، تأیید سودآوری نیست.
 
 
+def cmd_capital_study(args) -> int:
+    import json
+
+    from database.db import DatabaseManager
+    from ops.capital_capacity import run_capacity_study
+
+    with DatabaseManager() as db:
+        result = run_capacity_study(db, args.experiment, owner_capital=args.owner_capital)
+    print(json.dumps(dict(experiment_id=result['experiment_id'], folder=result['folder'],
+                          cases=len(result['cases']), accepted_for_signals=False), ensure_ascii=False))
+    return 0
+
+
+def cmd_capital_review(args) -> int:
+    import json
+
+    from ops.capital_capacity import read_capacity_study
+
+    result = read_capacity_study(Path(args.study), deep=True)
+    print(json.dumps(dict(experiment_id=result['experiment_id'], artifacts_verified=result['artifacts_verified'],
+                          cases=len(result['cases']), accepted_for_signals=False), ensure_ascii=False))
+    return 0
+
+
 def cmd_universe(args) -> int:
     from data_collector.scheduler import DataCollector
 
@@ -721,6 +745,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--max-trade-days', type=int, default=50)
     p.add_argument('--fetch', action='store_true', help='دریافت حداکثر ۵۰ روز ریزمعاملات پس از ثبت فهرست')
     p.set_defaults(func=cmd_dip_diagnostics)
+
+    p = sub.add_parser('capital-study', help='بازاجرای اندازه سرمایه و تفکیک کارمزد روی تمام انتخاب‌های محفوظ FLOW v4')
+    p.add_argument('--experiment', required=True, help='شناسه صریح FLOW v4؛ تعریف روش تغییر نمی‌کند')
+    p.add_argument('--owner-capital', action='store_true', help='افزودن اندازه سرمایه مرحله از پروفایل محلی؛ بدون خواندن موجودی کارگزاری')
+    p.set_defaults(func=cmd_capital_study)
+
+    p = sub.add_parser('capital-review', help='بازحساب نقد و هزینه از تمام شواهد محفوظ مطالعه ظرفیت')
+    p.add_argument('--study', required=True, help='مسیر خصوصی CAPACITY-...')
+    p.set_defaults(func=cmd_capital_review)
 
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
