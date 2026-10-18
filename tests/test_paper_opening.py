@@ -251,10 +251,11 @@ def test_opening_is_append_only_and_tampering_is_detected(mirror, db):
         repo.report(key)
 
 
-def test_legacy_cash_protocol_is_readable_and_not_rewritten(mirror, db):
+@pytest.mark.parametrize('version', ['paper-portfolio-v1', 'paper-portfolio-v2'])
+def test_legacy_cash_protocol_is_readable_and_not_rewritten(mirror, db, version):
     repo, _, _ = mirror
     protocol = repo._protocol(name='قدیمی', capital_rial=10000, rationale='آزمون', mode='manual')
-    protocol['version'] = 'paper-portfolio-v1'
+    protocol['version'] = version
     protocol.pop('opening_kind')
     protocol['code']['sha256'] = 'old-code'
     with db.conn:
