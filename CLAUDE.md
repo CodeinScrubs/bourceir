@@ -25,6 +25,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 
 ## نقشه کد
 
+مسیر جدید 0.7.19: `core/instrument_history.py` هویت/تاریخ/اعداد پاسخ تاریخی را بدون پیش‌فرض ارزیابی می‌کند؛ `ops/instrument_history.py` برنامه و کد پیشین، همه تلاش‌ها و بازبینی آفلاین را نگه می‌دارد. دریافت فقط از provider اصلی و بدون نوشتن دیتابیس است. شواهد در صفحه سلامت دیده می‌شوند؛ `feature_eligible=false` باقی می‌ماند. [قرارداد](docs/research/instrument-history-evidence-fa.md) و [بررسی ۹ مخزن](docs/reviews/2026-10-18-external-projects-fa.md).
+
 مسیر جدید 0.7.18: `core/capital_capacity.py` حساب نقد/هزینه، نامعلوم و سهم غیرنقد را تطبیق می‌دهد؛ `ops/capital_capacity.py` تمام انتخاب‌های FLOW v4 را در اندازه‌های ثابت پس از ثبت برنامه بازاجرا می‌کند. اندازه یک باید با منبع برابر باشد؛ مطالعه، سبد فعلی یا بکتست بدون هزینه نیست. صفحه `dashboard/capital_capacity.py` فقط نتیجه محفوظ را نشان می‌دهد. [قرارداد](docs/research/capital-capacity-fa.md).
 
 مسیر جدید 0.7.17: `core/capture_evidence.py` پیوند همه ستون‌های snapshot را با چرخه دریافت کنترل می‌کند؛ `capture-protocol-v2` و `forward-observation-v2` شکست تازه، تغییر محتوا، کد/هویت و ساعت را مستقل کنترل می‌کنند. گزارش v1 خواندنی است؛ ادامه با کد تازه نیاز به پایش و برنامه تازه دارد. این تطبیق محلی، صحت بیرونی/اجرای معامله/سود نیست. [قرارداد](docs/research/receipt-bound-observations-fa.md).

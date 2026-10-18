@@ -23,6 +23,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import settings
+from core.instrument_history import history_request
 from core.text import normalize_fa, normalize_symbol
 from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
 from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, DAILY_COLUMNS, BaseDataProvider
@@ -468,6 +469,16 @@ class TsetmcProvider(BaseDataProvider):
         except (TypeError, ValueError, OverflowError):
             return None
         return final_date if is_canonical_iso_date(final_date) else None
+
+    def get_instrument_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        code, url = history_request(ins_code, trade_date)
+        if trade_date > now_tehran_iso()[:10]:
+            raise ValueError('درخواست تاریخ آینده مجاز نیست')
+        payload = self._get_json(url)
+        if payload is None:
+            return None
+        return dict(source=self.name, url=url, ins_code=code, requested_date=trade_date,
+                    received_at=now_tehran_iso(), payload=payload)
 
     def get_session_candles(self) -> Optional[Dict[str, Any]]:
         """
