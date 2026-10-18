@@ -5,30 +5,68 @@ import json
 import uuid
 
 from config import settings
+from core.capture_evidence import CAPTURE_VERSION, snapshot_binding, snapshot_sha256
 from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
 
-CAPTURE_VERSION = 'capture-protocol-v1'
 CAPTURE_FILES = ('brs.py', 'data_collector/scheduler.py', 'data_collector/tsetmc.py',
                  'data_collector/validator.py', 'database/capture.py', 'database/db.py',
                  'database/migrations/011_capture_evidence.sql', 'core/timeutils.py',
-                 'ops/capture_audit.py', 'ops/intraday_audit.py', 'config/settings.py', 'requirements.lock.txt')
+                 'ops/capture_audit.py', 'ops/intraday_audit.py', 'config/settings.py', 'requirements.lock.txt',
+                 'core/capture_evidence.py')
 
 
 def canonical_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
-def capture_code_identity():
+def capture_code_identity(*, sources=None):
     """هش محتوا به checkout پاک یا نصب Git وابسته نیست و شامل رمز/نشست نیست."""
-    files = {name: hashlib.sha256((settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+    files = {name: hashlib.sha256(sources[name].encode() if sources is not None else
+                                 (settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
              for name in CAPTURE_FILES}
     return dict(files=files, sha256=hashlib.sha256(canonical_json(files).encode()).hexdigest())
+
+
+def bind_collected_snapshot(db, symbol_id, snapshot, stored_at):
+    """پیوند فقط پس از تطبیق همه ستون‌های پاسخ با ردیف ذخیره‌شده صادر می‌شود."""
+    from database.db import SNAPSHOT_COLUMNS
+
+    expected = dict(zip(['symbol_id'] + list(SNAPSHOT_COLUMNS), db._snapshot_params(symbol_id, snapshot)))
+    row = db.conn.execute('SELECT * FROM snapshots WHERE symbol_id=? AND captured_at=? AND source=?',
+                          (symbol_id, stored_at, expected['source'])).fetchone()
+    if row is None:
+        return None
+    stored = dict(row)
+    content = {k: v for k, v in stored.items() if k not in ('id', 'captured_at')}
+    expected.pop('captured_at')
+    return snapshot_binding(stored) if snapshot_sha256(content) == snapshot_sha256(expected) else None
 
 
 class CaptureRepository:
     def __init__(self, db):
         self.db = db
+
+    def latest_cycles(self, symbol_ids):
+        """ترتیب شناسه، مستقل از ساعت؛ ثبت با روز ناسازگار باعث بازگشت به دریافت قدیمی نمی‌شود."""
+        selected, cycles = {}, {}
+        rows = self.db.conn.execute("SELECT run_id,MAX(id) AS id FROM capture_events "
+                                    "WHERE event='poll_finished' GROUP BY run_id")
+        for row in rows.fetchall():
+            run = dict(self.db.conn.execute('SELECT * FROM capture_runs WHERE id=?', (row['run_id'],)).fetchone())
+            scope = {item['symbol_id'] for item in json.loads(run['protocol_json'])['instruments']}
+            wanted = scope.intersection(symbol_ids)
+            if not wanted:
+                continue
+            finished = dict(self.db.conn.execute('SELECT * FROM capture_events WHERE id=?', (row['id'],)).fetchone())
+            started = self.db.conn.execute("SELECT * FROM capture_events WHERE run_id=? AND cycle=? AND event='poll_started'",
+                                           (row['run_id'], finished['cycle'])).fetchone()
+            if started is None:
+                raise ValueError('پایان دریافت بدون شاهد شروع ثبت شده است')
+            cycles[row['id']] = dict(run=run, started=dict(started), finished=finished)
+            for sid in wanted:
+                selected[sid] = max(selected.get(sid, 0), row['id'])
+        return [cycles[key] for key in sorted(set(selected.values()))]
 
     def start(self, instruments, *, interval, cycles, forced, provider, explicit_scope):
         if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
@@ -42,7 +80,10 @@ class CaptureRepository:
         if (not scope or any(not r['symbol_fa'] or not r['ins_code'] or r['instrument_type_code'] not in (300, 303)
                              for r in scope)
                 or len({r['ins_code'] for r in scope}) != len(scope)
-                or len({r['symbol_fa'] for r in scope}) != len(scope)):
+                or len({r['symbol_fa'] for r in scope}) != len(scope)
+                or len({r['symbol_id'] for r in scope}) != len(scope)
+                or any(isinstance(r['symbol_id'], bool) or not isinstance(r['symbol_id'], int) or r['symbol_id'] <= 0
+                       for r in scope)):
             raise ValueError('دامنه پایش باید سهام عادی با نام و شناسه یکتا باشد')
         scope.sort(key=lambda row: row['symbol_fa'])
         protocol = dict(version=CAPTURE_VERSION, project_version=settings.VERSION, provider=provider,
@@ -76,8 +117,15 @@ class CaptureRepository:
         conn = self.db.conn
         with conn:
             conn.execute('BEGIN IMMEDIATE')
-            if not conn.execute('SELECT 1 FROM capture_runs WHERE id=?', (run_id,)).fetchone():
+            run = conn.execute('SELECT * FROM capture_runs WHERE id=?', (run_id,)).fetchone()
+            if not run:
                 raise ValueError('پروتکل پایش ثبت نشده است')
+            protocol = json.loads(run['protocol_json'])
+            if hashlib.sha256(run['protocol_json'].encode()).hexdigest() != run['protocol_sha256']:
+                raise ValueError('هش پروتکل دریافت ناسازگار است')
+            if (event in ('poll_started', 'poll_finished') and protocol['version'] == CAPTURE_VERSION
+                    and protocol['code'] != capture_code_identity()):
+                raise ValueError('کد دریافت از زمان ثبت پروتکل تغییر کرده؛ اجرای تازه لازم است')
             if conn.execute("SELECT 1 FROM capture_events WHERE run_id=? AND event='run_stopped'", (run_id,)).fetchone():
                 raise ValueError('پایش پایان یافته است؛ اجرای تازه لازم است')
             events = {r[0] for r in conn.execute('SELECT event FROM capture_events WHERE run_id=? AND cycle=?',

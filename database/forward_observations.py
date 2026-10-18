@@ -12,17 +12,19 @@ from core.forward_observations import (
     clock,
     digest,
     event_hash,
-    quote_evidence,
+    receipt_quote_evidence,
     report_trial,
+    select_receipts,
     validate_archive,
     validate_schedule,
 )
 from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
+from database.capture import CAPTURE_FILES, CaptureRepository, capture_code_identity
 
-CODE_FILES = ('core/forward_observations.py', 'database/forward_observations.py',
+CODE_FILES = tuple(dict.fromkeys(('core/forward_observations.py', 'database/forward_observations.py',
               'database/migrations/012_forward_observations.sql', 'dashboard/forward_observations.py',
-              'database/db.py', 'core/timeutils.py', 'core/text.py', 'config/settings.py', 'requirements.lock.txt')
+              'database/db.py', 'core/timeutils.py', 'core/text.py', 'config/settings.py', 'requirements.lock.txt') + CAPTURE_FILES))
 
 
 def code_identity():
@@ -70,7 +72,8 @@ class ForwardRepository:
             protocol = dict(id=key, version=VERSION, registered_at=at, project_version=settings.VERSION,
                             rationale=rationale.strip(), scope=scope, schedule=schedule, calendar=calendar,
                             trading_hours=dict(settings.TRADING_HOURS), trading_days=list(settings.TRADING_DAYS),
-                            code=identity, kind='manual_observation_only', accepted_for_signals=False,
+                            code=identity, capture_code=capture_code_identity(sources=identity['sources']),
+                            kind='manual_observation_only', accepted_for_signals=False,
                             externally_timestamped=False, execution_model=None)
             self.db.conn.execute('INSERT INTO forward_trials VALUES(?,?,?,?)', (key, at, canonical(protocol), digest(protocol)))
         return key
@@ -112,12 +115,15 @@ class ForwardRepository:
             if clock(at) < last_at or not clock(protocol['schedule'][phase + '_start']) <= clock(at) < clock(protocol['schedule'][phase + '_end']):
                 raise ValueError('اکنون داخل پنجره از پیش ثبت‌شده نیست یا ساعت به عقب برگشته است')
             rows = []
+            cycles = CaptureRepository(self.db).latest_cycles({s['symbol_id'] for s in protocol['scope']})
+            receipts = select_receipts(cycles, protocol['scope'], protocol['capture_code'])
             for instrument, snapshot in zip(protocol['scope'], snapshots):
-                row = dict(symbol_id=instrument['symbol_id'], quote=quote_evidence(snapshot, at))
+                row = dict(symbol_id=instrument['symbol_id'],
+                           quote=receipt_quote_evidence(snapshot, at, receipts.get(instrument['symbol_id'])))
                 if phase == 'assessment':
                     row.update(given.get(instrument['symbol_fa'], dict(choice='not_reviewed', rationale='')))
                 rows.append(row)
-            payload = dict(code_sha256=identity['sha256'], rows=rows)
+            payload = dict(code_sha256=identity['sha256'], capture_cycles=cycles, rows=rows)
             self.db.conn.execute('INSERT INTO forward_events(trial_id,phase,recorded_at,payload_json,previous_sha256,event_sha256) '
                                  'VALUES(?,?,?,?,?,?)', (trial_id, phase, at, canonical(payload), previous,
                                                       event_hash(trial_id, phase, at, payload, previous)))

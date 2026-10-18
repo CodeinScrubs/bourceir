@@ -25,6 +25,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 
 ## نقشه کد
 
+مسیر جدید 0.7.17: `core/capture_evidence.py` پیوند همه ستون‌های snapshot را با چرخه دریافت کنترل می‌کند؛ `capture-protocol-v2` و `forward-observation-v2` شکست تازه، تغییر محتوا، کد/هویت و ساعت را مستقل کنترل می‌کنند. گزارش v1 خواندنی است؛ ادامه با کد تازه نیاز به پایش و برنامه تازه دارد. این تطبیق محلی، صحت بیرونی/اجرای معامله/سود نیست. [قرارداد](docs/research/receipt-bound-observations-fa.md).
+
 مسیر جدید 0.7.16: `research/flow_v4_run.py` و `core/flow_filters.py` خانواده مستقل v4 را با سه کنترل تصادفی/دو اجرا و bootstrap محفوظ ارزیابی می‌کنند؛ تعریف v3 عوض نمی‌شود. `core/dip_diagnostics.py` + `ops/dip_diagnostics.py` فقط آرشیو DIP را کالبدشکافی می‌کنند. `ops/operator_status.py` + `dashboard/operator_status.py` نمای محلی مشترک دو دفترند. `codal-normalize` محدود به جدول با واحد/دوره صریح است؛ هویت/دسترسی تاریخی را حدس نمی‌زند. [قرارداد](docs/research/flow-v4-protocol-fa.md).
 
 | مسیر | مسئولیت |
@@ -52,8 +54,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `core/stock_study.py` + `ops/stock_study.py` | مطالعه توصیفی با ورودی و کد محفوظ، همتای منتخب فقط از اطلاعات پیشین و رتبه ارزش بازار مشاهده؛ `stock-study-v1`. نمونه و دوره بررسی‌شده برای فرضیه مشتق‌شده مستقل نیست؛ مجوز سیگنال ندارد. راهنما `docs/research/stock-study.md`. فیلتر جریان `flow-filters-v3` / `flow-portfolio-v3` است؛ کنترل سازگاری آن با `daily-v7` در `core/client_quality.py` مشترک است. |
 | `core/codal_documents.py` + `ops/codal_documents.py` | آرشیو متن/PDF عمومی کدال، نسخه مستقل و هش محتوا/کد؛ زمان دسترسی زودتر از دریافت/حفظ نیست. تأیید عددی/هویت/انتشار تاریخی یا ورودی خودکار مدل ندارد. راهنما `docs/codal-documents.md`. |
 | `core/codal_tables.py` + `ops/codal_tables.py` | سلول‌های JSON اولیه گزارش یک‌ماهه نوع ۵۸، بدون اجرای JavaScript/فرمول؛ `codal-monthly-cells-v1`. Decimal پیشنهادی بدون واحد تأییدشده است؛ صفر/نامعلوم جدا و هر دریافت با کد/هش مستقل محفوظ. به مدل یا دفتر وارد نمی‌شود. راهنما `docs/codal-tables.md`. |
-| `database/capture.py` + `ops/capture_audit.py` | پروتکل فقط‌افزودنی دامنه/کد پیش از دریافت و شروع/نتیجه چرخه‌ها؛ `intraday-quality-v2` فاصله تغییرات ذخیره‌شده را از فاصله دریافت مستقل جدا می‌کند. ثبت پایش، ثبت تصمیم پیش از نتیجه نیست. |
-| `core/forward_observations.py` + `database/forward_observations.py` + `dashboard/forward_observations.py` | دفتر مشاهده دستی آینده با دامنه/پنجره ثابت و کپی کد/قیمت (`forward-observation-v1`، migration 012). ثبت محلی است، اجرا/سود مالی یا آزمون مستقل را اثبات نمی‌کند. راهنما `docs/research/forward-observations.md`. |
+| `database/capture.py` + `core/capture_evidence.py` + `ops/capture_audit.py` | پروتکل فقط‌افزودنی دامنه/کد پیش از دریافت؛ `capture-protocol-v2` هش محتوای ردیف را حفظ و `capture-quality-v2` پیوند/تعارض را جدا از تازگی زمان قیمت گزارش می‌کند. ثبت پایش، ثبت تصمیم پیش از نتیجه نیست. |
+| `core/forward_observations.py` + `database/forward_observations.py` + `dashboard/forward_observations.py` | دفتر مشاهده دستی آینده با دامنه/پنجره ثابت، کپی کد/قیمت و چرخه دریافت مشترک (`forward-observation-v2`، جدول‌های migration 012). v1 خواندنی است؛ ثبت محلی، اجرا/سود مالی یا آزمون مستقل را اثبات نمی‌کند. راهنما `docs/research/forward-observations.md`. |
 | `docs/phase1_design.md` | طراحی و نقشه راه فاز ۱ — قبل از شروع قابلیت جدید بخوان |
 
 ## قواعد کار
