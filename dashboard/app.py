@@ -618,6 +618,8 @@ def page_health() -> None:
             if capture['protocols']:
                 st.write(f"ثبت مستقل دریافت: {capture['attempted_polls']:,} شروع | {capture['completed_polls']:,} نتیجه | "
                          f"{capture['pending_polls']:,} شروع بدون نتیجه | {capture['complete_scope_polls']:,} پاسخ با همه نمادهای هدف")
+                st.write(f"پیوند محتوای مظنه: {capture['bound_snapshot_receipts']:,} رسید تطبیق‌یافته | "
+                         f"{capture['unbound_snapshot_receipts']:,} پاسخ فاقد پیوند معتبر")
                 st.caption('شروع بدون نتیجه می‌تواند دریافتِ در حال اجرا یا قطع برنامه باشد؛ نبود ثبت پایان، ادامه پایش را ثابت نمی‌کند. '
                            'پوشش کل جلسه و اعتبار تصمیم معاملاتی همچنان تأیید نشده‌اند.')
                 stop_labels = {'cycles_completed': 'چرخه‌های تعیین‌شده تمام شدند',
@@ -633,6 +635,8 @@ def page_health() -> None:
                 for run in capture['runs']:
                     with st.expander(f"کیفیت دریافت نمادها — {run['id']}"):
                         fields = ('symbol', 'valid', 'unchanged', 'missing', 'duplicate', 'rejected',
+                                  'bound_snapshot_receipts', 'snapshot_binding_missing', 'snapshot_binding_conflict',
+                                  'snapshot_binding_clock_invalid',
                                   'outcome_unknown', 'price_time_fresh', 'price_time_stale', 'price_time_future',
                                   'price_time_unknown', 'max_valid_poll_gap_seconds')
                         instruments = pd.DataFrame(run['per_symbol'])[list(fields)]
@@ -641,6 +645,8 @@ def page_health() -> None:
                         st.dataframe(instruments.rename(columns={
                             'symbol': 'نماد', 'valid': 'پاسخ معتبر', 'unchanged': 'بدون تغییر', 'missing': 'غایب',
                             'duplicate': 'شناسه تکراری', 'rejected': 'رد شده', 'outcome_unknown': 'نتیجه نامعلوم',
+                            'bound_snapshot_receipts': 'رسید متصل به مظنه', 'snapshot_binding_missing': 'پیوند موجود نیست',
+                            'snapshot_binding_conflict': 'محتوای ناسازگار', 'snapshot_binding_clock_invalid': 'ساعت ناسازگار',
                             'price_time_fresh': 'زمان قیمت تازه', 'price_time_stale': 'زمان قیمت قدیمی',
                             'price_time_future': 'زمان قیمت در آینده',
                             'price_time_unknown': 'زمان قیمت نامعلوم',

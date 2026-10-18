@@ -4,12 +4,15 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from config import settings
 from core.forward_observations import quote_evidence, validate_archive
 from core.timeutils import TEHRAN_TZ
+from data_collector.scheduler import DataCollector
+from database.capture import CaptureRepository
 from database.db import DatabaseManager
 from database.forward_observations import ForwardRepository
 from tests.test_dashboard import DASHBOARD
@@ -37,11 +40,22 @@ def register(db, **kwargs):
     return ForwardRepository(db).register(**args)
 
 
-def snapshot(db, at, price=1000, **kwargs):
+def snapshot(db, at, price=1000, *, receipt=True, **kwargs):
     values = dict(captured_at=at.isoformat(), provider_timestamp=at.isoformat(), last_price=price,
                   low_price=900, high_price=1300, ref_price=980, volume=10000, value=10000000)
     values.update(kwargs)
-    db.insert_snapshot(db.get_symbol('آزمون')['id'], values)
+    if not receipt:
+        db.insert_snapshot(db.get_symbol('آزمون')['id'], values)
+        return
+    # این تأمین‌کننده فقط در آزمون و دیتابیس موقت است؛ مسیر واقعی ذخیره و رسید اجرا می‌شود.
+    scope = db.get_universe_symbols()
+    source = DataCollector(db=db, provider=SimpleNamespace(get_market_snapshots=lambda: [dict(values, ins_code='test')]))
+    with patch('database.capture.now_tehran_iso', return_value=at.isoformat()):
+        repo = CaptureRepository(db)
+        run = repo.start(scope, interval=30, cycles=1, forced=False, provider='tsetmc', explicit_scope=True)
+        repo.append(run, 1, 'poll_started')
+        report = source.collect_market_snapshot(instruments=scope)
+        repo.append(run, 1, 'poll_finished', dict(status=report['status'], coverage=report['coverage']))
 
 
 def assess(db, key):

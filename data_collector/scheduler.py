@@ -26,6 +26,7 @@ from data_collector.codal import CodalProvider
 from data_collector.tsetmc import TsetmcProvider
 from data_collector.universe import UniverseManager
 from data_collector.validator import DataValidator
+from database.capture import bind_collected_snapshot
 from database.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ class DataCollector:
         self.symbols = list(symbols) if symbols else None
         # اثر انگشت آخرین اسنپ‌شات هر نماد؛ اسنپ‌شات بدون تغییر دوباره ذخیره نمی‌شود
         self._last_fingerprints: Dict[str, tuple] = {}
+        self._last_snapshot_times: Dict[str, str] = {}
 
     @staticmethod
     def _fingerprint(snap: Dict[str, Any]) -> tuple:
@@ -318,12 +320,29 @@ class DataCollector:
             item['status'] = 'changed'
             rows.append((sym["id"], snap))
         saved = self.db.insert_snapshots_bulk(rows)
-        # اثر انگشت فقط بعد از ذخیره موفق ثبت می‌شود تا خطای ذخیره، داده بعدی را «بدون تغییر» جا نزند
-        for _, snap in rows:
-            self._last_fingerprints[str(snap["ins_code"])] = self._fingerprint(snap)
+        # دریافت بی‌تغییر به ردیف اصلی وصل می‌شود؛ ساعت ذخیره قبلی بازنویسی نمی‌شود.
+        with self.db.conn:
+            self.db.conn.execute('BEGIN')
+            for item in observations:
+                if item['status'] not in ('changed', 'unchanged'):
+                    continue
+                ins_code = item['ins_code']
+                snap = grouped[ins_code][0]
+                stored_at = snap['captured_at'] if item['status'] == 'changed' else self._last_snapshot_times.get(ins_code)
+                item['snapshot_binding'] = bind_collected_snapshot(self.db, known[ins_code]['id'], snap, stored_at)
+                if item['snapshot_binding'] is None:
+                    self._last_fingerprints.pop(ins_code, None)
+                    self._last_snapshot_times.pop(ins_code, None)
+                    errors.append(f"{known[ins_code]['symbol_fa']}: تطبیق محتوای پاسخ با ردیف ذخیره‌شده نامعلوم است")
+                else:
+                    # فقط ذخیره موفق و تطبیق‌یافته در حافظه می‌ماند؛ خطای نوشتن باعث حذف دریافت بعدی نمی‌شود.
+                    self._last_fingerprints[ins_code] = self._fingerprint(snap)
+                    self._last_snapshot_times[ins_code] = stored_at
         counts = Counter(item['status'] for item in observations)
         valid = counts['changed'] + counts['unchanged']
-        failed = counts['missing'] + counts['rejected'] + counts['duplicate'] + len(unresolved)
+        unbound = sum(item['status'] in ('changed', 'unchanged') and item.get('snapshot_binding') is None
+                      for item in observations)
+        failed = counts['missing'] + counts['rejected'] + counts['duplicate'] + len(unresolved) + unbound
         if not snapshots:
             errors.insert(0, 'دیده‌بان بازار از TSETMC دریافت نشد')
         errors.extend(f'{name}: نماد در دامنه شناخته‌شده نیست' for name in sorted(unresolved))
