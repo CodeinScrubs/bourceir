@@ -20,7 +20,7 @@ from tests.test_workbench import quote
 
 def live_book(**changes):
     at = datetime(2026, 10, 14, 10, 0, tzinfo=TEHRAN_TZ)
-    snapshot = dict(provider_timestamp=at.isoformat(), captured_at=at.isoformat(),
+    snapshot = dict(source='tsetmc', price_unit='Rial', provider_timestamp=at.isoformat(), captured_at=at.isoformat(),
                     price_limit_up=1030, price_limit_down=970, last_price=1000,
                     bid_price_1=999, bid_vol_1=100, bid_count_1=3,
                     ask_price_1=1000, ask_vol_1=7, ask_count_1=2,

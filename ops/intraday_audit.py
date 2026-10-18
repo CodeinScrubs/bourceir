@@ -38,7 +38,7 @@ def audit_intraday(db, session_date=None):
     finally:
         if own_snapshot:
             db.conn.rollback()
-    result = dict(version='intraday-quality-v2', created_at=now_tehran_iso(), session_date=session_date,
+    result = dict(version='intraday-quality-v3', created_at=now_tehran_iso(), session_date=session_date,
                   scope='current ordinary-equity metadata, including inactive; not historical membership',
                   expected_current_active_symbols=expected, rows=len(frame), symbols=0, status='no_data',
                   full_session_coverage_known=False, independent_book_timestamp_available=False,
@@ -73,6 +73,9 @@ def audit_intraday(db, session_date=None):
     result.update(status='descriptive_only', symbols=int(frame['symbol'].nunique()),
                   timestamp_unknown_rows=int((receive.isna() | provider.isna()).sum()),
                   provider_stale_rows=int((ages > 45).sum()), provider_future_rows=int((ages < -5).sum()),
+                  provider_after_receive_rows=int((ages < 0).sum()),
+                  unverified_price_unit_rows=int(frame['price_unit'].ne('Rial').sum()),
+                  freshness_clock_tolerance_seconds=5,
                   provider_fresh_fraction=float(fresh.mean()), observable_ask_rows=int(sum(observable)))
     for symbol, group in frame.groupby('symbol', sort=True):
         gaps = group['received'].dropna().sort_values().diff().dt.total_seconds().dropna()

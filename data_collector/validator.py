@@ -34,7 +34,7 @@ def _valid_date(value: str) -> bool:
 
 
 def _number(value, positive=False, integer=False) -> bool:
-    if isinstance(value, (bool, str)):
+    if isinstance(value, (bool, np.bool_, str)):
         return False
     try:
         number = float(value)
@@ -161,7 +161,9 @@ class DataValidator:
         for key, value in snapshot.items():
             if (key.endswith(("_price", "_volume", "_count")) or key in {"volume", "value", "trade_count"}
                     or key.startswith(("bid_", "ask_", "price_limit_"))):
-                if value is not None and not _number(value):
+                quantity = (key in {'volume', 'trade_count'} or key.endswith(('_volume', '_count'))
+                            or key.startswith(('bid_vol_', 'ask_vol_', 'bid_count_', 'ask_count_')))
+                if value is not None and not _number(value, integer=quantity):
                     errors.append(f"عدد نامعتبر در {key}")
         if errors:
             return False, errors

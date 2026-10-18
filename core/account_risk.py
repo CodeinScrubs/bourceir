@@ -2,8 +2,7 @@
 
 from config import settings
 from core.journal import summarize_executions
-from core.risk import finite_number
-from core.screening import current_snapshot
+from core.risk import finite_number, live_snapshot_blockers
 from core.timeutils import is_market_open, now_tehran
 
 
@@ -38,16 +37,13 @@ def intraday_account_state(events, profile, plans, snapshots, *, at=None, calend
         blockers.append('بازار خارج از ساعات معاملات است')
     for symbol, position in holdings.items():
         snapshot = snapshots.get(symbol)
-        problems = []
-        if not snapshot or any(not current_snapshot(snapshot.get(key), at)
-                               for key in ('provider_timestamp', 'captured_at')):
-            problems.append('قیمت تازه پوزیشن موجود تأیید نشده است')
-        else:
+        problems = live_snapshot_blockers(snapshot, at)
+        if not problems:
             try:
                 last, bid, lower, upper = [finite_number(snapshot.get(key)) for key in
                     ('last_price', 'bid_price_1', 'price_limit_down', 'price_limit_up')]
-                finite_number(snapshot.get('bid_vol_1'))
-                finite_number(snapshot.get('bid_count_1'))
+                if any(not finite_number(snapshot.get(key)).is_integer() for key in ('bid_vol_1', 'bid_count_1')):
+                    raise ValueError('تعداد سفارش و سهم باید صحیح باشد')
                 if not lower <= last <= upper or not lower <= bid <= upper:
                     problems.append('قیمت یا تقاضای پوزیشن موجود با دامنه امروز سازگار نیست')
                 if finite_number(snapshot.get('sell_queue_volume'), positive=False) > 0:
@@ -64,7 +60,7 @@ def intraday_account_state(events, profile, plans, snapshots, *, at=None, calend
                                     mark_rial=marks.get(symbol), blockers=problems)
     state = summarize_executions(events, profile, marks)
     reserved = reserved_position_risk(state, plans)
-    evidence = dict(version='intraday-account-v2', evaluated_at=at.isoformat(), observations=observations,
+    evidence = dict(version='intraday-account-v3', evaluated_at=at.isoformat(), observations=observations,
                     calendar_exceptions=dict(calendar or {}),
                     mark_basis='min_last_and_best_bid_net_sell_fee', equity_rial=state['equity_rial'],
                     reserved_risk_rial=reserved, equity_floor_rial=profile.equity_floor_rial,

@@ -36,3 +36,23 @@ def test_naive_provider_clock_is_unknown_instead_of_fresh(db):
     result = audit_intraday(db)
     assert result['timestamp_unknown_rows'] == 1 and result['observable_ask_rows'] == 0
     assert result['per_symbol'][0]['provider_age_p95_seconds'] is None
+
+
+@pytest.mark.parametrize('problem', ['unit', 'future', 'fractional'])
+def test_clock_tolerance_is_not_entry_evidence_and_old_bad_rows_remain_visible(db, problem):
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
+    clock, book = live_book()
+    if problem == 'unit':
+        book['price_unit'] = 'Toman'
+    elif problem == 'future':
+        book['provider_timestamp'] = (clock + timedelta(seconds=1)).isoformat()
+    else:
+        book['volume'] = 1000.5
+    assert db.insert_snapshot(sid, book)  # ردیف پیشین حذف یا اصلاح حدسی نمی‌شود.
+    before = db.conn.total_changes
+    result = audit_intraday(db)
+    assert db.conn.total_changes == before
+    assert result['rows'] == 1 and result['observable_ask_rows'] == 0
+    assert result['provider_fresh_fraction'] == 1
+    assert result['provider_after_receive_rows'] == (1 if problem == 'future' else 0)
+    assert result['unverified_price_unit_rows'] == (1 if problem == 'unit' else 0)

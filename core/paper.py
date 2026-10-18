@@ -81,6 +81,8 @@ def quote_fill(snapshot, *, side, quantity, at, decision_at, protocol, consumed_
         raise ValueError('قیمت با لغزش بیرون از بازه معاملات مشاهده‌شده است')
     participation = protocol['participation']
     volume, value = [finite_number(snapshot.get(k)) for k in ('volume', 'value')]
+    if not volume.is_integer():
+        raise ValueError('حجم سهم مظنه باید صحیح باشد')
     cap = min(depth - consumed_depth, math.floor(volume * participation) - consumed_volume,
               math.floor((value * participation - consumed_value) / price))
     if quantity > cap:

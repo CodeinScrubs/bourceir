@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
@@ -292,17 +293,20 @@ class TsetmcProvider(BaseDataProvider):
         df = pd.DataFrame(rows)
         if df.empty:
             return pd.DataFrame(columns=DAILY_COLUMNS)
+        numeric_columns = {
+            "open_raw": "priceFirst", "high_raw": "priceMax", "low_raw": "priceMin",
+            "close_raw": "pDrCotVal", "close_final_raw": "pClosing", "ref_price_raw": "priceYesterday",
+            "volume": "qTotTran5J", "value": "qTotCap", "trade_count": "zTotTran",
+        }
+        # Check before astype: a boolean would otherwise become a plausible 0/1 value.
+        # Only numeric fields are constrained; source status flags are legitimately boolean.
+        for column in numeric_columns.values():
+            if df[column].map(lambda value: isinstance(value, (bool, np.bool_))).any():
+                logger.error("نماد %s: مقدار بولی در ستون عددی %s؛ پاسخ تاریخچه رد شد.", ins_code, column)
+                return None
         df = pd.DataFrame({
             "date": df["dEven"].map(deven_to_iso),
-            "open_raw": df["priceFirst"].astype(float),
-            "high_raw": df["priceMax"].astype(float),
-            "low_raw": df["priceMin"].astype(float),
-            "close_raw": df["pDrCotVal"].astype(float),
-            "close_final_raw": df["pClosing"].astype(float),
-            "ref_price_raw": df["priceYesterday"].astype(float),
-            "volume": df["qTotTran5J"].astype(float),
-            "value": df["qTotCap"].astype(float),
-            "trade_count": df["zTotTran"].astype(float),
+            **{target: df[source].astype(float) for target, source in numeric_columns.items()},
         })
         # روزهای بدون معامله (توقف نماد) کندل ندارند
         df = df[df["volume"] > 0].sort_values("date").reset_index(drop=True)

@@ -2,7 +2,10 @@
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
+
+import numpy as np
 
 from config import settings
 from core.market_rules import breakeven_move
@@ -11,7 +14,7 @@ from core.timeutils import is_market_open, now_tehran
 
 
 def finite_number(value, *, positive=True) -> float:
-    if isinstance(value, (bool, str)):
+    if isinstance(value, (bool, np.bool_, str)):
         raise ValueError("مقدار عددی معتبر لازم است")
     try:
         result = float(value)
@@ -20,6 +23,25 @@ def finite_number(value, *, positive=True) -> float:
     if not math.isfinite(result) or (result <= 0 if positive else result < 0):
         raise ValueError("مقدار باید محدود و مثبت/نامنفی باشد")
     return result
+
+
+def live_snapshot_blockers(snapshot, at):
+    """قرارداد مشترک تصمیم درون‌روزی؛ تحمل اختلاف ساعت، مجوز استفاده از آینده نیست."""
+    if not isinstance(snapshot, dict) or not snapshot:
+        return ['اسنپ‌شات تازه عمق بازار موجود نیست']
+    blockers = []
+    if snapshot.get('source') != 'tsetmc' or snapshot.get('price_unit') != 'Rial':
+        blockers.append('منبع TSETMC و واحد ریال مظنه تأیید نشده است')
+    for key in ('provider_timestamp', 'captured_at'):
+        try:
+            stamp = datetime.fromisoformat(snapshot.get(key))
+            known = current_snapshot(snapshot.get(key), at) and stamp <= at
+        except (TypeError, ValueError):
+            known = False
+        if not known:
+            blockers.append('زمان قیمت یا دریافت عمق بازار تازه و حداکثر زمان تصمیم تأیید نشده است')
+            break
+    return blockers
 
 
 @dataclass(frozen=True)
@@ -49,16 +71,15 @@ def intraday_entry_constraints(snapshot, entry_rial, *, at=None, buy_price_rial=
         raise ValueError('زمان باید دارای منطقه زمانی باشد')
     if not is_market_open(at, calendar=calendar):
         blockers.append('بازار خارج از ساعات معاملات است')
-    if not snapshot:
-        return ['اسنپ‌شات تازه عمق بازار موجود نیست'] + blockers, caps
-    for name in ('provider_timestamp', 'captured_at'):
-        if not current_snapshot(snapshot.get(name), at):
-            blockers.append('زمان قیمت یا دریافت عمق بازار تازه تأیید نشده است')
-            break
+    quote_issues = live_snapshot_blockers(snapshot, at)
+    if quote_issues:
+        return blockers + quote_issues, caps
     try:
         keys = ('price_limit_down', 'price_limit_up', 'ask_price_1', 'ask_vol_1',
                 'ask_count_1', 'bid_price_1', 'bid_vol_1', 'bid_count_1', 'last_price', 'value', 'volume')
         numbers = {key: finite_number(snapshot.get(key)) for key in keys}
+        if any(not numbers[key].is_integer() for key in ('ask_vol_1', 'ask_count_1', 'bid_vol_1', 'bid_count_1', 'volume')):
+            raise ValueError('تعداد سفارش و سهم باید صحیح باشد')
         lower, upper, ask, bid = [numbers[key] for key in ('price_limit_down', 'price_limit_up', 'ask_price_1', 'bid_price_1')]
         if not lower <= bid <= ask <= upper or not lower <= entry_rial <= upper or not lower <= numbers['last_price'] <= upper:
             blockers.append('مظنه یا قیمت ورود با دامنه مجاز امروز سازگار نیست')
@@ -161,6 +182,6 @@ def plan_trade(*, profile: RiskProfile, entry_rial: float, stop_rial: float, tar
             "fee_only_breakeven_pct": breakeven_move(), "participation_cap": participation,
             "fees": {"buy": buy, "sell": sell}, "slippage_bps": slip * 10000,
             "equity_floor_rial": profile.equity_floor_rial, "capital_at_risk_rial": quantity * cost,
-            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v5",
+            "stop_guaranteed": False, "fill_guaranteed": False, "calculation_version": "manual-plan-v6",
             "calendar_exceptions": dict(calendar or {}),
             "intraday_evidence": dict(intraday_snapshot) if intraday and intraday_snapshot else None}
