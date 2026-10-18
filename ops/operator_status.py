@@ -1,9 +1,11 @@
 """نمای فقط‌خواندنی بهره‌بردار؛ داده حساب فقط محلی و مستقل از پژوهش بازار است."""
 
 import json
+import math
 
 import pandas as pd
 
+from config import settings
 from core import market_rules
 from core.account_risk import intraday_account_state, reserved_position_risk
 from core.flow_filters import V4_FILTERS, filter_diagnostics_v4
@@ -39,13 +41,20 @@ def operator_status(db, metrics, market_frame, *, at=None):
     calendar = db.get_market_calendar()
     expected = expected_completed_session(at, calendar=calendar)
     latest = None if metrics.empty else str(metrics.date.max())
+    minimum_value = settings.RESEARCH_CONFIG['min_daily_value_rial']
     matches = []
     for name in V4_FILTERS:
         if metrics.empty:
             continue
         diagnostic = filter_diagnostics_v4(metrics, name)
-        matches.extend(dict(symbol=r['symbol'], date=r['date'], hypothesis=name)
-                       for r in diagnostic.loc[diagnostic.match].to_dict('records'))
+        matched = diagnostic.loc[diagnostic.match].merge(
+            metrics.reindex(columns=['symbol', 'date', 'value']), on=['symbol', 'date'], validate='one_to_one')
+        for row in matched.to_dict('records'):
+            value = pd.to_numeric(row['value'], errors='coerce')
+            value = float(value) if pd.notna(value) and math.isfinite(value) and value >= 0 else None
+            matches.append(dict(symbol=row['symbol'], date=row['date'], hypothesis=name,
+                daily_value_rial=value, research_min_daily_value_rial=minimum_value,
+                research_universe_eligible=None if value is None else value >= minimum_value))
     profile = repo.profile()
     account = broker_report(db)
     plans = repo.plans('actual')
@@ -63,6 +72,10 @@ def operator_status(db, metrics, market_frame, *, at=None):
         risk = intraday_account_state(events, risk_profile, plans, snapshots, at=at, calendar=calendar)
     for match in matches:
         blockers, caps = ['فرضیه پژوهشی است؛ روش پذیرفته‌شده برای سیگنال نداریم'], None
+        if match['research_universe_eligible'] is None:
+            blockers.append('ارزش معاملات روز برای شرط حداقل جامعه پژوهش نامعلوم است')
+        elif not match['research_universe_eligible']:
+            blockers.append('ارزش معاملات روز کمتر از حداقل جامعه پژوهش است')
         plan = plan_by_symbol.get(match['symbol'])
         if latest != expected:
             blockers.append('روز فیلتر آخرین جلسه کامل مورد انتظار نیست')

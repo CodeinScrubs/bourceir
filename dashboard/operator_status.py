@@ -76,9 +76,17 @@ def operator_panel():
         st.caption(f"پوشش روز فیلتر: {pulse['count']}/{pulse['expected_count']}؛ فاقد ردیف: {pulse['missing_count']}؛ "
                    f"بازده نامعلوم: {pulse['return_unknown_count']}؛ جریان حقیقی معتبر: {pulse['flow_coverage']}/{pulse['count']}")
     st.info('هیچ‌یک از این فرضیه‌ها مجوز خرید نیست. اندازه معامله بدون برنامه دستی، بودجه معلوم و حساب تطبیق‌شده ساخته نمی‌شود.')
+    if evaluated:
+        eligible = sum(r['research_universe_eligible'] is True for r in report['candidates'])
+        unknown = sum(r['research_universe_eligible'] is None for r in report['candidates'])
+        st.caption(f'از تطبیق‌های توصیفی: {eligible} مورد حداقل ارزش معاملات روزِ جامعه پژوهش را دارد؛ '
+                   f'{unknown} مورد از این نظر نامعلوم است. حداقل فعلی: '
+                   f"{settings.RESEARCH_CONFIG['min_daily_value_rial']:,.0f} ریال؛ این شرط مجوز معامله نیست.")
     with st.expander('فرضیه‌های منطبق و دلیل مسدودبودن اندازه معامله', expanded=False):
         if report['candidates']:
             st.dataframe(pd.DataFrame([{'نماد': r['symbol'], 'فرضیه': r['hypothesis'],
+                'حداقل ارزش روز پژوهش': 'نامعلوم' if r['research_universe_eligible'] is None else
+                    'برقرار' if r['research_universe_eligible'] else 'برقرار نیست',
                 'علت توقف': '؛ '.join(r['blockers']), 'سقف‌های محاسبه': 'نامعلوم' if r['caps'] is None else
                     '؛ '.join(f'{key}: {"نامعلوم" if value is None else value}' for key, value in r['caps'].items())}
                 for r in report['candidates']]), hide_index=True, width='stretch')

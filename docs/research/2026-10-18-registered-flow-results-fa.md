@@ -99,11 +99,12 @@
 
 ## راستی‌آزمایی محلی کد تحویلی
 
-- پس از محافظ نهایی اصلاحیه: `pytest -m "not network"` با **۱۲۲۹ موفق و۴ انتخاب‌نشده** در۳۲۳٫۵۹ ثانیه؛ Ruff و بررسی whitespace موفق.
+- پس از محافظ اصلاحیه و تفکیک حداقل ارزش روز در میز روزانه: `pytest -m "not network"` با **۱۲۳۳ موفق و۴ انتخاب‌نشده** در۳۳۴٫۵۰ ثانیه؛ Ruff، هفت آزمون Node و بررسی whitespace موفق.
 - بازتولید چهار نقص اصلاحیه پیش از اصلاح، سپس عبور تمام۶۶ آزمون کدال؛ شش عادی‌سازی واقعی با حفظ اصل آرشیو و صفر پذیرش.
 - ۴۰ ترکیب نامزد/برش، با **۲۸۰ مقایسه هم‌تعدادی روزانه** و تطبیق هش۳۲۰ فایل انتخاب، بررسی شدند. هم‌تعدادی، ریسک یا اجرای یکسان نیست.
 - بازاجرای همه۱۶۰ مقایسه آماری با شمار افشاشده۷۴، تمام اعداد CI/p را بدون تغییر بازتولید کرد؛ رسیدها در `data/private/registered-flow-2026-10-18/` محفوظ‌اند.
 - پیش‌نمایش واقعی مرورگر در۱۴۴۰×۱۰۰۰ و۳۹۰×۸۴۴: خانه، دو فرضیه و میز مشترک بازار، وضعیت دفترها و حالت «بررسی نشده»؛ بدون خطای چارچوب، console یا هشدار مرورگر. تصاویر دارای اطلاعات حساب فقط محلی‌اند.
+- تطبیق توصیفی فرضیه و شرط حداقل ارزش معاملات همان روزِ جامعه پژوهش در میز روزانه جدا نمایش داده می‌شوند؛ مقدار نامعتبر/مفقود نامعلوم است. این اصلاح عملیاتی، تعریف یا نتیجه مالی محفوظ را تغییر نداد.
 
 چهار آزمون شبکه‌ای pytest اجرا نشدند. برداشت واقعی۵۰ روز برای بازیابی قیمت و۵۰ روز برای شاهد DIP، شواهد محدود جداگانه‌اند؛ جای تست شبکه کامل، پوشش تمام جلسه یا اثبات سودآوری را نمی‌گیرند. نتیجه CI کد دقیق و اجرای داشبورد پس از ادغام در رسید تحویل گزارش می‌شود.
 
@@ -111,4 +112,4 @@
 
 BRS 0.7.16 adds a separately registered v4 family, three matched-count random controls in normal and stressed execution, bounded development feature rebuilding, DIP ledger diagnostics, strict Codal normalization and a shared daily operator view. All ten development folds are retained. Independent fold means are not a portfolio CAGR. The batch contains 74 known replay/source configurations; older total search is unknown. All 160 uncertainty comparisons were recomputed using that disclosed count and the fixed 480-comparison family. No candidate is accepted, and no holdout evaluation was opened. See the tables for actual normal/stress results, confidence intervals, p-values, unresolved outcomes and synthetic corporate-action crossing counts.
 
-All four v4 candidates had negative mean stressed returns. The two pullback horizons averaged +0.132%/+0.481% in normal execution and −1.497%/−1.154% under stress. There were 348 computed confidence intervals, eight comparisons blocked by unknown pairs and 36 by zero variance; the minimum raw one-sided p was 0.059347 and all computed Bonferroni-adjusted p-values were 1. Local delivery tests: 1,229 passed and four network tests not selected. The strict Codal revision guard landed after the frozen financial replay, which did not consume monthly Codal features; that source boundary is preserved.
+All four v4 candidates had negative mean stressed returns. The two pullback horizons averaged +0.132%/+0.481% in normal execution and −1.497%/−1.154% under stress. There were 348 computed confidence intervals, eight comparisons blocked by unknown pairs and 36 by zero variance; the minimum raw one-sided p was 0.059347 and all computed Bonferroni-adjusted p-values were 1. Local delivery tests: 1,233 passed and four network tests not selected. The strict Codal revision guard landed after the frozen financial replay, which did not consume monthly Codal features; that source boundary is preserved. Descriptive operator matches now show the separate research-universe daily-turnover floor explicitly, without changing the frozen replay definitions or results.
