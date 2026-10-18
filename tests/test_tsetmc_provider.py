@@ -5,6 +5,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from data_collector.base import DAILY_COLUMNS
@@ -29,6 +30,20 @@ def test_history_mapping_is_explicit_and_point_in_time(closing_price_daily):
 def test_history_returns_none_on_server_error():
     provider = TsetmcProvider(session=FakeSession({}))
     assert provider.get_symbol_history(FOOLAD_INS) is None  # هیچ داده ساختگی تولید نمی‌شود
+
+
+@pytest.mark.parametrize("field", [
+    "priceFirst", "priceMax", "priceMin", "pDrCotVal", "pClosing", "priceYesterday",
+    "qTotTran5J", "qTotCap", "zTotTran",
+])
+@pytest.mark.parametrize("invalid", [True, False, np.bool_(True), np.bool_(False)],
+                         ids=["true", "false", "numpy-true", "numpy-false"])
+def test_history_rejects_boolean_numeric_payload_before_float_conversion(closing_price_daily, field, invalid):
+    # The legitimate last/iClose/yClose boolean flags in the fixture remain allowed.
+    rows = [dict(row) for row in closing_price_daily]
+    rows[0][field] = invalid
+    provider = TsetmcProvider(session=FakeSession({"GetClosingPriceDailyList": {"closingPriceDaily": rows}}))
+    assert provider.get_symbol_history(FOOLAD_INS) is None
 
 
 def test_universe_keeps_only_bourse_and_farabourse_stocks(market_watch_rows):
