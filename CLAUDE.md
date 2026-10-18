@@ -25,6 +25,8 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 
 ## نقشه کد
 
+در 0.7.20، `paper-portfolio-v3` اعتبار سود را در `core/paper.py` اعمال می‌کند؛ ابهام هر تحلیل در خروجی JSON/تصویر جدید هم محفوظ است، سود کل نامعلوم می‌شود و تحلیل مستقل سالم نتیجه خودش را نگه می‌دارد. v1/v2 خواندنی‌اند؛ سابقه بازنویسی نمی‌شود. `ops/operator_status.py` محتوای علت‌ها را می‌سنجد، نه صرف وجود کلید تحلیل. [بازبینی](docs/reviews/2026-10-18-double-check-fa.md).
+
 مسیر جدید 0.7.19: `core/instrument_history.py` هویت/تاریخ/اعداد پاسخ تاریخی را بدون پیش‌فرض ارزیابی می‌کند؛ `ops/instrument_history.py` برنامه و کد پیشین، همه تلاش‌ها و بازبینی آفلاین را نگه می‌دارد. دریافت فقط از provider اصلی و بدون نوشتن دیتابیس است. شواهد در صفحه سلامت دیده می‌شوند؛ `feature_eligible=false` باقی می‌ماند. [قرارداد](docs/research/instrument-history-evidence-fa.md) و [بررسی ۹ مخزن](docs/reviews/2026-10-18-external-projects-fa.md).
 
 مسیر جدید 0.7.18: `core/capital_capacity.py` حساب نقد/هزینه، نامعلوم و سهم غیرنقد را تطبیق می‌دهد؛ `ops/capital_capacity.py` تمام انتخاب‌های FLOW v4 را در اندازه‌های ثابت پس از ثبت برنامه بازاجرا می‌کند. اندازه یک باید با منبع برابر باشد؛ مطالعه، سبد فعلی یا بکتست بدون هزینه نیست. صفحه `dashboard/capital_capacity.py` فقط نتیجه محفوظ را نشان می‌دهد. [قرارداد](docs/research/capital-capacity-fa.md).
@@ -40,7 +42,7 @@ venv/Scripts/python.exe brs.py research-dip          # آزمون روش کار�
 | `core/query_screener.py` + `ops/query_screener.py` + `dashboard/query_screener.py` | پرسش توصیفی ثبت‌شده پیش از خواندن، رتبه ارزش بازار جاری با کران نامعلوم/هم‌ارزش، ترتیب منفی→مثبت با اثبات کندلی محدود و تیک تطبیق‌شده؛ `market-query-v4`. چند نسخه ابطال‌شده در مسیر فعال نیست؛ تعارض فعال/ابطال یا مجموع/مسیر کامل، قطعیت نمی‌سازد. سیگنال/اجرای سفارش/جامعه تاریخی PIT نیست. [راهنما](docs/research/market-queries.md). |
 | `data_collector/trade_archive.py` + `data_collector/public_site.py` + `ops/source_catalog.py` | خام فشرده ریزمعاملات، برداشت قابل ادامه سایت عمومی و فهرست ادعاها بدون اجرای کد ناشناس. فقط provider با TSETMC حرف می‌زند. [راهنما](docs/algosaham-public-archive.md). |
 | `core/` | منطق خالص دامنه: `market_rules` (کارمزد، صف قفل، بازده PIT)، `text` (ی/ک عربی)، `timeutils` (تهران، شمسی) |
-| `core/paper.py` + `database/paper.py` + `dashboard/paper.py` | پورتفوی مجازی مستقل با سرمایه دلخواه یا کپی موجودی آغازین از گزارش تازه فارابی؛ خرید گذشته ساخته نمی‌شود. نقد مشترک، بهای هر تحلیل و منبع محفوظ‌اند؛ ابزار خارج از دامنه فقط مشاهده می‌شود. سناریوی دستی جدا از مظنه تازه است. Migration 013/014، پروتکل v2 با خواندن v1؛ داده/اقدام شرکتی نامعلوم مانع سود عددی است. هیچ سفارش واقعی یا سیگنال پذیرفته‌شده ندارد. [راهنما](docs/paper-portfolio.md). |
+| `core/paper.py` + `database/paper.py` + `dashboard/paper.py` | پورتفوی مجازی مستقل با سرمایه دلخواه یا کپی موجودی آغازین از گزارش تازه فارابی؛ خرید گذشته ساخته نمی‌شود. نقد مشترک، بهای هر تحلیل و منبع محفوظ‌اند؛ ابزار خارج از دامنه فقط مشاهده می‌شود. سناریوی دستی جدا از مظنه تازه است. Migration 013/014، پروتکل v3 با خواندن v1/v2؛ داده/اقدام شرکتی نامعلوم مانع سود عددی در گزارش/JSON/تصویر جدید است. هیچ سفارش واقعی یا سیگنال پذیرفته‌شده ندارد. [راهنما](docs/paper-portfolio.md). |
 | `data_collector/tsetmc.py` | تنها نقطه تماس با TSETMC (پیاده‌سازی `BaseDataProvider`) |
 | `data_collector/scheduler.py` | `DataCollector`: هماهنگی گردآوری و ثبت در دیتابیس |
 | `database/db.py` + `migrations/` | دسترسی به SQLite؛ **هر تغییر ساختار = فایل مایگریشن جدید با شماره بعدی** (پشتیبان خودکار گرفته می‌شود) |

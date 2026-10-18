@@ -122,7 +122,7 @@ def operator_status(db, metrics, market_frame, *, at=None):
             papers.append(dict(name=p['name'], id=p['id'], cash_rial=report['ledger']['cash_rial'], equity_rial=report['equity_rial'],
                 pnl_rial=report['total_net_rial'], return_pct=report['return_pct'],
                 open_positions=len(report['ledger']['positions']), passive_positions=len((report['opening'] or {}).get('passive', [])),
-                runtime_matches=report['runtime_matches'], integrity_unknown=bool(report['integrity']) or report['equity_rial'] is None,
+                runtime_matches=report['runtime_matches'], integrity_unknown=any(report['integrity'].values()) or report['equity_rial'] is None,
                 evaluated_at=report['evaluated_at'], error=None))
         except (ValueError, OSError) as error:
             papers.append(dict(name=p['name'], id=p['id'], error=str(error), equity_rial=None, pnl_rial=None))

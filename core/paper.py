@@ -10,8 +10,8 @@ from core.risk import RiskProfile, finite_number
 from core.screening import current_snapshot
 from core.timeutils import is_market_open
 
-VERSION = 'paper-portfolio-v2'
-SUPPORTED_VERSIONS = ('paper-portfolio-v1', VERSION)
+VERSION = 'paper-portfolio-v3'
+SUPPORTED_VERSIONS = ('paper-portfolio-v1', 'paper-portfolio-v2', VERSION)
 HORIZONS = ('intraday', 'swing', 'weeks_months')
 MODES = ('manual', 'observed')
 
@@ -115,6 +115,15 @@ def portfolio_state(protocol, ideas, trades, marks, *, integrity=None, opening=N
                                 closed_cost_rial=closed_cost, created_at=idea['created_at']))
     issues = integrity or {}
     blocked = any(issues.values())
+    # کنترل اعتبار در خروجی محاسبه است؛ مصرف‌کننده JSON هم نباید سود نامعتبر ببیند.
+    if blocked:
+        ledger['realized_net_rial'] = None
+    for item in attribution:
+        if issues.get(item['id']):
+            item['realized_net_rial'] = item['unrealized_net_rial'] = None
+    for key, position in ledger['positions'].items():
+        if issues.get(key):
+            position['liquidation_value_rial'] = position['unrealized_net_rial'] = None
     passive = initial.get('passive', [])
     passive_values = passive_values or {}
     passive_unknown = [p['symbol_fa'] for p in passive if passive_values.get(p['symbol_fa']) is None]
