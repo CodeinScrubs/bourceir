@@ -18,7 +18,7 @@ import pandas as pd
 from core.timeutils import is_canonical_iso_date
 from ops.report_files import private_report_path, write_private_report
 
-VERSION = 'paired-stationary-diagnostics-v2'
+VERSION = 'paired-stationary-diagnostics-v3'
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 
 
@@ -63,7 +63,7 @@ def _indices(rng, n, block_length):
 
 def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_lengths=(5, 10, 20),
                           replications=5000, seed=41, confidence=.95, min_sessions=60, trials_attempted=None,
-                          expected_sessions=None):
+                          expected_sessions=None, family_comparisons=None):
     """منحنی خالص هم‌تاریخ؛ جفت نامعلوم حذف نمی‌شود و تولید فاصله را متوقف می‌کند.
 
     خروجی میانگین حسابی اختلاف بازده روزانه است؛ CAGR یا احتمال سود آینده نیست.
@@ -81,6 +81,9 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
     if trials_attempted is not None and (isinstance(trials_attempted, bool) or not isinstance(trials_attempted, int)
                                         or trials_attempted < 1):
         raise ValueError('Trial count must be positive or explicitly unknown')
+    if family_comparisons is not None and (type(family_comparisons) is not int or family_comparisons < 1
+                                          or trials_attempted is None or family_comparisons < trials_attempted):
+        raise ValueError('The declared comparison family must include all attempted configurations')
     blocks = tuple(block_lengths)
     if not blocks or len(set(blocks)) != len(blocks) or any(isinstance(b, bool) or not isinstance(b, int) or b < 2 for b in blocks):
         raise ValueError('Distinct integer block lengths >= 2 are required')
@@ -139,8 +142,18 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
             for iteration in range(replications):
                 means[iteration] = difference[_indices(rng, len(difference), block)].mean()
             lower, upper = np.quantile(means, [alpha, 1.-alpha])
+            # H0: میانگین اختلاف <= صفر. بازنمونه مرکززدایی‌شده، آزمون یک‌طرفه تقریبی است.
+            observed = float(difference.mean())
+            null_means = means - observed
+            p_value = (1 + np.count_nonzero(null_means >= observed)) / (replications + 1)
             intervals.append(dict(expected_block_sessions=block, mean_daily_difference_lower=float(lower),
-                                  mean_daily_difference_upper=float(upper), confidence=confidence))
+                                  mean_daily_difference_upper=float(upper), confidence=confidence,
+                                  one_sided_p_value=float(p_value),
+                                  declared_family_bonferroni_p_value=None if family_comparisons is None else
+                                      min(1., float(p_value) * family_comparisons),
+                                  p_value_resolution=1 / (replications + 1),
+                                  family_tail_resolution_adequate=None if family_comparisons is None else
+                                      family_comparisons / (replications + 1) <= 1 - confidence))
     return dict(version=VERSION, sessions=len(difference), unknown_daily_pairs=unknown,
                 known_daily_pairs=len(difference)-unknown, min_sessions=min_sessions,
                 mean_daily_return_difference=float(difference.mean()) if not unknown and calendar_matches is not False else None,
@@ -148,6 +161,8 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
                 missing_expected_sessions=None if calendar is None else len(set(calendar) - set(strategy.date)),
                 unexpected_sessions=None if calendar is None else len(set(strategy.date) - set(calendar)),
                 intervals=intervals, replications=replications, seed=seed, trials_attempted=trials_attempted,
+                family_comparisons=family_comparisons, historical_trial_count_verified=False,
+                p_value_method='one-sided mean <= 0; centered stationary bootstrap; plus-one Monte Carlo count',
                 blockers=blockers, selection_corrected=False, accepted_for_signals=False,
                 probability_of_future_profit=None, statistic='arithmetic mean of paired daily net return differences',
                 interval_method='stationary-block percentile; individual comparison, not family-wise adjusted',
@@ -165,6 +180,7 @@ def main(argv=None):
     parser.add_argument('--replications', type=int, default=5000)
     parser.add_argument('--seed', type=int, default=41)
     parser.add_argument('--trials-attempted', type=int, default=None)
+    parser.add_argument('--family-comparisons', type=int, default=None)
     parser.add_argument('--calendar', default=None, help='JSON array of expected development sessions for this fold')
     parser.add_argument('--output', default='data/private/uncertainty.json')
     args = parser.parse_args(argv)
@@ -181,7 +197,8 @@ def main(argv=None):
                   for name in (args.strategy, args.benchmark)]
         report = compare_equity_curves(*curves, initial_capital_rial=args.initial_capital_rial,
                                       block_lengths=args.blocks, replications=args.replications, seed=args.seed,
-                                      trials_attempted=args.trials_attempted, expected_sessions=calendar)
+                                      trials_attempted=args.trials_attempted, expected_sessions=calendar,
+                                      family_comparisons=args.family_comparisons)
         report['input_sha256'] = dict(strategy=curves[0].attrs['input_sha256'], benchmark=curves[1].attrs['input_sha256'])
         if args.calendar:
             # هویت تقویم، محتوای تجزیه‌شده‌ای است که واقعاً در محاسبه بالا مصرف شد.

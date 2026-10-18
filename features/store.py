@@ -27,7 +27,7 @@ import pandas as pd
 from config import settings
 from core.client_quality import validated_client_data
 from core.text import normalize_symbol
-from core.timeutils import now_tehran_iso
+from core.timeutils import is_canonical_iso_date, now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
 from features.market import MARKET_FEATURES, RELATIVE_FEATURES, add_relative_features, compute_market_features
@@ -46,8 +46,10 @@ def store_dir(version: str = FEATURE_SET_VERSION, root: Optional[Path] = None) -
 
 
 def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None,
-                        progress: Optional[ProgressFn] = None) -> pd.DataFrame:
+                        progress: Optional[ProgressFn] = None, *, before: Optional[str] = None) -> pd.DataFrame:
     """محاسبه فیچرهای روزانه همه نمادهای داخل دامنه + فیچرهای بازار و نسبی."""
+    if before is not None and (not is_canonical_iso_date(before) or before > settings.RESEARCH_CONFIG['holdout_start']):
+        raise ValueError('مرز ساخت توسعه باید معتبر و حداکثر شروع دوره مهر و موم باشد')
     if isinstance(symbols, str):
         raise ValueError('نمادها باید فهرست باشند، نه یک رشته')
     targets = list(symbols) if symbols is not None else [s["symbol_fa"] for s in db.get_universe_symbols(include_inactive=True)]
@@ -69,14 +71,16 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
             selection['unavailable_symbols'].append(dict(symbol=symbol, reason='outside_ordinary_equity_scope'))
             logger.warning('نماد %s خارج از دامنه سهام عادی است؛ وارد انبار فیچر نشد.', symbol)
             continue
-        prices = db.get_daily_prices_df(symbol)
+        from datetime import date, timedelta
+        end_date = (date.fromisoformat(before) - timedelta(days=1)).isoformat() if before else None
+        prices = db.get_daily_prices_df(symbol, end_date=end_date)
         if prices.empty:
             selection['unavailable_symbols'].append(dict(symbol=symbol, reason='unknown_or_no_daily_prices'))
             logger.warning('نماد %s: تاریخچه روزانه موجود نیست؛ در پوشش نامعلوم ثبت شد.', symbol)
             continue
         prices = prices.sort_values('date').reset_index(drop=True)
         selection['included_symbols'].append(symbol)
-        client_types = db.get_client_types_df(symbol)
+        client_types = db.get_client_types_df(symbol, end_date=end_date)
         feats = compute_daily_features(prices, client_types)
         feats.insert(1, "symbol", symbol)
         # ستون‌های کمکی برای فیچر بازار (بعداً حذف می‌شوند)
@@ -151,7 +155,7 @@ def _provenance(db: DatabaseManager, parquet: Path) -> dict:
 
 
 def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None, root: Optional[Path] = None,
-                        progress: Optional[ProgressFn] = None) -> dict:
+                        progress: Optional[ProgressFn] = None, *, before: Optional[str] = None) -> dict:
     """ساخت انبار فیچر و ذخیره اتمی در Parquet + manifest. خروجی: manifest."""
     # همه خواندن‌ها از یک تصویر ثابت دیتابیس (اگر هم‌زمان پایش زنده یا به‌روزرسانی در حال نوشتن باشد)
     own_snapshot = not db.conn.in_transaction
@@ -160,9 +164,10 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     try:
         environment = feature_environment()
         logic_sha = feature_logic_fingerprint()
-        panel = build_feature_panel(db, symbols=symbols, progress=progress)
+        panel = build_feature_panel(db, symbols=symbols, progress=progress, before=before)
         # انبار سراسری حتی داده مشتریِ نماد بدون قیمت را در منشأ نگه می‌دارد؛ انتخاب صریح نام‌های یکسان‌شده دارد.
-        raw_inputs = raw_input_snapshot(db, symbols=None if symbols is None else panel.attrs['selection']['included_symbols'])
+        raw_inputs = raw_input_snapshot(db, symbols=None if symbols is None else panel.attrs['selection']['included_symbols'],
+                                        end_exclusive=before)
         schema_version = db.schema_version()
         if feature_logic_fingerprint() != logic_sha or feature_environment() != environment:
             raise RuntimeError('منطق یا وابستگی فیچر هنگام ساخت تغییر کرد؛ انبار منتشر نشد')
@@ -180,6 +185,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     manifest = {
         "version": FEATURE_SET_VERSION,
         "manifest_format": 2,
+        "exclusive_end_date": before,
         "data_file": (generation.relative_to(target) / 'daily.parquet').as_posix(),
         "created_at": now_tehran_iso(),
         "rows": int(len(panel)),

@@ -78,6 +78,15 @@ def test_zero_broker_cost_never_proves_recovered_capital_or_economic_profit(capt
     assert first['broker_return_pct'] is None
     assert report['accounting_review']['nonpositive_cost_symbols'] == ['فولاد']
     assert not report['accounting_review']['zero_cost_proves_recovered_capital']
+
+
+def test_unknown_instrument_type_is_unknown_and_numbered_board_is_outside_research(capture):
+    capture['rows'][1][0] = 'آزمون2'
+    portfolio = parse_portfolio(encoded(capture))
+    report = reconcile_account(portfolio, market_rows=[
+        dict(symbol_fa='فولاد', instrument_type_code=None, date='2024-01-01', close_raw=1000),
+        dict(symbol_fa='آزمون2', instrument_type_code=300, date='2024-01-01', close_raw=1010)])
+    assert {p['symbol_fa']: p['research_scope_eligible'] for p in report['positions']} == {'فولاد': None, 'آزمون2': False}
     assert not report['accounting_review']['corporate_action_linkage_verified']
     assert not report['accounting_review']['subscription_deadlines_verified']
 

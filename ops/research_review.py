@@ -171,7 +171,7 @@ def review_research(db, experiment_id, *, root=None):
     protocol_path = _relative_file(folder, 'protocol.json')
     protocol_sha = sha256(protocol_path)
     protocol = payload['protocol']
-    supported = {'expanding-portfolio-v3': 'PORTFOLIO', 'flow-portfolio-v3': 'FLOW'}
+    supported = {'expanding-portfolio-v3': 'PORTFOLIO', 'flow-portfolio-v3': 'FLOW', 'flow-portfolio-v4': 'FLOW'}
     if (payload['experiment_id'] != experiment_id or protocol.get('version') not in supported
             or '-' + supported[protocol['version']] + '-' not in experiment_id
             or protocol.get('portfolio_version') not in ('portfolio-v3', 'portfolio-v4')
@@ -219,6 +219,20 @@ def review_research(db, experiment_id, *, root=None):
         expected_modes = {'past_baseline', 'past_baseline_stress'} | {
             f'{name}-{h}d{suffix}' for name in ('retail_acceleration', 'volume_breakout', 'daily_pressure')
             for h in protocol['horizons'] for suffix in ('', '-stress', '-random')}
+    if protocol['version'] == 'flow-portfolio-v4':
+        from core.flow_filters import FLOW_FILTER_V4_VERSION, V4_FILTERS
+        from research.flow_v4_run import HORIZONS, SEEDS
+        candidates = [f'{name}-{h}d' for name in V4_FILTERS for h in HORIZONS]
+        suffixes = ('', '-stress', '-random', '-random97', '-random173',
+                    '-random-stress', '-random97-stress', '-random173-stress')
+        expected_modes = {'past_baseline', 'past_baseline_stress'} | {c + s for c in candidates for s in suffixes}
+        if (protocol.get('filter_version') != FLOW_FILTER_V4_VERSION or protocol.get('horizons') != list(HORIZONS)
+                or protocol.get('random_seeds') != list(SEEDS) or protocol.get('candidate_modes') != candidates
+                or set(protocol.get('modes', [])) != expected_modes):
+            raise ValueError('خانواده ثابت v4 با پروتکل سازگار نیست')
+        uncertainty_path = folder / 'uncertainty.json'
+        if sha256(uncertainty_path) != payload.get('uncertainty_sha256'):
+            raise ValueError('اثر انگشت عدم قطعیت ناسازگار است')
     checked = copy.deepcopy(results)
     for i, result in enumerate(results):
         if set(result['modes']) != expected_modes:
@@ -228,6 +242,9 @@ def review_research(db, experiment_id, *, root=None):
     output = summarize_evidence(payload, checked)
     output['portfolio_version'] = protocol['portfolio_version']
     output['fractional_valuation_corrected'] = protocol['portfolio_version'] == 'portfolio-v4'
+    if protocol['version'] == 'flow-portfolio-v4':
+        output['uncertainty_sha256_verified'] = True
+        output['uncertainty_statistics_recomputed'] = False
     if protocol['portfolio_version'] == 'portfolio-v3':
         output['limitations'].append('portfolio-v3 freezes synthetic fractional value; archives are readable, not corrected replays')
     # تطبیق خلاصه از منحنی بازسازی‌شده؛ خلاصه JSON به‌تنهایی منبع حقیقت نیست.
@@ -247,6 +264,8 @@ def review_research(db, experiment_id, *, root=None):
     # تغییر فایل‌ها حین بازسازی گزارش نیز خروجی را متوقف می‌کند.
     _verify_inventory(folder, artifacts, parquet=True)
     _verify_inventory(folder / 'code', sources)
+    if protocol['version'] == 'flow-portfolio-v4' and sha256(folder / 'uncertainty.json') != payload['uncertainty_sha256']:
+        raise ValueError('عدم قطعیت حین بازبینی تغییر کرد')
     output.update(reviewed_at=now_tehran_iso(), verified=dict(report_sha256=report_sha, protocol_sha256=protocol_sha,
                   artifact_count=len(artifacts), source_file_count=len(sources), registered_protocol_and_result=True,
                   archived_files_match_declared_hashes=True, curve_metrics_recomputed=True,

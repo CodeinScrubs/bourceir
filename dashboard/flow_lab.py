@@ -3,7 +3,17 @@
 import pandas as pd
 import streamlit as st
 
-from core.flow_filters import FILTER_NAMES, FLOW_FILTER_VERSION, filter_conditions, filter_diagnostics, flow_metrics
+from core.flow_filters import (
+    FILTER_NAMES,
+    FLOW_FILTER_V4_VERSION,
+    FLOW_FILTER_VERSION,
+    V4_FILTER_NAMES,
+    filter_conditions,
+    filter_conditions_v4,
+    filter_diagnostics,
+    filter_diagnostics_v4,
+    flow_metrics,
+)
 from core.flow_intervals import estimate_retail_intervals
 from core.screening import current_daily_row
 from core.timeutils import to_jalali
@@ -13,6 +23,9 @@ from database.flow_data import load_flow_inputs
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _latest_metrics(database_path, version):
+    if version == FLOW_FILTER_V4_VERSION:
+        from dashboard.operator_status import latest_v4_metrics
+        return latest_v4_metrics(database_path)
     with DatabaseManager(db_path=database_path, read_only=True) as db:
         prices, clients = load_flow_inputs(db, tail_per_symbol=65, include_inactive=False)
     if prices.empty:
@@ -26,12 +39,15 @@ def page_flow_lab():
     from config import settings
     st.title('🧪 آزمایشگاه فیلترها')
     st.caption('تطبیق شرط با دادهٔ روزانهٔ ثبت‌شده؛ خروجی توصیه خرید، احتمال صف خرید یا پیش‌بینی سود نیست.')
+    family = st.radio('خانواده فرضیه', ['قواعد قبلی v3', 'فرضیه‌های چندعاملی v4'], horizontal=True)
+    v4 = family.endswith('v4')
+    names = V4_FILTER_NAMES if v4 else FILTER_NAMES
     with st.spinner('در حال تطبیق داده روزانه و شرط‌ها…'):
-        metrics = _latest_metrics(str(settings.DB_PATH), FLOW_FILTER_VERSION)
+        metrics = _latest_metrics(str(settings.DB_PATH), FLOW_FILTER_V4_VERSION if v4 else FLOW_FILTER_VERSION)
     if metrics.empty:
         st.info('ابتدا تاریخچه واقعی قیمت و حقیقی/حقوقی را دریافت کن.')
         return
-    name = st.selectbox('فیلتر توصیفی', list(FILTER_NAMES), format_func=FILTER_NAMES.get)
+    name = st.selectbox('فیلتر توصیفی', list(names), format_func=names.get)
     date = str(metrics.date.max())
     st.write(f'روز مشترک داده: {to_jalali(date)} — {len(metrics)} نماد عادی فعال دارای ردیف در این روز')
     coverage = int(metrics['buyer_power_value'].notna().sum())
@@ -44,7 +60,10 @@ def page_flow_lab():
             'ترتیب معاملات، تاریخچه هم‌ساعت و دفتر سفارش تازه لازم است؛ داده پایان روز جای آن‌ها را نمی‌گیرد.')
     st.caption('در نسخه v2، پنجره حجم دارای شکاف مرجع یا مرجع نامعلوم، قابل مقایسه فرض نمی‌شود؛ '
                'نسبت حجم آن نامعلوم می‌ماند. از مرجع، تعداد سهم پس از مجمع حدس زده نمی‌شود.')
-    diagnostics = filter_diagnostics(metrics, name)
+    diagnostics = filter_diagnostics_v4(metrics, name) if v4 else filter_diagnostics(metrics, name)
+    if v4:
+        st.caption('صدک v4 از ارزش معاملات ۲۰ جلسه قبل است، نه ارزش کل شرکت. هم‌ارزش‌ها و سابقه نامعلوم کران دارند. '
+                   'حجم مبنای تاریخی موجود نیست؛ مقدار جاری نماد به گذشته نسبت داده نمی‌شود. قفل نبودن امروز، اجرای فردا را اثبات نمی‌کند.')
     c1, c2, c3 = st.columns(3)
     c1.metric('منطبق با همه شروط معلوم', int(diagnostics.match.sum()))
     c2.metric('دارای حداقل یک شرط نامعلوم', int((diagnostics.known_conditions < diagnostics.total_conditions).sum()))
@@ -68,7 +87,7 @@ def page_flow_lab():
     if not table.empty:
         symbol = st.selectbox('جزئیات شرط‌های نماد', table.symbol.tolist())
         selected = metrics.loc[metrics.symbol == symbol]
-        checks = filter_conditions(selected, name).iloc[0]
+        checks = (filter_conditions_v4(selected, name) if v4 else filter_conditions(selected, name)).iloc[0]
         st.dataframe(pd.DataFrame({'شرط': checks.index, 'وضعیت': [
             'نامعلوم' if pd.isna(v) else 'برقرار' if v else 'برقرار نیست' for v in checks]}),
             hide_index=True, width='stretch')

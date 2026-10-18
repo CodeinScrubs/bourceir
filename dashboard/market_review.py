@@ -14,8 +14,10 @@ from ops.report_files import read_private_report
 
 
 def page_market_review(job_panel):
+    from dashboard.operator_status import operator_panel
     st.title('🌐 بررسی بازار امروز')
     st.caption('فقط سهام عادی بورس و فرابورس؛ تاریخ هر سهم مستقل کنترل می‌شود. گزارش توصیفی است و پیشنهاد معامله ندارد.')
+    operator_panel()
     job_panel('market-review', ['market-review'], 'دریافت گزارش جلسه جاری',
               'دیده‌بان، تاریخ و کندل هر سهم و شاخص‌های رسمی را فقط از داده عمومی دریافت و شواهد را حفظ می‌کند؛ '
               'مدت دریافت به پوشش و دسترسی منبع بستگی دارد. هیچ تغییری در حساب یا دیتابیس معاملاتی ایجاد نمی‌کند.')

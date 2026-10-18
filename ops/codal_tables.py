@@ -109,3 +109,26 @@ def capture_codal_tables(url, expected_tracing_no, *, provider=None, root=None):
     os.replace(temporary, folder / 'manifest.json')
     load_codal_tables(folder)
     return dict(status='captured', folder=str(folder), **manifest)
+
+
+def normalize_codal_archive(folder, *, root=None):
+    """خروجی جدا و قابل بازحساب؛ v1 قدیمی و زمان آن تغییر نمی‌کنند."""
+    from core.codal_tables import normalize_monthly_tables
+
+    loaded = load_codal_tables(folder)
+    manifest = loaded['manifest']
+    normalized = normalize_monthly_tables(loaded['data'], available_at=manifest['available_at'],
+        observed_at=manifest['observed_at'], archived_at=manifest['archived_at'],
+        identity_verified=manifest['document_identity_verified'])
+    # دسترسی به هویت و صحت منبع از تأیید واحد به دست نمی‌آید.
+    output = dict(source_snapshot=manifest['snapshot_id'], source_files_sha256=manifest['files_sha256'],
+                  normalized=normalized, generated_at=now_tehran_iso(),
+                  source_identity_still_unverified=manifest['document_identity_verified'] is not True,
+                  parser_sha256=_sha((settings.BASE_DIR / 'core/codal_tables.py').read_bytes().replace(b'\r\n', b'\n')))
+    target = Path(root or settings.DATA_DIR / 'private' / 'codal-monthly-normalized') / ('NORMALIZED-' + uuid.uuid4().hex)
+    target.mkdir(parents=True, exist_ok=False)
+    (target / 'parser.py').write_bytes((settings.BASE_DIR / 'core/codal_tables.py').read_bytes().replace(b'\r\n', b'\n'))
+    from ops.report_files import write_private_report
+    write_private_report(target / 'result.json', output)
+    load_codal_tables(folder)
+    return dict(output, folder=str(target))

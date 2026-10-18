@@ -123,7 +123,8 @@ def _picks(panel, strategy, k, random_seed=None):
 
 
 def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min_train_sessions=504,
-                           test_sessions=252, horizons=(2, 3), random_seed=41, dip_selector='buyer_power'):
+                           test_sessions=252, horizons=(2, 3), random_seed=41, dip_selector='buyer_power',
+                           use_personal_profile=True):
     if dip_selector not in {'buyer_power', 'buy_queue'}:
         raise ValueError('نامزدهای ثابت DIP باید قدرت خریدار یا صف خرید باشند')
     root = settings.DATA_DIR / "research"
@@ -141,7 +142,9 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
     dev_calendar = calendar[calendar >= cfg["dev_start"]]
     folds = time_folds(dev_calendar, min_train_sessions=min_train_sessions, test_sessions=test_sessions,
                        embargo_sessions=max(horizons) + 1, end_exclusive=cfg["holdout_start"])
-    profile = WorkbenchRepository(db).profile()
+    if type(use_personal_profile) is not bool:
+        raise ValueError('انتخاب پروفایل شخصی باید صریح و بولی باشد')
+    profile = WorkbenchRepository(db).profile() if use_personal_profile else None
     capital = initial_capital_rial if initial_capital_rial is not None else (
         profile["capital_rial"] if profile else settings.BACKTEST_CONFIG["initial_capital"])
     max_loss = profile["max_loss_rial"] / profile["capital_rial"] if profile else 0.10

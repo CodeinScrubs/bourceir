@@ -36,6 +36,31 @@ def test_paired_diagnostics_are_deterministic_and_do_not_approve_profit():
     assert all(i['mean_daily_difference_lower'] < 0 < i['mean_daily_difference_upper'] for i in first['intervals'])
 
 
+def test_centered_one_sided_bootstrap_reports_declared_family_and_resolution():
+    a, b = curves()
+    report = compare_equity_curves(a, b, initial_capital_rial=100000., replications=1000,
+        trials_attempted=8, family_comparisons=48, expected_sessions=a.date.tolist())
+    for interval in report['intervals']:
+        p = interval['one_sided_p_value']
+        assert 0 < p <= 1 and interval['declared_family_bonferroni_p_value'] == min(1, p * 48)
+        assert interval['p_value_resolution'] == 1 / 1001
+    assert not report['selection_corrected'] and not report['historical_trial_count_verified']
+
+
+def test_negative_edge_has_large_one_sided_p_value_and_cash_has_no_fake_interval():
+    a, b = curves()
+    a['equity_rial'] *= np.cumprod(np.full(len(a), .99))
+    report = compare_equity_curves(a, b, initial_capital_rial=100000., replications=1000)
+    assert all(i['one_sided_p_value'] > .95 for i in report['intervals'])
+
+
+@pytest.mark.parametrize('family', [0, True, 3])
+def test_family_cannot_omit_attempted_configurations(family):
+    a, b = curves()
+    with pytest.raises(ValueError):
+        compare_equity_curves(a, b, initial_capital_rial=100000., trials_attempted=8, family_comparisons=family)
+
+
 def test_unknown_equity_and_next_day_return_are_retained_not_dropped():
     a, b = curves()
     a.loc[50, 'equity_rial'] = np.nan
