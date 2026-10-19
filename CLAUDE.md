@@ -1,5 +1,7 @@
 @AGENTS.md
 
+در ۰٫۷٫۲۹، `python -m research.expectancy_run` خانواده ثابت ۳۵حالتی `expectancy-portfolio-v3` را از منبع BASELINES صریح، با ثبت قبل از برازش و بدون بازکردن holdout ارزیابی می‌کند. بازبین مدل، تمام انتخاب‌ها/کنترل‌ها، اجرای معاملات و bootstrap را دوباره محاسبه می‌کند؛ نامعلوم و مدل مصنوعی حقوق شرکتی مجوز سیگنال نمی‌شوند. bootstrap با۱تا۴پردازش و بذر ثابت اجرا می‌شود؛ checkpoint هر برش نیز بازبینی می‌شود. `python -m ops.research_bundle` فقط ورودی بازار و metadata محدود محاسباتی را صادر می‌کند؛ متن آزاد، مسیرهای منبع و جدول حساب صادر نمی‌شوند. خواننده خروجی پژوهش تاریخ را پیش از مقدار از همان بایت هش‌شده کنترل می‌کند. helper بازبینی در اثر انگشت کد پژوهش است. [پروتکل](docs/research/conditional-expectancy-protocol-fa.md) و [اجرا](docs/research/conditional-expectancy-runbook-fa.md).
+
 # راهنمای Claude Code برای پروژه BRS
 
 در ۰٫۷٫۲۸، `python -m ops.reference_recovery` قرارداد مستقل `explicit-price-reference-v1` را برای مرجع نامعلوم/نامثبت با توافق نه فیلد دو پاسخ بومی اجرا می‌کند. native-price-revision-v1 همچنان مرجع را تغییر نمی‌دهد. رسید 015 و نسخه قبلی 007، پشتیبان و تازه‌سازی اتمی دو ستون نمایشی لازم‌اند؛ خام دوره مهروموم محفوظ است. فیچر/پژوهش تازه لازم است و صحت مستقل، حقوق شرکتی و سودآوری تأیید نمی‌شوند. [قرارداد](docs/research/explicit-price-reference-fa.md).

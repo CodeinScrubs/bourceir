@@ -13,7 +13,7 @@ import pandas as pd
 
 from config import settings
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
-from ops.research_review import _load_json, _verify_inventory
+from ops.research_review import _load_json, _verify_inventory, read_development_parquet
 from research.baselines import STRATEGIES
 from research.labels import market_calendar
 from research.portfolio_run import verified_baseline_inputs
@@ -75,7 +75,8 @@ def run_probability_research(db, *, source_id, root=None):
     if (type(k) is not int or not 1 <= k <= 50 or isinstance(min_value, bool)
             or not isinstance(min_value, (int, float)) or not math.isfinite(min_value) or min_value < 0):
         raise ValueError('تعداد انتخاب یا نقدشوندگی منبع نامعتبر است')
-    feature_rows = opportunity_features(inputs['features'], inputs['labels'])
+    feature_rows = opportunity_features(inputs['features'], inputs['labels'], prices=inputs['prices'])
+    nontrading_feature_rows = feature_rows.attrs['observed_nontrading_feature_rows']
     feature_rows = feature_rows.loc[(feature_rows.date >= start) & (feature_rows.date < cutoff)
                                     & (feature_rows.value >= min_value)].reset_index(drop=True)
     calendar = market_calendar(inputs['prices'])
@@ -97,6 +98,7 @@ def run_probability_research(db, *, source_id, root=None):
             raise ValueError('ورودی هنگام ساخت تصویر مستقل تغییر کرد')
         _deduplicate_input(target, root / 'objects')
     protocol = dict(version=VERSION, target=TARGET, registered_at=now_tehran_iso(), source_id=source_id,
+                    observed_nontrading_feature_rows=nontrading_feature_rows,
                     source_report_sha256=source_report_sha, inputs=digests,
                     source_manifest=_load_json(root / source_id / 'manifest.json'),
                     strategies=expected_rules, horizons=list(HORIZONS), top_k=k, min_daily_value_rial=min_value,
@@ -210,8 +212,10 @@ def load_probability_report(db, experiment_id, *, root=None):
             raise ValueError('ثبت پروتکل/نتیجه احتمال ناسازگار است')
     ledgers = []
     for index, fold in enumerate(protocol['folds']):
-        forecasts = pd.read_parquet(folder / f'fold-{index:02d}-forecasts.parquet')
-        outcomes = pd.read_parquet(folder / f'fold-{index:02d}-outcomes.parquet')
+        forecasts_path = folder / f'fold-{index:02d}-forecasts.parquet'
+        outcomes_path = folder / f'fold-{index:02d}-outcomes.parquet'
+        forecasts = read_development_parquet(forecasts_path, actual[forecasts_path.name], protocol['end_exclusive'])
+        outcomes = read_development_parquet(outcomes_path, actual[outcomes_path.name], protocol['end_exclusive'])
         try:
             pd.testing.assert_frame_equal(forecasts.reset_index(drop=True), outcomes[list(forecasts)].reset_index(drop=True),
                                           check_dtype=False, check_exact=True)

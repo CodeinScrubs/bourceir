@@ -41,7 +41,8 @@ def _sha256(path: Path) -> str:
 
 def archive_research_code(target: Path) -> dict:
     """Keep the actual dirty-tree research source and locked dependencies, excluding runtime secrets/data."""
-    files = [settings.BASE_DIR / "requirements.lock.txt", settings.BASE_DIR / 'pyproject.toml']
+    files = [settings.BASE_DIR / "requirements.lock.txt", settings.BASE_DIR / 'pyproject.toml',
+             settings.BASE_DIR / 'ops/research_review.py']
     for folder in ("core", "features", "database", "config", "research", "backtest"):
         files.extend(p for p in sorted((settings.BASE_DIR / folder).rglob("*")) if p.suffix in (".py", ".yaml", ".sql"))
     hashes = {}
@@ -57,6 +58,7 @@ def archive_research_code(target: Path) -> dict:
 
 def research_code_fingerprint() -> str:
     digest = hashlib.sha256(_code_fingerprint(("core", "features", "database", "config", "research", "backtest")).encode())
+    digest.update((settings.BASE_DIR / 'ops/research_review.py').read_bytes().replace(b'\r\n', b'\n'))
     digest.update(json.dumps(feature_environment(), sort_keys=True).encode())
     return digest.hexdigest()
 
