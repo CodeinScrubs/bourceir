@@ -86,7 +86,7 @@ def run_flow_v4(db, *, source_id, initial_capital_rial=None, min_train_sessions=
         ['', '-stress', *random_suffixes, *(s + '-stress' for s in random_suffixes)]]
     # منبع پایه نیز همه قواعد/افق‌هایش را دیده است؛ تعداد کل سابقه پروژه هنوز نامعلوم است.
     attempted = len(modes) + len(source['params']['strategies']) * len(source['params']['horizons'])
-    family_comparisons = max(attempted, len(folds) * len(candidates) * 2 * 2 * 3)
+    family_comparisons = max(attempted * 3, len(folds) * len(candidates) * 2 * 2 * 3)
     code = research_code_fingerprint()
     experiment_id = f'EXP-{now_tehran_iso()[:10]}-FLOW-{uuid.uuid4().hex}'
     folder = root / experiment_id
