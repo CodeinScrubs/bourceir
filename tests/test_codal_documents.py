@@ -133,6 +133,33 @@ def test_redirect_limit_is_bounded_and_all_responses_close():
     assert len(session.calls) == 4 and all(row.closed for row in responses)
 
 
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+def test_official_new_report_redirect_can_be_archived(tmp_path,route):
+    target='/Reports/'+route+'?LetterSerial=test'
+    redirect=Response(status=302,headers={'Location':target});body=Response()
+    api,session=provider(redirect,body)
+    result=capture_codal_document(URL,provider=api,root=tmp_path)
+    assert result['status']=='captured' and result['effective_url']=='https://codal.ir'+target
+    assert len(session.calls)==2 and all(c[1]['allow_redirects'] is False for c in session.calls)
+    assert redirect.closed and body.closed and not result['text_extraction_complete']
+
+
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+def test_official_new_report_root_path_is_not_assumed_public(route):
+    api,session=provider()
+    with pytest.raises(ValueError):api.get_document('https://codal.ir/'+route+'?LetterSerial=test')
+    assert session.calls==[]
+
+
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+@pytest.mark.parametrize('unsafe',['https://evil.test/Reports/','https://codal.ir/Reports/'])
+def test_official_new_report_does_not_allow_external_or_session_redirects(route,unsafe):
+    target=unsafe+route+'?LetterSerial=test'+('&session=secret' if 'codal.ir' in unsafe else '')
+    redirect=Response(status=302,headers={'Location':target});api,session=provider(redirect)
+    result=api.get_document(URL)
+    assert result['status']=='error' and len(session.calls)==1 and redirect.closed
+
+
 def test_revisions_keep_both_contents_with_real_capture_time_and_check_tampering(tmp_path):
     api, _ = provider(Response(), Response(HTML.replace('۱۲۳', '۴۵۶').encode()))
     a = capture_codal_document(URL, provider=api, root=tmp_path)

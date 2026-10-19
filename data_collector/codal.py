@@ -136,6 +136,41 @@ class CodalProvider:
             logger.warning('دریافت سند عمومی کدال ناموفق بود: %s', type(exc).__name__)
             return dict(result, error_type=type(exc).__name__, message='دریافت سند معتبر کامل نشد؛ دوباره بررسی شود')
 
+    def get_historical_search_observation(self, symbol_fa, *, start, end_exclusive, page=1, letter_type=None):
+        """یک صفحه بایتی تاریخ‌دار؛ تاریخ/هویت هر ردیف باید پیش از مصرف کنترل شود."""
+        from core.codal_search import MAX_BYTES, search_request
+
+        request=search_request(symbol_fa,start=start,end_exclusive=end_exclusive,
+            cutoff=settings.RESEARCH_CONFIG['holdout_start'],page=page,letter_type=letter_type)
+        url=request['url'];requested=now_tehran_iso();started=time.monotonic()
+        try:
+            timeout=min(self.timeout,10)
+            response=self.session.get(url,timeout=(timeout,timeout),stream=True,allow_redirects=False,
+                headers={'Accept':'application/json'})
+            try:
+                if response.status_code!=200 or response.url!=url:
+                    raise ValueError('پاسخ کامل و بدون تغییرمسیر لازم است')
+                if response.headers.get('Content-Type','').split(';',1)[0].strip().lower()!='application/json':
+                    raise ValueError('پاسخ JSON بومی لازم است')
+                length=response.headers.get('Content-Length','')
+                if length.isdigit() and int(length)>MAX_BYTES:
+                    raise ValueError('حجم اعلام‌شده جست‌وجو از حد مجاز گذشت')
+                chunks=[];size=0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size+=len(chunk)
+                    if size>MAX_BYTES or time.monotonic()-started>30:
+                        raise ValueError('حجم یا زمان جست‌وجو از حد مجاز گذشت')
+                    chunks.append(chunk)
+                body=b''.join(chunks)
+                if not body:raise ValueError('پاسخ خالی معتبر نیست')
+                return dict(source='codal',url=url,requested_at=requested,received_at=now_tehran_iso(),
+                    response_bytes=size,body_sha256=hashlib.sha256(body).hexdigest(),content=body)
+            finally:
+                response.close()
+        except (requests.RequestException,ValueError) as error:
+            logger.warning('جست‌وجوی تاریخ‌دار کدال ناموفق بود: %s',type(error).__name__)
+            return None
+
     def get_letters(self, page: int = 1, symbol_fa: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """یک صفحه (۲۰ مورد) از جدیدترین اطلاعیه‌ها؛ با تعیین نماد فقط اطلاعیه‌های همان نماد."""
         if isinstance(page, bool) or not isinstance(page, int) or page < 1:

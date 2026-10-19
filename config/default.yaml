@@ -4,7 +4,7 @@
 
 project:
   name: "BRS Quant Engine"
-  version: "0.7.34"
+  version: "0.7.35"
   environment: "development"
 
 market:
