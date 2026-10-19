@@ -118,3 +118,7 @@ class BaseDataProvider(ABC):
     def get_quote_context_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
         """مجموعه بایتی مظنه، مشخصات بومی و دامنه تاریخ‌دار؛ تطبیق در هسته لازم است."""
         raise NotImplementedError
+
+    def get_share_change_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        """بایت تغییر تعداد سهام ناشر؛ تاریخ منبع به اعتبار حساب تعبیر نمی‌شود."""
+        raise NotImplementedError

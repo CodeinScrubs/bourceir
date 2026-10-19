@@ -649,7 +649,7 @@ class TsetmcProvider(BaseDataProvider):
             return None
 
     def _get_quote_context_json(self, code: str, url: str) -> Optional[Dict[str, Any]]:
-        """بایت محدود برای دو نشانی ثابت مشخصات/دامنه؛ بدون سرآیند یا نشست در خروجی."""
+        """بایت محدود JSON بومی؛ فراخوان‌های داخلی نشانی ثابت می‌سازند و نشست صادر نمی‌شود."""
         from core.quote_context import MAX_JSON_BYTES
 
         requested, started = now_tehran_iso(), time.monotonic()
@@ -682,6 +682,12 @@ class TsetmcProvider(BaseDataProvider):
         except (requests.RequestException, ValueError) as exc:
             logger.warning('دریافت مشخصات/دامنه مجاز ناموفق بود: %s', type(exc).__name__)
             return None
+
+    def get_share_change_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        from core.share_changes import share_change_request
+
+        code, url = share_change_request(ins_code)
+        return self._get_quote_context_json(code, url)
 
     def get_quote_context_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
         from core.legacy_quotes import parse_quote
