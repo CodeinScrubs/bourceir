@@ -44,6 +44,8 @@ def test_v4_pipeline_registers_before_results_keeps_all_controls_and_passes_revi
     result = run_flow_v4(db, source_id=source['experiment_id'], min_train_sessions=104, test_sessions=30, replications=1000)
     assert events == [result['experiment_id'] + '-PROTOCOL', result['experiment_id']]
     assert result['protocol']['horizons'] == [1, 2] and result['protocol']['random_seeds'] == [41, 97, 173]
+    uncertainty = result['protocol']['uncertainty']
+    assert uncertainty['declared_family_comparisons'] >= uncertainty['trials_attempted'] * 3
     assert not result['holdout_eligible'] and not result['accepted_for_signals']
     assert result['blocked_variants']['dip_effective_base_volume'].startswith('not_evaluable:')
     folder = root / 'research' / result['experiment_id']

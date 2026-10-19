@@ -18,7 +18,7 @@ import pandas as pd
 from core.timeutils import is_canonical_iso_date
 from ops.report_files import private_report_path, write_private_report
 
-VERSION = 'paired-stationary-diagnostics-v3'
+VERSION = 'paired-stationary-diagnostics-v4'
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 
 
@@ -81,12 +81,14 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
     if trials_attempted is not None and (isinstance(trials_attempted, bool) or not isinstance(trials_attempted, int)
                                         or trials_attempted < 1):
         raise ValueError('Trial count must be positive or explicitly unknown')
-    if family_comparisons is not None and (type(family_comparisons) is not int or family_comparisons < 1
-                                          or trials_attempted is None or family_comparisons < trials_attempted):
-        raise ValueError('The declared comparison family must include all attempted configurations')
     blocks = tuple(block_lengths)
     if not blocks or len(set(blocks)) != len(blocks) or any(isinstance(b, bool) or not isinstance(b, int) or b < 2 for b in blocks):
         raise ValueError('Distinct integer block lengths >= 2 are required')
+    if family_comparisons is not None and (type(family_comparisons) is not int or family_comparisons < 1
+            or trials_attempted is None or family_comparisons < trials_attempted * len(blocks)):
+        raise ValueError('The declared family must cover all attempted configurations and reported block variants')
+    minimum_family_p = None if family_comparisons is None else min(1., family_comparisons / (replications + 1))
+    resolution_adequate = None if minimum_family_p is None else minimum_family_p <= 1. - confidence
     frames = []
     for frame in (strategy, benchmark):
         if not {'date', 'equity_rial'} <= set(frame) or frame.empty:
@@ -122,6 +124,8 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
             blockers.append('session_calendar_mismatch')
     if trials_attempted is None:
         blockers.append('number_of_attempted_trials_unknown')
+    if resolution_adequate is False:
+        blockers.append('bootstrap_resolution_cannot_reach_declared_family_alpha')
     if unknown:
         blockers.append('unknown_daily_pairs')
     if len(difference) < min_sessions:
@@ -152,8 +156,7 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
                                   declared_family_bonferroni_p_value=None if family_comparisons is None else
                                       min(1., float(p_value) * family_comparisons),
                                   p_value_resolution=1 / (replications + 1),
-                                  family_tail_resolution_adequate=None if family_comparisons is None else
-                                      family_comparisons / (replications + 1) <= 1 - confidence))
+                                  family_tail_resolution_adequate=resolution_adequate))
     return dict(version=VERSION, sessions=len(difference), unknown_daily_pairs=unknown,
                 known_daily_pairs=len(difference)-unknown, min_sessions=min_sessions,
                 mean_daily_return_difference=float(difference.mean()) if not unknown and calendar_matches is not False else None,
@@ -162,6 +165,8 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
                 unexpected_sessions=None if calendar is None else len(set(strategy.date) - set(calendar)),
                 intervals=intervals, replications=replications, seed=seed, trials_attempted=trials_attempted,
                 family_comparisons=family_comparisons, historical_trial_count_verified=False,
+                minimum_attainable_family_p_value=minimum_family_p,
+                family_tail_resolution_adequate=resolution_adequate,
                 p_value_method='one-sided mean <= 0; centered stationary bootstrap; plus-one Monte Carlo count',
                 blockers=blockers, selection_corrected=False, accepted_for_signals=False,
                 probability_of_future_profit=None, statistic='arithmetic mean of paired daily net return differences',

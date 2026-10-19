@@ -169,3 +169,70 @@ def test_cli_input_collision_preserves_input_before_decoding(tmp_path, monkeypat
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 2 and source.read_bytes() == before
+
+
+@pytest.mark.parametrize('family', [8, 23])
+def test_declared_family_cannot_omit_the_reported_block_variants(family):
+    a, b = curves()
+    with pytest.raises(ValueError, match='block'):
+        compare_equity_curves(a, b, initial_capital_rial=100000., replications=1000,
+            trials_attempted=8, family_comparisons=family)
+
+
+@pytest.mark.parametrize('curve_kind', ['cash_only', 'unknown_pair', 'short_sample'])
+def test_family_resolution_warning_survives_unavailable_intervals(curve_kind):
+    a, cash = curves(10 if curve_kind == 'short_sample' else 120)
+    if curve_kind == 'cash_only':
+        a = cash.copy()
+    elif curve_kind == 'unknown_pair':
+        a.loc[5, 'equity_rial'] = np.nan
+    report = compare_equity_curves(a, cash, initial_capital_rial=100000., replications=1000,
+        trials_attempted=47, family_comparisons=2820)
+    assert report['intervals'] == []
+    assert report['minimum_attainable_family_p_value'] == 1
+    assert report['family_tail_resolution_adequate'] is False
+    assert 'bootstrap_resolution_cannot_reach_declared_family_alpha' in report['blockers']
+    assert report['accepted_for_signals'] is False
+
+
+@pytest.mark.parametrize('confidence,adequate', [(.90, True), (.95, True), (.99, False)])
+def test_family_resolution_uses_declared_confidence_not_a_fixed_five_percent(confidence, adequate):
+    a, cash = curves()
+    report = compare_equity_curves(a, cash, initial_capital_rial=100000., replications=1000,
+        trials_attempted=8, family_comparisons=48, confidence=confidence)
+    assert report['minimum_attainable_family_p_value'] == pytest.approx(48 / 1001)
+    assert report['family_tail_resolution_adequate'] is adequate
+    blocked = 'bootstrap_resolution_cannot_reach_declared_family_alpha' in report['blockers']
+    assert blocked is (not adequate)
+    assert all(row['family_tail_resolution_adequate'] is adequate for row in report['intervals'])
+
+
+def test_unknown_family_resolution_remains_unknown():
+    _, cash = curves()
+    report = compare_equity_curves(cash, cash, initial_capital_rial=100000., replications=1000)
+    assert report['minimum_attainable_family_p_value'] is None
+    assert report['family_tail_resolution_adequate'] is None
+    assert 'number_of_attempted_trials_unknown' in report['blockers']
+
+
+def test_cli_retains_insufficient_resolution_without_a_database(tmp_path, monkeypatch):
+    import json
+
+    from config import settings
+    from research.uncertainty import VERSION, main
+
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    missing_db = tmp_path / 'must-not-exist.db'
+    monkeypatch.setattr(settings, 'DB_PATH', missing_db)
+    a, cash = curves()
+    strategy, benchmark = tmp_path / 'a.parquet', tmp_path / 'cash.parquet'
+    a.to_parquet(strategy)
+    cash.to_parquet(benchmark)
+    output = tmp_path / 'private' / 'resolution.json'
+    assert main(['--strategy', str(strategy), '--benchmark', str(benchmark),
+        '--initial-capital-rial', '100000', '--replications', '1000', '--trials-attempted', '47',
+        '--family-comparisons', '2820', '--output', str(output)]) == 0
+    report = json.loads(output.read_text(encoding='utf-8'))
+    assert report['version'] == VERSION and report['minimum_attainable_family_p_value'] == 1
+    assert report['family_tail_resolution_adequate'] is False and not missing_db.exists()
+    assert not report['accepted_for_signals'] and report['probability_of_future_profit'] is None
