@@ -58,7 +58,7 @@ def _calendar(values):
 
 def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                      config: PortfolioConfig, start: str | None = None, end: str | None = None,
-                     dip_rule=None) -> PortfolioResult:
+                     dip_rule=None, *, cash_dividends=None) -> PortfolioResult:
     """Decisions t -> next session; shared cash, slots, partial fills and delayed exits.
 
     Purchases precede sales in daily bookkeeping, so same-day sale proceeds cannot fund an earlier
@@ -67,6 +67,12 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     Unknown action/mark for an open position invalidates returns and halts the replay.
     """
     calendar = _calendar(calendar)
+    if cash_dividends is not None:
+        from backtest.cash_dividends import CashDividendBook
+
+        if not isinstance(cash_dividends, CashDividendBook):
+            raise ValueError('دفتر صریح سود نقدی لازم است')
+        cash_dividends.start(calendar)
     if dip_rule is not None:
         if dip_rule.hold != config.horizon or dip_rule.stop_loss is not None:
             raise ValueError('قاعده DIP باید هم‌افق سبد و بدون حد زیان باشد؛ این نسخه فقط خروج هدف/زمان را مدل می‌کند')
@@ -80,6 +86,9 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     prices = prices.sort_values(["symbol", "date"]).copy()
     prices["vwap"] = market_rules.daily_vwap(prices)
     prices["mark"] = market_rules.official_close(prices)
+    if cash_dividends is not None:
+        prices['previous_official'] = prices.groupby('symbol')['mark'].shift(1)
+        prices['previous_date'] = prices.groupby('symbol')['date'].shift(1)
     prices["action"] = market_rules.corporate_action_factors(prices)
     locks = market_rules.lock_flags(prices)
     prices["up"], prices["down"] = locks["locked_up"], locks["locked_down"]
@@ -113,6 +122,15 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     for day in days:
         session, used = by_day.get(day, {}), {}
         index = day_position[day]
+        if cash_dividends is not None:
+            try:
+                cash_dividends.begin_day(day, session)
+            except ValueError as error:
+                note(day, '', 'unknown_corporate_entitlement', reason=str(error))
+                invalid = True
+                curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
+                                  stale_positions=0, stale_fractional_exposures=0))
+                break
         # Adjust only already-held shares, before any current-day fills. Halts retain the last observed mark.
         for symbol in sorted(set(positions) | set(fractions.exposures)):
             pos = positions.get(symbol)
@@ -125,7 +143,21 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 note(day, symbol, "unknown_open_position")
                 invalid = True
                 break
-            if abs(factor - 1) > 1e-6:
+            # مسیر نقدی، حتی شکاف یک‌ریالی را بدون شاهد نادیده نمی‌گیرد؛ تحمل مدل قدیمی محفوظ است.
+            changed = abs(factor - 1) > 1e-6 or (cash_dividends is not None and
+                row['ref_price_raw'] != row['previous_official'])
+            if changed:
+                if cash_dividends is not None:
+                    try:
+                        cash_dividends.check_action(symbol, day, row)
+                    except ValueError as error:
+                        note(day, symbol, 'unknown_corporate_entitlement', reason=str(error))
+                        invalid = True
+                        break
+                    # حق نقدی تعداد سهم/بهای سهم یا هدف اسمی ثبت‌شده را عوض نمی‌کند.
+                    pos['mark'], pos['mark_date'] = row['mark'], day
+                    action_count += 1
+                    continue
                 # کسر قبلی هم تعدیل می‌شود؛ حتی اگر از یک سهم بیشتر شود، قابل فروش فرض نمی‌شود.
                 fractions.adjust(symbol, 1 / factor)
                 if pos is not None:
@@ -272,6 +304,10 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
                               stale_positions=0, stale_fractional_exposures=0))
             break
+        if cash_dividends is not None:
+            credit = cash_dividends.end_day(day, positions)
+            cash += credit
+            realized += credit
         receivable = fractions.value()
         equity = cash + receivable + sum(p["quantity"] * p["mark"] * (1 - sell_fee) for p in positions.values())
         # Research circuit breaker: no new buys after breaching the user's starting-capital loss floor.
@@ -280,6 +316,12 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         curve.append(dict(date=day, equity_rial=equity, cash_rial=cash, positions=len(positions),
                           stale_positions=sum(p["mark_date"] != day for p in positions.values()), risk_stopped=stopped,
                           stale_fractional_exposures=fractions.stale_count(day), noncash_receivable_rial=receivable))
+        if cash_dividends is not None:
+            # بودجه و توقف از دارایی قابل فروش مدل است؛ طلب مجهول در آنها خرج نمی‌شود.
+            face = cash_dividends.outstanding_face_rial
+            curve[-1].update(liquidation_assets_rial=equity, cash_dividend_receivable_face_rial=float(face))
+            if face > 0:
+                curve[-1]['equity_rial'] = np.nan
         if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped:
             reservable_cash = cash
             slots = config.max_positions - len(positions)
@@ -298,10 +340,12 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     equity_frame = pd.DataFrame(curve)
     values = pd.concat([pd.Series([config.initial_capital_rial]), equity_frame["equity_rial"]], ignore_index=True)
     drawdown = values / values.cummax() - 1
-    final = None if invalid else equity
+    unvalued = cash_dividends is not None and equity_frame.equity_rial.isna().any()
+    outstanding = cash_dividends is not None and cash_dividends.outstanding_face_rial > 0
+    final = None if invalid or outstanding else equity
     metrics = dict(status="invalid_data" if invalid else "complete", portfolio_simulated=True,
-                   total_return=None if invalid else equity / config.initial_capital_rial - 1,
-                   max_drawdown=None if invalid else float(-drawdown.min()), final_equity_rial=final,
+                   total_return=None if final is None else equity / config.initial_capital_rial - 1,
+                   max_drawdown=None if invalid or unvalued else float(-drawdown.min()), final_equity_rial=final,
                    initial_capital_rial=config.initial_capital_rial, realized_net_rial=realized, fees_rial=fees,
                    executions=len(executions), open_positions=len(positions), corporate_action_events=action_count,
                    noncash_receivable_rial=fractions.value(), noncash_receivable_cost_rial=fractions.cost,
@@ -323,4 +367,27 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             execution_model='dip_limit_daily_proxy' if not config.stress else 'dip_no_open_improvement_no_target_sell_low_stress',
             requested_quantity_basis='prior budget/volume/value and current session reference limit, before OHLC fill outcome',
             intraday_order_sequence_proven=False)
+    if cash_dividends is not None:
+        from backtest.cash_dividends import PORTFOLIO_VERSION as CASH_PORTFOLIO_VERSION
+
+        if unvalued and not invalid:
+            metrics['status'] = 'unvalued_receivable_path'
+        metrics.update(actual_corporate_entitlements_verified=False,
+            cash_dividend_receivable_face_rial=float(cash_dividends.outstanding_face_rial),
+            cash_dividend_income_rial=float(cash_dividends.total_paid_rial),
+            stock_realized_net_rial=realized - float(cash_dividends.total_paid_rial),
+            cash_dividend_claims=cash_dividends.records(), cash_dividend_ledger=cash_dividends.ledger,
+            nav_unvalued_days=int(equity_frame.equity_rial.isna().sum()),
+            liquidation_assets_final_rial=None if invalid else equity,
+            accepted_for_signals=False, profitability_proven=False)
+        assumptions.update(version=CASH_PORTFOLIO_VERSION,
+            corporate_action_model='explicit_cash_dividend_fixed_shares_unvalued_receivables',
+            source_events=[asdict(e) for e in cash_dividends.events],
+            source_payments=[asdict(p) for p in cash_dividends.payments],
+            dividend_settlement_verified=False, historical_entitlement_mapping_verified=False,
+            claim_fair_value_verified=False, same_day_dividend_cash_reused=False,
+            risk_and_budget_basis='cash_plus_stock_liquidation_proxy_excluding_unvalued_dividend_claims',
+            dividend_target_policy='nominal_entry_price_target_unchanged',
+            limitations=[*assumptions['limitations'], 'only explicit cash dividends; no synthetic fallback',
+                         'unsettled claims have unknown fair value; announced payment dates are not cash receipts'])
     return PortfolioResult(equity_frame, pd.DataFrame(executions), pd.DataFrame(decisions), metrics, assumptions)
