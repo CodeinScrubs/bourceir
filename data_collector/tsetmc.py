@@ -330,6 +330,23 @@ class TsetmcProvider(BaseDataProvider):
             logger.warning("نماد %s: %d رکورد نامعتبر حذف شد.", ins_code, removed)
         return df[DAILY_COLUMNS]
 
+    def get_dated_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        code, _ = daily_request(ins_code, trade_date)
+        url = f'{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{code}/0'
+        payload = self._get_json(url)
+        if payload is None:
+            return None
+        rows = payload.get('closingPriceDaily') if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            logger.error('پاسخ فهرست تاریخچه %s ساختار معتبر ندارد', code)
+            return None
+        selected = [row for row in rows if isinstance(row, dict)
+                    and type(row.get('dEven')) in (str, int) and str(row['dEven']) == trade_date.replace('-', '')]
+        return dict(source=self.name, price_unit='Rial', ins_code=code, requested_date=trade_date,
+                    url=url, received_at=now_tehran_iso(), received_row_count=len(rows),
+                    payload=dict(closingPriceDaily=selected), response_scope='selected_native_rows',
+                    unselected_numeric_rows_not_archived=True)
+
     def get_client_types_history(self, ins_code: str, dates: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
         """
         تاریخچه حقیقی/حقوقی. بدون dates کل تاریخچه (~۱ مگابایت)؛ با dates فقط همان روزها (به‌روزرسانی سبک روزانه).

@@ -48,9 +48,12 @@ def preserve_recoveries(conn, symbol_id, params):
         if receipt is not None and values[11] == receipt['source'] == 'tsetmc' and values[10] == receipt['price_unit'] == 'Rial':
             after, fields = json.loads(receipt['after_json']), json.loads(receipt['fields_json'])
             incoming = json_price_row({key: values[index] for key, index in RAW_INDEX.items()})
+            from database.price_reference import preserve_reference_recovery
             from database.price_revisions import preserve_native_revision
 
-            native = preserve_native_revision(receipt, incoming)
+            native = preserve_reference_recovery(receipt, incoming)
+            if native is None:
+                native = preserve_native_revision(receipt, incoming)
             if native is not None:
                 for index, value in native.items():
                     values[index] = value
