@@ -8,6 +8,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 from core.account_risk import intraday_account_state, reserved_position_risk
+from core.candidate_queue import inspection_queue
 from core.flow_filters import V4_FILTERS, filter_diagnostics_v4
 from core.journal import summarize_executions
 from core.market_summary import summarize_daily_market
@@ -77,7 +78,7 @@ def operator_status(db, metrics, market_frame, *, at=None):
         elif not match['research_universe_eligible']:
             blockers.append('ارزش معاملات روز کمتر از حداقل جامعه پژوهش است')
         plan = plan_by_symbol.get(match['symbol'])
-        if latest != expected:
+        if match['date'] != expected:
             blockers.append('روز فیلتر آخرین جلسه کامل مورد انتظار نیست')
         if not profile:
             blockers.append('پروفایل ریسک ثبت نشده است')
@@ -129,7 +130,8 @@ def operator_status(db, metrics, market_frame, *, at=None):
     count = len(db.get_universe_symbols())
     pulse = None if market_frame.empty else summarize_daily_market(market_frame, expected_count=count)
     return dict(evaluated_at=at.isoformat(), expected_session=expected, filter_date=latest,
-                filter_data_current=latest == expected, market=pulse, candidates=matches,
+                filter_data_current=not metrics.empty and bool(metrics.date.eq(expected).all()), market=pulse, candidates=matches,
+                inspection_queue=inspection_queue(matches, session_date=expected),
                 accepted_candidates=0, paper_portfolios=papers,
                 broker=None if account is None else dict(captured_at=account['captured_at'],
                     scope=_holding_scope(account['positions']), account_history_reconciled=False),

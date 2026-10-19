@@ -6,6 +6,7 @@ from collections import Counter
 from datetime import datetime, time
 
 from core.capture_evidence import SUPPORTED_CAPTURE_VERSIONS, binding_problems, receipts_from_cycle, sha256
+from core.feed_health import feed_latency
 from core.timeutils import TEHRAN_TZ
 
 
@@ -63,8 +64,10 @@ def read_capture_audit(db, session_date):
         counts = Counter()
         receives = {key: [] for key in by_ins}
         wall_clock_errors = 0
+        durations, quote_ages = [], []
         for pair in pairs:
             start, finish = _clock(pair['started_at']), _clock(pair['finished_at'])
+            durations.append(json.loads(pair['payload_json']).get('elapsed_seconds') if pair['payload_json'] else None)
             if not pair['finished_at']:
                 counts['pending'] += 1
                 for item in by_ins.values():
@@ -122,6 +125,7 @@ def read_capture_audit(db, session_date):
                 age = (finish - provider).total_seconds() if finish and provider else None
                 key = ('unknown' if age is None else 'future' if age < -5 else 'stale' if age > 45 else 'fresh')
                 item['price_time_' + key] += 1
+                quote_ages.append(dict(age_seconds=age, bound=not problems))
         for key, item in by_ins.items():
             gap, backwards = _max_gap(receives[key])
             item['max_valid_poll_gap_seconds'] = gap
@@ -156,6 +160,9 @@ def read_capture_audit(db, session_date):
                    configured_window_bracketed=bracketed,
                    calendar_date_explicit=session_date in protocol['calendar'],
                    full_session_coverage_known=False, per_symbol=list(by_ins.values()))
+        run['latency'] = feed_latency(durations, quote_ages, expected_slots=len(pairs)*len(by_ins),
+                                      interval_seconds=protocol['interval_seconds'])
+        run['request_profile'] = protocol.get('request_profile')
         run['bound_snapshot_receipts'] = sum(r['bound_snapshot_receipts'] for r in by_ins.values())
         run['unbound_snapshot_receipts'] = sum(r['valid'] - r['bound_snapshot_receipts'] for r in by_ins.values())
         result['runs'].append(run)

@@ -58,15 +58,20 @@ class TsetmcProvider(BaseDataProvider):
 
     name = "tsetmc"
 
-    def __init__(self, session: Optional[requests.Session] = None):
-        self.timeout = settings.REQUEST_TIMEOUT_SECONDS
-        self.session = session or self._build_session()
+    def __init__(self, session: Optional[requests.Session] = None, *, realtime=False):
+        if type(realtime) is not bool:
+            raise ValueError('وضعیت پروفایل زنده باید بولی صریح باشد')
+        self.realtime = realtime
+        self.timeout = min(settings.REQUEST_TIMEOUT_SECONDS, 5) if realtime else settings.REQUEST_TIMEOUT_SECONDS
+        self.session = session if session is not None else self._build_session(realtime=realtime)
+        self.request_profile = ('external-session-unknown' if session is not None else
+                                'live-no-retry-5s-io' if realtime else 'retrying-default')
 
     @staticmethod
-    def _build_session() -> requests.Session:
+    def _build_session(*, realtime=False) -> requests.Session:
         session = requests.Session()
         retry = Retry(
-            total=settings.MAX_RETRIES, backoff_factor=1.0,
+            total=0 if realtime else settings.MAX_RETRIES, backoff_factor=0.0 if realtime else 1.0,
             status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",),
         )
         session.mount("https://", HTTPAdapter(max_retries=retry, pool_maxsize=8))
@@ -77,8 +82,12 @@ class TsetmcProvider(BaseDataProvider):
         if rate_limit and settings.RATE_LIMIT_DELAY > 0:
             time.sleep(settings.RATE_LIMIT_DELAY)
         try:
-            response = self.session.get(url, timeout=timeout or self.timeout)
+            request_timeout = min(timeout or self.timeout, 5) if self.realtime else timeout or self.timeout
+            options = {'allow_redirects': False} if self.realtime else {}
+            response = self.session.get(url, timeout=request_timeout, **options)
             response.raise_for_status()
+            if self.realtime and response.status_code != 200:
+                raise ValueError('پاسخ زنده باید کامل و بدون تغییرمسیر باشد')
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError('ریشه پاسخ TSETMC باید شیء JSON باشد')

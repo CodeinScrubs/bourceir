@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from core.client_quality import snapshot_buyer_power, snapshot_client_metrics
+from core.risk import finite_number
+from core.text import normalize_symbol
 from core.timeutils import TEHRAN_TZ, now_tehran
 
 logger = logging.getLogger(__name__)
@@ -47,25 +49,40 @@ class DataFreshnessMonitor:
     def inspect_snapshot(self, symbol_fa: str, snapshot: Dict[str, Any],
                          now: Optional[datetime] = None) -> Dict[str, Any]:
         """بررسی یک اسنپ‌شات لحظه‌ای و بازگرداندن کارت سلامت آن."""
-        now = (now or now_tehran()).astimezone(TEHRAN_TZ)
-        last_price = snapshot.get("last_price")
+        now = now if now is not None else now_tehran()
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError('زمان بررسی باید منطقه زمانی داشته باشد')
+        now = now.astimezone(TEHRAN_TZ)
+        symbol_fa = normalize_symbol(symbol_fa)
+        try:
+            last_price = finite_number(snapshot.get('last_price'))
+        except ValueError:
+            last_price = None
         provider_time_str = snapshot.get("provider_timestamp")
 
-        delay_seconds: Optional[int] = None
+        delay_seconds: Optional[float] = None
+        signed_age_seconds = None
+        timezone_assumed = False
         status_flag = "⚪ Unknown"
-        warnings = []
+        warnings = [] if last_price is not None else ['آخرین قیمت عدد مثبت معتبر نیست؛ سلامت مظنه تأیید نمی‌شود.']
 
         if provider_time_str:
             try:
-                delay_seconds = int((now - _to_tehran(provider_time_str)).total_seconds())
+                parsed = pd.to_datetime(provider_time_str)
+                if not isinstance(parsed, pd.Timestamp) or pd.isna(parsed):
+                    raise ValueError('زمان منبع معتبر نیست')
+                timezone_assumed = parsed.tzinfo is None
+                if timezone_assumed:
+                    warnings.append('منطقه زمانی منبع تهران فرض شده است؛ سلامت قطعی نیست.')
+                # علامت و کسری ثانیه پیش از تصمیم حفظ می‌شوند؛ زمان آینده به صفر گرد نمی‌شود.
+                signed_age_seconds = (now - _to_tehran(provider_time_str)).total_seconds()
+                delay_seconds = signed_age_seconds
                 status_flag = "🟢 Fresh"
-                if delay_seconds < -5:
-                    warnings.append("زمان سرور از ساعت این رایانه جلوتر است؛ ساعت ویندوز را بررسی کنید.")
+                if delay_seconds < 0:
+                    warnings.append("زمان منبع پس از زمان بررسی است؛ ساعت منبع و رایانه باید مستقل بررسی شوند.")
                     status_flag = "⚪ Unknown"
                     delay_seconds = None
-                else:
-                    delay_seconds = max(0, delay_seconds)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 warnings.append("زمان سرور قابل خواندن نیست؛ تازگی داده نامعلوم است.")
 
             # فریز بودن سرور: تایم‌استمپ سرور با وجود گذشت زمان تغییر نکرده
@@ -84,6 +101,8 @@ class DataFreshnessMonitor:
             warnings.append(f"تاخیر سرور ({delay_seconds} ثانیه) از آستانه مجاز بیشتر است.")
         elif delay_seconds > self.delayed_threshold_seconds:
             status_flag = "🟡 Delayed"
+        if last_price is None or timezone_assumed:
+            status_flag = "⚪ Unknown"
 
         # جهش نامتعارف قیمت بین دو اسنپ‌شات (Bad Tick)
         if last_price and symbol_fa in self.last_seen_prices:
@@ -102,6 +121,8 @@ class DataFreshnessMonitor:
             "checked_at": now.strftime("%H:%M:%S"),
             "provider_time": provider_time_str,
             "delay_seconds": delay_seconds,
+            "signed_price_age_seconds": signed_age_seconds,
+            "provider_timezone_assumed": timezone_assumed,
             "status": status_flag,
             "last_price": last_price,
             "buyer_power": round(bp, 2) if bp is not None else None,

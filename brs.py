@@ -541,7 +541,11 @@ def cmd_live(args) -> int:
     quote_source = getattr(args, 'quote_source', 'market-watch')
     if quote_source != 'market-watch' and not 1 <= len(selected or []) <= 10:
         raise ValueError('برای منبع تاریخ‌دار، یک تا ده نماد صریح تعیین کنید')
-    collector = DataCollector(symbols=selected)
+    collector_options = {}
+    if getattr(args, 'fast_live', False):
+        from data_collector.tsetmc import TsetmcProvider
+        collector_options['provider'] = TsetmcProvider(realtime=True)
+    collector = DataCollector(symbols=selected, **collector_options)
     cycles = 0
     returncode = 0
     run_id = None
@@ -563,7 +567,8 @@ def cmd_live(args) -> int:
         calendar = collector.db.get_market_calendar()
         journal = CaptureRepository(collector.db)
         run_id = journal.start(instruments, interval=args.interval, cycles=args.cycles, forced=args.force,
-                               provider=collector.provider.name, explicit_scope=bool(selected), quote_source=quote_source)
+                               provider=collector.provider.name, explicit_scope=bool(selected), quote_source=quote_source,
+                               request_profile=getattr(collector.provider, 'request_profile', None))
         print(f"📡 پایش زنده آغاز شد (هر {args.interval} ثانیه). برای توقف Ctrl+C را بزنید.", flush=True)
         print(f'شناسه ثبت مستقل پایش: {run_id}', flush=True)
         while True:
@@ -933,6 +938,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=int, default=settings.POLLING_INTERVAL_SECONDS)
     p.add_argument("--cycles", type=int, default=0, help="تعداد چرخه (۰ = بی‌پایان)")
     p.add_argument("--force", action="store_true", help="اجرا حتی خارج از ساعات بازار")
+    p.add_argument('--fast-live', action='store_true',
+                   help='دریافت بدون retry خودکار با timeout ورودی/خروجی حداکثر۵ثانیه؛ سقف کل زمان نیست')
     p.add_argument('--quote-source', choices=('market-watch', 'dated-quote', 'dated-quote-context'), default='market-watch',
                    help='منبع پیش‌فرض دیده‌بان یا پاسخ تاریخ‌دار تک‌نماد برای حداکثر ده نماد صریح')
     p.set_defaults(func=cmd_live)
