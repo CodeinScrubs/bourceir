@@ -87,6 +87,10 @@ class BaseDataProvider(ABC):
         """آخرین کندل هر ابزار، با تاریخ مستقل خود منبع و پاسخ محفوظ."""
         raise NotImplementedError
 
+    def get_dated_daily_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        """پاسخ بومی کندل روز صریح؛ تطبیق تاریخ و هویت در بدنه هنوز لازم است."""
+        raise NotImplementedError
+
     def get_market_overview(self, flow: int) -> Optional[Dict[str, Any]]:
         """شاخص‌های رسمی یک بازار؛ دامنه آن با جمع سهام عادی یکسان فرض نمی‌شود."""
         raise NotImplementedError

@@ -36,7 +36,7 @@ def preserve_recoveries(conn, symbol_id, params):
         raise ValueError('حفظ بازیابی باید در تراکنش نویسنده انجام شود')
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='price_recoveries'").fetchone():
         return params
-    rows = conn.execute('''SELECT r.after_json, r.fields_json, p.* FROM price_recoveries r
+    rows = conn.execute('''SELECT r.before_json, r.after_json, r.fields_json, r.evidence_json, p.* FROM price_recoveries r
         JOIN daily_prices p ON p.id=r.daily_price_id WHERE r.symbol_id=?
         AND r.rowid=(SELECT max(last.rowid) FROM price_recoveries last WHERE last.daily_price_id=r.daily_price_id)''',
                         (symbol_id,)).fetchall()
@@ -48,6 +48,14 @@ def preserve_recoveries(conn, symbol_id, params):
         if receipt is not None and values[11] == receipt['source'] == 'tsetmc' and values[10] == receipt['price_unit'] == 'Rial':
             after, fields = json.loads(receipt['after_json']), json.loads(receipt['fields_json'])
             incoming = json_price_row({key: values[index] for key, index in RAW_INDEX.items()})
+            from database.price_revisions import preserve_native_revision
+
+            native = preserve_native_revision(receipt, incoming)
+            if native is not None:
+                for index, value in native.items():
+                    values[index] = value
+                protected.append(tuple(values))
+                continue
             if (json_price_row(dict(receipt)) == after
                     and all(incoming[key] == value for key, value in after.items() if key not in fields)
                     and all(incoming[key] in (None, after[key]) for key in fields)):

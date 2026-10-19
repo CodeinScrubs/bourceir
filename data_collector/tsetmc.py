@@ -29,6 +29,7 @@ from core.dividend_evidence import MAX_BYTES, dividend_request
 from core.instrument_history import history_request
 from core.legacy_quotes import MAX_BYTES as QUOTE_MAX_BYTES
 from core.legacy_quotes import quote_request
+from core.price_revision import daily_request
 from core.text import normalize_fa, normalize_symbol
 from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
 from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, DAILY_COLUMNS, BaseDataProvider
@@ -286,6 +287,14 @@ class TsetmcProvider(BaseDataProvider):
     # ═══════════════════════════════════════════════
     # تاریخچه روزانه
     # ═══════════════════════════════════════════════
+
+    def get_dated_daily_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        code, url = daily_request(ins_code, trade_date)
+        payload = self._get_json(url)
+        if payload is None:
+            return None
+        return dict(source=self.name, price_unit='Rial', ins_code=code, requested_date=trade_date,
+                    url=url, received_at=now_tehran_iso(), payload=payload)
 
     def get_symbol_history(self, ins_code: str, last_n: int = 0) -> Optional[pd.DataFrame]:
         data = self._get_json(f"{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{ins_code}/{int(last_n)}")
