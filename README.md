@@ -3,6 +3,8 @@
 [![BRS CI Tests](https://github.com/CodeinScrubs/bourceir/actions/workflows/tests.yml/badge.svg)](https://github.com/CodeinScrubs/bourceir/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 
+**نسخه 0.7.33:** دفتر اختیاری سهام جایزه، سهم اصلی را از حق دریافت‌نشده، اعتبار مرحله‌ای و کسور جدا می‌کند. فروش هر لات ظرفیت مشترک دارد؛ حق نامعلوم NAV یا وجه قابل خرج نمی‌سازد. سناریوی حسابداری ثابت با قیمت واقعی و بازحساب آفلاین اضافه شده است؛ نسبت سرمایه همچنان اثبات حق سهم یا اعتبار حساب نیست و روش پذیرفته‌شده‌ای نداریم. [قرارداد، اجرا و محدودیت‌ها](docs/research/bonus-share-portfolio-fa.md).
+
 **نسخه 0.7.32:** کیفیت دریافت با مخرج همه تلاش‌ها، تأخیر واقعی چرخه و صف بررسی حداکثر پنج نماد نمایش داده می‌شود. قیمت خراب/زمان آینده/حجم کسری رد می‌شوند و تازگی هر نامزد مستقل است. `live --fast-live` اختیاری است؛ سودآوری یا پرشدن سفارش تأیید نشده‌اند. [قرارداد و راهنما](docs/research/trader-evidence-hardening-fa.md) و [ممیزی بسته بیرونی](docs/reviews/2026-10-19-trader-evidence-followup-fa.md).
 
 در۰٫۷٫۳۱ ابزار آفلاین آگهی ثبت سرمایه اضافه شد؛ نسبت سرمایه، سهام قابل فروش یا وجه نقد ایجاد نمی‌کند. [قرارداد و پرونده واقعی](docs/research/capital-actions-evidence-fa.md).
