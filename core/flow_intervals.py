@@ -2,11 +2,12 @@
 
 from datetime import datetime
 from math import isfinite
+from numbers import Real
 
 from config import settings
 from core.timeutils import TEHRAN_TZ
 
-INTERVAL_VERSION = 'retail-counter-intervals-v1'
+INTERVAL_VERSION = 'retail-counter-intervals-v2'
 
 
 def _valid(row):
@@ -18,11 +19,13 @@ def _valid(row):
             or captured.date() != provider.date() or not -5 <= (captured-provider).total_seconds() <= 45):
         raise ValueError('زمان/منبع ناسازگار')
     fields = ['volume', 'last_price', 'real_buy_volume', 'real_sell_volume', 'real_buy_count', 'real_sell_count']
-    if any(isinstance(row[k], bool) for k in fields):
-        raise ValueError('مقدار بولی عدد بازار نیست')
+    if any(not isinstance(row[k], Real) or isinstance(row[k], bool) or not 0 <= row[k] < 2**53 for k in fields):
+        raise ValueError('عدد بومی، نامنفی و در دامنه دقیق لازم است')
     numbers = {k: float(row[k]) for k in fields}
     if not all(isfinite(v) and v >= 0 for v in numbers.values()) or numbers['last_price'] <= 0:
         raise ValueError('عدد نامعتبر')
+    if any(value != int(value) for field, value in numbers.items() if field != 'last_price'):
+        raise ValueError('شمار و حجم سهم باید صحیح باشند')
     for side in ('buy', 'sell'):
         count, volume = (numbers[f'real_{side}_{field}'] for field in ('count', 'volume'))
         if count != int(count) or (count > 0) != (volume > 0) or volume > numbers['volume']:

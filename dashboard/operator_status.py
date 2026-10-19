@@ -82,6 +82,23 @@ def operator_panel():
         st.caption(f'از تطبیق‌های توصیفی: {eligible} مورد حداقل ارزش معاملات روزِ جامعه پژوهش را دارد؛ '
                    f'{unknown} مورد از این نظر نامعلوم است. حداقل فعلی: '
                    f"{settings.RESEARCH_CONFIG['min_daily_value_rial']:,.0f} ریال؛ این شرط مجوز معامله نیست.")
+    queue = report['inspection_queue']
+    if evaluated:
+        st.caption(f"صف بررسی: {len(queue['displayed'])} نماد از {queue['unique_eligible_symbols']} نماد یکتای هم‌روز؛ "
+                   f"تعویق {len(queue['deferred_symbols'])} و کنارگذاشتن {len(queue['excluded'])} ردیف با علت محفوظ. "
+                   'اول برنامه دستی موجود و سپس ارزش معاملات روز؛ این ترتیب پیش‌بینی سود نیست.')
+        if queue['displayed']:
+            st.dataframe(pd.DataFrame([{'نماد برای بررسی': row['symbol'], 'فرضیه‌ها': '، '.join(row['hypotheses']),
+                'ارزش معاملات (ریال)': row['daily_value_rial'], 'برنامه دستی موجود': row['linked_manual_plan'],
+                'موانع': '؛ '.join(row['blockers'])} for row in queue['displayed']]), hide_index=True, width='stretch')
+        if queue['deferred_symbols'] or queue['excluded']:
+            with st.expander('نمادهای به‌تعویق‌افتاده و علت کنارگذاشتن ردیف‌ها'):
+                st.write('، '.join(queue['deferred_symbols']) or 'تعویق ندارد')
+                if queue['excluded']:
+                    labels = {'other_session': 'روز دیگر', 'research_universe_not_verified': 'شرط جامعه تأیید نشده',
+                              'unknown_traded_value': 'ارزش معامله نامعلوم', 'unknown_symbol': 'نماد نامعلوم'}
+                    st.dataframe(pd.DataFrame([{'نماد': row['symbol'], 'فرضیه': row['hypothesis'],
+                        'علت': labels[row['reason']]} for row in queue['excluded']]), hide_index=True, width='stretch')
     with st.expander('فرضیه‌های منطبق و دلیل مسدودبودن اندازه معامله', expanded=False):
         if report['candidates']:
             st.dataframe(pd.DataFrame([{'نماد': r['symbol'], 'فرضیه': r['hypothesis'],

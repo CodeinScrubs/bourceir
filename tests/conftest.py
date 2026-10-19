@@ -20,6 +20,20 @@ from database.db import DatabaseManager  # noqa: E402
 FOOLAD_INS = "46348559193224090"
 
 
+@pytest.fixture(autouse=True)
+def restore_process_entrypoint_after_test():
+    """AppTest ورودی موقت می‌سازد؛ آزمون بعدی spawn باید ورودی اصلی را ببیند."""
+    absent = object()
+    entrypoint = sys.modules.get('__main__', absent)
+    try:
+        yield
+    finally:
+        if entrypoint is absent:
+            sys.modules.pop('__main__', None)
+        else:
+            sys.modules['__main__'] = entrypoint
+
+
 def _daily(deven, first, low, high, last, closing, yesterday, volume, value=None, count=100):
     return {
         "priceChange": 0.0, "priceMin": low, "priceMax": high, "priceYesterday": yesterday, "priceFirst": first,

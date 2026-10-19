@@ -285,6 +285,9 @@ def page_home() -> None:
         else:
             st.info('این مسیر، تاریخ و ساعت قیمت را از همان پاسخ منبع می‌خواند. دامنه مجاز، صف و سرانه تأییدشده '
                     'نمی‌سازد؛ برای ثبت مشاهده آینده است و مجوز معامله نیست.')
+    if st.checkbox('دریافت سریع با توقف زودتر در خطای شبکه', value=False, key='live-fast-profile'):
+        live_args += ['--fast-live']
+    st.caption('دریافت سریع retry خودکار ندارد؛ انتظار هر ورودی/خروجی حداکثر۵ثانیه است و سقف کل زمان چرخه نیست.')
     job_panel("live", live_args, "شروع پایش زنده",
               'در ساعات بازار با فاصله تنظیم‌شده دریافت می‌کند و خارج ساعت منتظر می‌ماند. '
               'تاریخ غایب، پاسخ ناموفق و قیمت کهنه در گزارش کیفیت باقی می‌مانند. '
@@ -660,6 +663,15 @@ def page_health() -> None:
                 st.dataframe(pd.DataFrame(runs), hide_index=True)
                 for run in capture['runs']:
                     with st.expander(f"کیفیت دریافت نمادها — {run['id']}"):
+                        latency = run['latency']
+                        fraction = latency['observed_fresh_bound_fraction']
+                        st.write('مظنه تازه و متصل از تمام تلاش نمادها: ' + ('نامعلوم' if fraction is None else
+                            f"{latency['fresh_bound_slots']:,}/{latency['expected_instrument_poll_slots']:,} ({fraction:.2%})"))
+                        p95 = latency['poll_service_seconds']['p95']
+                        st.caption('صدک۹۵ مدت چرخه: ' + ('نامعلوم' if p95 is None else f'{p95:,.2f} ثانیه') +
+                            f"؛ چرخه کندتر از فاصله تنظیمی: {latency['polls_exceeding_requested_interval']:,}؛ "
+                            f"مدت نامعلوم: {latency['unknown_duration_polls']:,}. "
+                            'خطا، پاسخ غایب و شروع بدون پایان در مخرج‌اند؛ ساعت مستقل عمق و اجرای سفارش تأیید نیستند.')
                         fields = ('symbol', 'valid', 'unchanged', 'missing', 'duplicate', 'rejected',
                                   'bound_snapshot_receipts', 'snapshot_binding_missing', 'snapshot_binding_conflict',
                                   'snapshot_binding_clock_invalid',
