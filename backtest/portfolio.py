@@ -58,7 +58,7 @@ def _calendar(values):
 
 def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                      config: PortfolioConfig, start: str | None = None, end: str | None = None,
-                     dip_rule=None, *, cash_dividends=None) -> PortfolioResult:
+                     dip_rule=None, *, cash_dividends=None, bonus_shares=None) -> PortfolioResult:
     """Decisions t -> next session; shared cash, slots, partial fills and delayed exits.
 
     Purchases precede sales in daily bookkeeping, so same-day sale proceeds cannot fund an earlier
@@ -67,6 +67,11 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     Unknown action/mark for an open position invalidates returns and halts the replay.
     """
     calendar = _calendar(calendar)
+    if bonus_shares is not None:
+        from backtest.bonus_shares import BonusShareBook
+
+        if not isinstance(bonus_shares, BonusShareBook) or cash_dividends is not None:
+            raise ValueError('دفتر مستقل سهام جایزه لازم است؛ ترکیب با سود نقدی هنوز تعریف نشده')
     if cash_dividends is not None:
         from backtest.cash_dividends import CashDividendBook
 
@@ -86,7 +91,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     prices = prices.sort_values(["symbol", "date"]).copy()
     prices["vwap"] = market_rules.daily_vwap(prices)
     prices["mark"] = market_rules.official_close(prices)
-    if cash_dividends is not None:
+    if cash_dividends is not None or bonus_shares is not None:
         prices['previous_official'] = prices.groupby('symbol')['mark'].shift(1)
         prices['previous_date'] = prices.groupby('symbol')['date'].shift(1)
     prices["action"] = market_rules.corporate_action_factors(prices)
@@ -100,6 +105,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     days = [d for d in calendar if (start is None or d >= start) and (end is None or d < end)]
     if not days:
         raise ValueError("بازه اجرای سبد خالی است")
+    if bonus_shares is not None:
+        bonus_shares.start(days)
     positions, pending, executions, decisions, curve = {}, [], [], [], []
     cash, realized, fees = float(config.initial_capital_rial), 0.0, 0.0
     equity = cash
@@ -107,6 +114,17 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     fractions = SyntheticFractionBook(sell_fee=sell_fee)
     slip, stopped, invalid, action_count = config.slippage_bps / 10000, False, False, 0
     day_position = {day: i for i, day in enumerate(calendar)}
+
+    def held(symbol):
+        return symbol in positions if bonus_shares is None else any(p['symbol'] == symbol for p in positions.values())
+
+    def position_count():
+        return len(positions) if bonus_shares is None else len({p['symbol'] for p in positions.values()})
+
+    def exposure_symbols():
+        return set(positions) if bonus_shares is None else {p['symbol'] for p in positions.values()} | bonus_shares.pending_whole_symbols
+
+    rights_pause = False
 
     def note(day, symbol, status, **kwargs):
         decisions.append(dict(date=day, symbol=symbol, status=status, **kwargs))
@@ -131,8 +149,27 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
                                   stale_positions=0, stale_fractional_exposures=0))
                 break
-        # Adjust only already-held shares, before any current-day fills. Halts retain the last observed mark.
-        for symbol in sorted(set(positions) | set(fractions.exposures)):
+        if bonus_shares is not None:
+            try:
+                bonus_shares.begin_day(day, session, positions)
+                for symbol in sorted({p['symbol'] for p in positions.values()} | bonus_shares.pending_symbols):
+                    row = session.get(symbol)
+                    if row is None:
+                        continue
+                    if not row['valid'] or not math.isfinite(row['action']):
+                        raise ValueError('قیمت یا نوع اقدام برای دارایی/حق باز نامعلوم است')
+                    if not np.isclose(row['action'], 1.0):
+                        bonus_shares.check_action(symbol, day, row)
+                        action_count += 1
+                    for pos in positions.values():
+                        if pos['symbol'] == symbol:
+                            pos['mark'], pos['mark_date'] = row['mark'], day
+            except ValueError as error:
+                note(day, '', 'unknown_corporate_entitlement', reason=str(error))
+                invalid = True
+        # مسیر قدیمی فقط با نبود دفتر جایزه، تعداد مصنوعی و کسر نمایشی را می‌سازد.
+        legacy_symbols = sorted(set(positions) | set(fractions.exposures)) if bonus_shares is None else []
+        for symbol in legacy_symbols:
             pos = positions.get(symbol)
             row = session.get(symbol)
             if row is None:
@@ -184,8 +221,10 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         # Pending purchase budget was fixed after the preceding session, not today's high/low/close.
         for decision in pending:
             symbol = decision["symbol"]
-            if stopped or symbol in positions or len(positions) >= config.max_positions:
-                note(day, symbol, "risk_stop" if stopped else "slots_full", decision_date=decision["date"])
+            occupied=exposure_symbols()
+            if stopped or rights_pause or held(symbol) or (symbol not in occupied and len(occupied) >= config.max_positions):
+                note(day, symbol, 'risk_stop' if stopped else 'unvalued_rights_pause' if rights_pause else 'slots_full',
+                     decision_date=decision['date'])
                 continue
             row = session.get(symbol)
             if row is None:
@@ -234,21 +273,28 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             positions[symbol] = dict(quantity=float(quantity), cost=cost, mark=row["mark"], mark_date=day,
                                      entry_date=day, due=index + config.horizon, entry_kind=entry_kind,
                                      target=price * (1 + dip_rule.take_profit) if dip_rule else None)
+            if bonus_shares is not None:
+                key = f'ENTRY-{len(executions):08d}'
+                positions[key] = positions.pop(symbol)
+                positions[key]['symbol'] = symbol
+                executions[-1]['lot_id'] = key
             used[symbol] = (float(quantity), quantity * price)
         pending = []
         if invalid:
             curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=len(positions),
                               stale_positions=0, stale_fractional_exposures=0))
             break
-        for symbol, pos in list(positions.items()):
-            if dip_rule is None and index < pos["due"]:
+        for key, pos in list(positions.items()):
+            symbol = pos.get('symbol', key)
+            lot_dip = None if pos.get('credit_only') else dip_rule
+            if lot_dip is None and index < pos["due"]:
                 continue
             row = session.get(symbol)
             if row is None or not row["valid"] or row["down"]:
                 note(day, symbol, "exit_delayed")
                 continue
             exit_kind = 'time'
-            if dip_rule is not None:
+            if lot_dip is not None:
                 opening = row['open_raw']
                 if not math.isfinite(opening) or not 0 < row['low_raw'] <= opening <= row['high_raw']:
                     note(day, symbol, 'unknown_open_position')
@@ -256,7 +302,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                     break
                 same_day = day == pos['entry_date']
                 can_target = not same_day or (config.allow_entry_day_exit and
-                    (pos['entry_kind'] == 'open' or not dip_rule.conservative))
+                    (pos['entry_kind'] == 'open' or not lot_dip.conservative))
                 if config.stress:
                     # Stress deliberately removes target fills; liquidation at the due session's low.
                     if index < pos['due']:
@@ -292,12 +338,15 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             cost = pos["cost"] * quantity / pos["quantity"]
             fee = execute(day, symbol, "sell", quantity, price, cost)
             executions[-1]['exit_kind'] = exit_kind
+            if bonus_shares is not None:
+                executions[-1].update(lot_id=key, credit_disposal=bool(pos.get('credit_only')))
             cash += quantity * price - fee
             realized += quantity * price - fee - cost
             pos["quantity"] -= quantity
             pos["cost"] -= cost
+            used[symbol] = (used_volume + quantity, used_value + quantity * price)
             if pos["quantity"] <= 1e-8:
-                del positions[symbol]
+                del positions[key]
             else:
                 note(day, symbol, "partial_exit_wait")
         if invalid:
@@ -308,13 +357,41 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             credit = cash_dividends.end_day(day, positions)
             cash += credit
             realized += credit
+        if bonus_shares is not None:
+            try:
+                credits, credit_cash, credit_realized = bonus_shares.end_day(day, positions)
+                for pos in credits.values():
+                    pos.update(entry_date=day, due=index+1, entry_kind='bonus_credit', target=None)
+                positions.update(credits)
+                cash += credit_cash
+                realized += credit_realized
+            except ValueError as error:
+                note(day, '', 'unknown_corporate_entitlement', reason=str(error))
+                invalid = True
+                curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=position_count(),
+                                  stale_positions=0, stale_fractional_exposures=0))
+                break
         receivable = fractions.value()
         equity = cash + receivable + sum(p["quantity"] * p["mark"] * (1 - sell_fee) for p in positions.values())
+        if bonus_shares is not None and not math.isfinite(equity):
+            note(day, '', 'unknown_credited_share_mark')
+            invalid = True
+            curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=position_count(),
+                              stale_positions=0, stale_fractional_exposures=0))
+            break
         # Research circuit breaker: no new buys after breaching the user's starting-capital loss floor.
         # It does not assume that held positions can be sold at the floor.
-        stopped |= equity <= config.initial_capital_rial * (1 - config.max_loss_pct)
-        curve.append(dict(date=day, equity_rial=equity, cash_rial=cash, positions=len(positions),
-                          stale_positions=sum(p["mark_date"] != day for p in positions.values()), risk_stopped=stopped,
+        floor_breached = equity <= config.initial_capital_rial * (1 - config.max_loss_pct)
+        if bonus_shares is not None and bonus_shares.pending_units > 0:
+            # کران دارایی قیمت‌دار، NAV نیست؛ عبور آن فقط مکث موقت است، نه اثبات زیان واقعی.
+            rights_pause = bool(floor_breached and not stopped)
+        else:
+            stopped |= floor_breached
+            rights_pause = False
+        stale = (sum(p['mark_date'] != day for p in positions.values()) if bonus_shares is None else
+                 len({p['symbol'] for p in positions.values() if p['mark_date'] != day}))
+        curve.append(dict(date=day, equity_rial=equity, cash_rial=cash, positions=position_count(),
+                          stale_positions=stale, risk_stopped=stopped,
                           stale_fractional_exposures=fractions.stale_count(day), noncash_receivable_rial=receivable))
         if cash_dividends is not None:
             # بودجه و توقف از دارایی قابل فروش مدل است؛ طلب مجهول در آنها خرج نمی‌شود.
@@ -322,11 +399,19 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             curve[-1].update(liquidation_assets_rial=equity, cash_dividend_receivable_face_rial=float(face))
             if face > 0:
                 curve[-1]['equity_rial'] = np.nan
-        if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped:
+        if bonus_shares is not None:
+            curve[-1].update(priced_assets_rial=equity, uncredited_bonus_units=dict(
+                numerator=bonus_shares.pending_units.numerator, denominator=bonus_shares.pending_units.denominator),
+                unvalued_rights_pause=rights_pause, issuer_exposures=len(exposure_symbols()))
+            if bonus_shares.pending_units > 0:
+                curve[-1]['equity_rial'] = np.nan
+                curve[-1]['noncash_receivable_rial'] = np.nan
+        if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped and not rights_pause:
             reservable_cash = cash
-            slots = config.max_positions - len(positions)
+            occupied=exposure_symbols()
+            slots = config.max_positions - len(occupied)
             for symbol in selected.get(day, []):
-                if symbol in positions or slots <= 0:
+                if held(symbol) or (symbol not in occupied and slots <= 0):
                     note(day, symbol, 'slots_full')
                     continue
                 row = session.get(symbol)
@@ -336,18 +421,21 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 budget = min(reservable_cash, equity / config.max_positions)
                 pending.append(dict(date=day, symbol=symbol, value=row["value"], volume=row["volume"], budget=budget))
                 reservable_cash -= budget
-                slots -= 1
+                if symbol not in occupied:
+                    slots -= 1
+                    occupied.add(symbol)
     equity_frame = pd.DataFrame(curve)
     values = pd.concat([pd.Series([config.initial_capital_rial]), equity_frame["equity_rial"]], ignore_index=True)
     drawdown = values / values.cummax() - 1
-    unvalued = cash_dividends is not None and equity_frame.equity_rial.isna().any()
-    outstanding = cash_dividends is not None and cash_dividends.outstanding_face_rial > 0
+    unvalued = (cash_dividends is not None or bonus_shares is not None) and equity_frame.equity_rial.isna().any()
+    outstanding = ((cash_dividends is not None and cash_dividends.outstanding_face_rial > 0)
+                   or (bonus_shares is not None and bonus_shares.pending_units > 0))
     final = None if invalid or outstanding else equity
     metrics = dict(status="invalid_data" if invalid else "complete", portfolio_simulated=True,
                    total_return=None if final is None else equity / config.initial_capital_rial - 1,
                    max_drawdown=None if invalid or unvalued else float(-drawdown.min()), final_equity_rial=final,
                    initial_capital_rial=config.initial_capital_rial, realized_net_rial=realized, fees_rial=fees,
-                   executions=len(executions), open_positions=len(positions), corporate_action_events=action_count,
+                   executions=len(executions), open_positions=position_count(), corporate_action_events=action_count,
                    noncash_receivable_rial=fractions.value(), noncash_receivable_cost_rial=fractions.cost,
                    fractional_exposures=fractions.records(),
                    actual_corporate_entitlements_verified=action_count == 0,
@@ -390,4 +478,40 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             dividend_target_policy='nominal_entry_price_target_unchanged',
             limitations=[*assumptions['limitations'], 'only explicit cash dividends; no synthetic fallback',
                          'unsettled claims have unknown fair value; announced payment dates are not cash receipts'])
+    if bonus_shares is not None:
+        from backtest.bonus_shares import PORTFOLIO_VERSION as BONUS_PORTFOLIO_VERSION
+        from backtest.bonus_shares import rational
+
+        if unvalued and not invalid:
+            metrics['status'] = 'unvalued_bonus_path'
+        metrics.update(actual_corporate_entitlements_verified=False, open_lots=len(positions),
+            pending_bonus_units=rational(bonus_shares.pending_units), bonus_claims=bonus_shares.records(),
+            bonus_pending_cost_basis_rial=rational(bonus_shares.pending_basis),
+            noncash_receivable_rial=None if bonus_shares.pending_units > 0 else 0.,
+            noncash_receivable_cost_rial=float(bonus_shares.pending_basis),
+            issuer_exposures=len(exposure_symbols()), new_entries_paused_for_unvalued_rights=rights_pause,
+            unvalued_fractional_issuers=len(bonus_shares.pending_symbols-bonus_shares.pending_whole_symbols),
+            bonus_ledger=bonus_shares.ledger, fraction_cash_rial=float(bonus_shares.total_fraction_cash),
+            fraction_realized_rial=float(bonus_shares.total_fraction_realized),
+            priced_assets_final_rial=None if invalid else equity,
+            nav_unvalued_days=int(equity_frame.equity_rial.isna().sum()), accepted_for_signals=False, profitability_proven=False)
+        assumptions.update(version=BONUS_PORTFOLIO_VERSION,
+            corporate_action_model='explicit_bonus_fixed_original_shares_uncredited_and_fraction_claims',
+            fractional_valuation='unknown until explicit net cash settlement; no market-price imputation',
+            source_events=[asdict(e) for e in bonus_shares.events],
+            source_releases=[asdict(r) for r in bonus_shares.releases],
+            source_fraction_settlements=[asdict(s) for s in bonus_shares.settlements],
+            historical_entitlement_mapping_verified=False, holder_credit_verified=False, fraction_fair_value_verified=False,
+            risk_and_budget_basis='cash_plus_priced_tradable_lots_excluding_unvalued_bonus_claims; not economic NAV',
+            bonus_target_policy='original nominal targets unchanged; credited lots disposed next observable session',
+            bonus_cost_policy='pooled proportional basis across eligible lots; not statutory accounting proof',
+            bonus_issuer_slot_policy='distinct issuers include uncredited whole shares; residual fractions remain receivables, same-issuer reentry keeps separate lot',
+            bonus_risk_policy='EOD priced-assets floor pauses entries while rights unvalued; permanent stop only for known NAV breach',
+            bonus_reference_policy='declared pure-bonus scenario; floor/ceil one-rial envelope, rounding rule unverified',
+            bonus_release_timing='end_of_first_observed_session_on_or_after_explicit_date; no same-day disposal',
+            limitations=[*(s for s in assumptions['limitations'] if s != 'synthetic corporate actions are not actual entitlements'),
+                'declared share ratios are not inferred from reference prices',
+                'issuer registration/deposit is not holder credit; releases are explicit model inputs',
+                'pending and fractional shares have unknown fair value; no price-imputed cash',
+                'mixed cash/bonus or overlapping uncredited actions require a separate verified contract'])
     return PortfolioResult(equity_frame, pd.DataFrame(executions), pd.DataFrame(decisions), metrics, assumptions)

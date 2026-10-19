@@ -1,0 +1,3063 @@
+{
+  "source_commit": "40b46c04413ea35c775bfbb6a9971a8ae7545c95",
+  "source_portfolio_sha256": "f65b57e843f3310001cc2f6c8abc6dc2434a536daceecf4e180377cb553c6e3b",
+  "cases": [
+    {
+      "name": "synthetic_normal",
+      "prices": [
+        {
+          "symbol": "a",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-04",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-05",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-06",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-07",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-08",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-09",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-04",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-05",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-06",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-07",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-08",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-09",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        }
+      ],
+      "calendar": [
+        "2024-01-01",
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+        "2024-01-06",
+        "2024-01-07",
+        "2024-01-08",
+        "2024-01-09"
+      ],
+      "selections": [
+        {
+          "date": "2024-01-01",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "c",
+          "rank": 2
+        }
+      ],
+      "config": {
+        "initial_capital_rial": 10000,
+        "horizon": 2,
+        "max_positions": 2,
+        "participation": 0.05,
+        "slippage_bps": 10,
+        "max_loss_pct": 0.5,
+        "stress": false,
+        "allow_entry_day_exit": false
+      },
+      "dip_rule": null,
+      "cash_events": [],
+      "cash_payments": [],
+      "expected": {
+        "equity": [
+          {
+            "date": "2024-01-01",
+            "equity_rial": 10000.0,
+            "cash_rial": 10000.0,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-02",
+            "equity_rial": 9867.546022400002,
+            "cash_rial": 153.78602240000146,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-03",
+            "equity_rial": 9867.546022400002,
+            "cash_rial": 153.78602240000146,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-04",
+            "equity_rial": 9858.724342400003,
+            "cash_rial": 8966.644342400003,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-05",
+            "equity_rial": 9791.625097600003,
+            "cash_rial": 4914.921097600003,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-06",
+            "equity_rial": 9738.643506560004,
+            "cash_rial": 976.4355065600039,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-07",
+            "equity_rial": 9733.786626560004,
+            "cash_rial": 5828.458626560005,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-08",
+            "equity_rial": 9665.025704960004,
+            "cash_rial": 4887.441704960005,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-09",
+            "equity_rial": 9612.044113920005,
+            "cash_rial": 948.9561139200059,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          }
+        ],
+        "executions": [
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 100.1,
+            "fee_rial": 18.206988799999998,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 100.1,
+            "fee_rial": 18.206988799999998,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 50.0,
+            "price_rial": 79.92,
+            "fee_rial": 35.1648,
+            "realized_net_rial": -58.02764799999932,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 99.9,
+            "fee_rial": 43.07688,
+            "realized_net_rial": -71.08386879999853,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 100.1,
+            "fee_rial": 18.206988799999998,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 11.0,
+            "price_rial": 79.92,
+            "fee_rial": 7.736256000000001,
+            "realized_net_rial": -12.766082559999859,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 80.07999999999998,
+            "fee_rial": 14.565591039999997,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 99.9,
+            "fee_rial": 43.07688,
+            "realized_net_rial": -71.08386879999853,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 48.0,
+            "price_rial": 100.1,
+            "fee_rial": 17.835417599999996,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 79.92,
+            "fee_rial": 34.461504,
+            "realized_net_rial": -56.867095039999185,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-09",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 80.07999999999998,
+            "fee_rial": 14.565591039999997,
+            "realized_net_rial": null,
+            "exit_kind": null
+          }
+        ],
+        "decisions": [
+          {
+            "date": "2024-01-01",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "partial_exit_wait"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "c",
+            "status": "slots_full"
+          }
+        ],
+        "metrics": {
+          "status": "complete",
+          "portfolio_simulated": true,
+          "total_return": -0.038795588607999476,
+          "max_drawdown": 0.038795588607999476,
+          "final_equity_rial": 9612.044113920005,
+          "initial_capital_rial": 10000,
+          "realized_net_rial": -269.8285631999954,
+          "fees_rial": 265.10388607999994,
+          "executions": 11,
+          "open_positions": 2,
+          "corporate_action_events": 1,
+          "noncash_receivable_rial": 19.823999999999998,
+          "noncash_receivable_cost_rial": 20.094314239999996,
+          "fractional_exposures": [
+            {
+              "symbol": "a",
+              "quantity": 0.25,
+              "cost_rial": 20.094314239999996,
+              "mark": 80.0,
+              "mark_date": "2024-01-09"
+            }
+          ],
+          "actual_corporate_entitlements_verified": false,
+          "stopped_new_entries": false,
+          "stale_mark_days": 0
+        },
+        "assumptions": {
+          "version": "portfolio-v4",
+          "config": {
+            "initial_capital_rial": 10000,
+            "horizon": 2,
+            "max_positions": 2,
+            "participation": 0.05,
+            "slippage_bps": 10,
+            "max_loss_pct": 0.5,
+            "stress": false,
+            "allow_entry_day_exit": false
+          },
+          "fees": {
+            "buy": 0.003712,
+            "sell": 0.0088
+          },
+          "execution_model": "bounded_daily_vwap_proxy",
+          "corporate_action_model": "synthetic_whole_shares_plus_noncash_fraction",
+          "same_day_sale_cash_reused": false,
+          "fractional_valuation": "current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed",
+          "mark_basis": "last_observed_official_close_net_sell_fee",
+          "shorting": false,
+          "queue_position_proven": false,
+          "historical_same_day_resale_permissions_verified": false,
+          "limitations": [
+            "historical universe incomplete",
+            "synthetic corporate actions are not actual entitlements",
+            "halting days retain stale marks",
+            "daily volume is not proof of own fills",
+            "no intraday stop execution"
+          ]
+        }
+      }
+    },
+    {
+      "name": "synthetic_stress",
+      "prices": [
+        {
+          "symbol": "a",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-04",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-05",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-06",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-07",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-08",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-09",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-04",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-05",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-06",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-07",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-08",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-09",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        }
+      ],
+      "calendar": [
+        "2024-01-01",
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+        "2024-01-06",
+        "2024-01-07",
+        "2024-01-08",
+        "2024-01-09"
+      ],
+      "selections": [
+        {
+          "date": "2024-01-01",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "c",
+          "rank": 2
+        }
+      ],
+      "config": {
+        "initial_capital_rial": 10000,
+        "horizon": 2,
+        "max_positions": 2,
+        "participation": 0.05,
+        "slippage_bps": 10,
+        "max_loss_pct": 0.5,
+        "stress": true,
+        "allow_entry_day_exit": false
+      },
+      "dip_rule": null,
+      "cash_events": [],
+      "cash_payments": [],
+      "expected": {
+        "equity": [
+          {
+            "date": "2024-01-01",
+            "equity_rial": 10000.0,
+            "cash_rial": 10000.0,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-02",
+            "equity_rial": 9779.018624,
+            "cash_rial": 65.25862400000005,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-03",
+            "equity_rial": 9779.018624,
+            "cash_rial": 65.25862400000005,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-04",
+            "equity_rial": 9680.889824,
+            "cash_rial": 8788.809824,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-05",
+            "equity_rial": 9564.005759999998,
+            "cash_rial": 4885.541759999999,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-06",
+            "equity_rial": 9465.776832,
+            "cash_rial": 901.8088319999993,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-07",
+            "equity_rial": 9419.190432,
+            "cash_rial": 5513.862432,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-08",
+            "equity_rial": 9266.895679999998,
+            "cash_rial": 4687.55168,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          },
+          {
+            "date": "2024-01-09",
+            "equity_rial": 9168.666752,
+            "cash_rial": 703.8187519999997,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 19.823999999999998
+          }
+        ],
+        "executions": [
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 101.0,
+            "fee_rial": 18.370688,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 101.0,
+            "fee_rial": 18.370688,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 50.0,
+            "price_rial": 79.0,
+            "fee_rial": 34.760000000000005,
+            "realized_net_rial": -139.75648,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 99.0,
+            "fee_rial": 42.6888,
+            "realized_net_rial": -159.05948799999987,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 47.0,
+            "price_rial": 101.0,
+            "fee_rial": 17.620864,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 11.0,
+            "price_rial": 79.0,
+            "fee_rial": 7.647200000000001,
+            "realized_net_rial": -30.746425600000066,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 81.0,
+            "fee_rial": 14.732928,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 47.0,
+            "price_rial": 99.0,
+            "fee_rial": 40.946400000000004,
+            "realized_net_rial": -152.56726400000025,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 46.0,
+            "price_rial": 101.0,
+            "fee_rial": 17.245952,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 79.0,
+            "fee_rial": 34.064800000000005,
+            "realized_net_rial": -146.797728,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-09",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 81.0,
+            "fee_rial": 14.732928,
+            "realized_net_rial": null,
+            "exit_kind": null
+          }
+        ],
+        "decisions": [
+          {
+            "date": "2024-01-01",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "partial_exit_wait"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "c",
+            "status": "slots_full"
+          }
+        ],
+        "metrics": {
+          "status": "complete",
+          "portfolio_simulated": true,
+          "total_return": -0.08313332480000013,
+          "max_drawdown": 0.08313332480000013,
+          "final_equity_rial": 9168.666752,
+          "initial_capital_rial": 10000,
+          "realized_net_rial": -628.9273856000002,
+          "fees_rial": 261.18124800000004,
+          "executions": 11,
+          "open_positions": 2,
+          "corporate_action_events": 1,
+          "noncash_receivable_rial": 19.823999999999998,
+          "noncash_receivable_cost_rial": 20.2749824,
+          "fractional_exposures": [
+            {
+              "symbol": "a",
+              "quantity": 0.25,
+              "cost_rial": 20.2749824,
+              "mark": 80.0,
+              "mark_date": "2024-01-09"
+            }
+          ],
+          "actual_corporate_entitlements_verified": false,
+          "stopped_new_entries": false,
+          "stale_mark_days": 0
+        },
+        "assumptions": {
+          "version": "portfolio-v4",
+          "config": {
+            "initial_capital_rial": 10000,
+            "horizon": 2,
+            "max_positions": 2,
+            "participation": 0.05,
+            "slippage_bps": 10,
+            "max_loss_pct": 0.5,
+            "stress": true,
+            "allow_entry_day_exit": false
+          },
+          "fees": {
+            "buy": 0.003712,
+            "sell": 0.0088
+          },
+          "execution_model": "buy_high_sell_low_stress",
+          "corporate_action_model": "synthetic_whole_shares_plus_noncash_fraction",
+          "same_day_sale_cash_reused": false,
+          "fractional_valuation": "current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed",
+          "mark_basis": "last_observed_official_close_net_sell_fee",
+          "shorting": false,
+          "queue_position_proven": false,
+          "historical_same_day_resale_permissions_verified": false,
+          "limitations": [
+            "historical universe incomplete",
+            "synthetic corporate actions are not actual entitlements",
+            "halting days retain stale marks",
+            "daily volume is not proof of own fills",
+            "no intraday stop execution"
+          ]
+        }
+      }
+    },
+    {
+      "name": "dip_normal",
+      "prices": [
+        {
+          "symbol": "a",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-02",
+          "low_raw": 98.0,
+          "high_raw": 101.0,
+          "open_raw": 98.5,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-04",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-05",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-06",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-07",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-08",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-09",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-04",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-05",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-06",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-07",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-08",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-09",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        }
+      ],
+      "calendar": [
+        "2024-01-01",
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+        "2024-01-06",
+        "2024-01-07",
+        "2024-01-08",
+        "2024-01-09"
+      ],
+      "selections": [
+        {
+          "date": "2024-01-01",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "c",
+          "rank": 2
+        }
+      ],
+      "config": {
+        "initial_capital_rial": 10000,
+        "horizon": 2,
+        "max_positions": 2,
+        "participation": 0.05,
+        "slippage_bps": 10,
+        "max_loss_pct": 0.5,
+        "stress": false,
+        "allow_entry_day_exit": false
+      },
+      "dip_rule": {
+        "dip": 0.01,
+        "take_profit": 0.03,
+        "hold": 2,
+        "stop_loss": null,
+        "conservative": true
+      },
+      "cash_events": [],
+      "cash_payments": [],
+      "expected": {
+        "equity": [
+          {
+            "date": "2024-01-01",
+            "equity_rial": 10000.0,
+            "cash_rial": 10000.0,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-02",
+            "equity_rial": 10012.7184,
+            "cash_rial": 5056.7184,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-03",
+            "equity_rial": 10012.7184,
+            "cash_rial": 5056.7184,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0
+          },
+          {
+            "date": "2024-01-04",
+            "equity_rial": 10008.753599999998,
+            "cash_rial": 9017.5536,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          },
+          {
+            "date": "2024-01-05",
+            "equity_rial": 10007.802047999998,
+            "cash_rial": 9968.154047999999,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          },
+          {
+            "date": "2024-01-06",
+            "equity_rial": 9997.902527999999,
+            "cash_rial": 5993.454527999998,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          },
+          {
+            "date": "2024-01-07",
+            "equity_rial": 9997.902527999999,
+            "cash_rial": 5993.454527999998,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          },
+          {
+            "date": "2024-01-08",
+            "equity_rial": 9993.937727999997,
+            "cash_rial": 9954.289727999998,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          },
+          {
+            "date": "2024-01-09",
+            "equity_rial": 9984.038207999998,
+            "cash_rial": 5979.590207999998,
+            "positions": 1,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 39.647999999999996
+          }
+        ],
+        "executions": [
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 50.0,
+            "price_rial": 98.5,
+            "fee_rial": 18.2816,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 50.0,
+            "price_rial": 79.92,
+            "fee_rial": 35.1648,
+            "realized_net_rial": 6.209919999999329,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 12.0,
+            "price_rial": 79.92,
+            "fee_rial": 8.439552,
+            "realized_net_rial": 1.490380800000139,
+            "exit_kind": "time_late"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 50.0,
+            "price_rial": 79.2,
+            "fee_rial": 14.69952,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 50.0,
+            "price_rial": 79.92,
+            "fee_rial": 35.1648,
+            "realized_net_rial": -13.864320000000134,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-09",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 50.0,
+            "price_rial": 79.2,
+            "fee_rial": 14.69952,
+            "realized_net_rial": null,
+            "exit_kind": null
+          }
+        ],
+        "decisions": [
+          {
+            "date": "2024-01-01",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-01"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-02"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "a",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-03"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "partial_exit_wait",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-04"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-05"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-06"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "a",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-07"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "c",
+            "status": "slots_full",
+            "decision_date": null
+          },
+          {
+            "date": "2024-01-09",
+            "symbol": "b",
+            "status": "limit_not_filled",
+            "decision_date": "2024-01-08"
+          }
+        ],
+        "metrics": {
+          "status": "complete",
+          "portfolio_simulated": true,
+          "total_return": -0.001596179200000214,
+          "max_drawdown": 0.0028643761718097904,
+          "final_equity_rial": 9984.038207999998,
+          "initial_capital_rial": 10000,
+          "realized_net_rial": -6.164019200000666,
+          "fees_rial": 126.449792,
+          "executions": 6,
+          "open_positions": 1,
+          "corporate_action_events": 1,
+          "noncash_receivable_rial": 39.647999999999996,
+          "noncash_receivable_cost_rial": 39.546252800000005,
+          "fractional_exposures": [
+            {
+              "symbol": "a",
+              "quantity": 0.5,
+              "cost_rial": 39.546252800000005,
+              "mark": 80.0,
+              "mark_date": "2024-01-09"
+            }
+          ],
+          "actual_corporate_entitlements_verified": false,
+          "stopped_new_entries": false,
+          "stale_mark_days": 0
+        },
+        "assumptions": {
+          "version": "portfolio-v4",
+          "config": {
+            "initial_capital_rial": 10000,
+            "horizon": 2,
+            "max_positions": 2,
+            "participation": 0.05,
+            "slippage_bps": 10,
+            "max_loss_pct": 0.5,
+            "stress": false,
+            "allow_entry_day_exit": false
+          },
+          "fees": {
+            "buy": 0.003712,
+            "sell": 0.0088
+          },
+          "execution_model": "dip_limit_daily_proxy",
+          "corporate_action_model": "synthetic_whole_shares_plus_noncash_fraction",
+          "same_day_sale_cash_reused": false,
+          "fractional_valuation": "current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed",
+          "mark_basis": "last_observed_official_close_net_sell_fee",
+          "shorting": false,
+          "queue_position_proven": false,
+          "historical_same_day_resale_permissions_verified": false,
+          "limitations": [
+            "historical universe incomplete",
+            "synthetic corporate actions are not actual entitlements",
+            "halting days retain stale marks",
+            "daily volume is not proof of own fills",
+            "no intraday stop execution"
+          ],
+          "dip_rule": {
+            "dip": 0.01,
+            "take_profit": 0.03,
+            "hold": 2,
+            "stop_loss": null,
+            "conservative": true
+          },
+          "time_exit_price_basis": "last_trade_raw_at_session_end_minus_slippage",
+          "requested_quantity_basis": "prior budget/volume/value and current session reference limit, before OHLC fill outcome",
+          "intraday_order_sequence_proven": false
+        }
+      }
+    },
+    {
+      "name": "explicit_cash",
+      "prices": [
+        {
+          "symbol": "a",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-04",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-05",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-06",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-07",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-08",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "a",
+          "date": "2024-01-09",
+          "low_raw": 79.0,
+          "high_raw": 81.0,
+          "open_raw": 80.0,
+          "close_raw": 80.0,
+          "close_final_raw": 80.0,
+          "ref_price_raw": 80.0,
+          "volume": 1000.0,
+          "value": 80000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-01",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-02",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-03",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-04",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-05",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-06",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-07",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-08",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        },
+        {
+          "symbol": "b",
+          "date": "2024-01-09",
+          "low_raw": 99.0,
+          "high_raw": 101.0,
+          "open_raw": 100.0,
+          "close_raw": 100.0,
+          "close_final_raw": 100.0,
+          "ref_price_raw": 100.0,
+          "volume": 1000.0,
+          "value": 100000.0
+        }
+      ],
+      "calendar": [
+        "2024-01-01",
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+        "2024-01-06",
+        "2024-01-07",
+        "2024-01-08",
+        "2024-01-09"
+      ],
+      "selections": [
+        {
+          "date": "2024-01-01",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-01",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-02",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-03",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-04",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-05",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-06",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-07",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-08",
+          "symbol": "c",
+          "rank": 2
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "a",
+          "rank": 0
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "b",
+          "rank": 1
+        },
+        {
+          "date": "2024-01-09",
+          "symbol": "c",
+          "rank": 2
+        }
+      ],
+      "config": {
+        "initial_capital_rial": 10000,
+        "horizon": 2,
+        "max_positions": 2,
+        "participation": 0.05,
+        "slippage_bps": 10,
+        "max_loss_pct": 0.5,
+        "stress": false,
+        "allow_entry_day_exit": false
+      },
+      "dip_rule": null,
+      "cash_events": [
+        {
+          "event_id": "test-event",
+          "symbol": "a",
+          "record_date": "2024-01-03",
+          "ex_date": "2024-01-04",
+          "dps_rial": "20",
+          "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "cash_payments": [
+        {
+          "payment_id": "test-payment",
+          "event_id": "test-event",
+          "date": "2024-01-07",
+          "per_share_rial": "20",
+          "evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": {
+        "equity": [
+          {
+            "date": "2024-01-01",
+            "equity_rial": 10000.0,
+            "cash_rial": 10000.0,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 10000.0,
+            "cash_dividend_receivable_face_rial": 0.0
+          },
+          {
+            "date": "2024-01-02",
+            "equity_rial": 9867.546022400002,
+            "cash_rial": 153.78602240000146,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 9867.546022400002,
+            "cash_dividend_receivable_face_rial": 0.0
+          },
+          {
+            "date": "2024-01-03",
+            "equity_rial": 9867.546022400002,
+            "cash_rial": 153.78602240000146,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 9867.546022400002,
+            "cash_dividend_receivable_face_rial": 0.0
+          },
+          {
+            "date": "2024-01-04",
+            "equity_rial": null,
+            "cash_rial": 8887.427638400002,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 8887.427638400002,
+            "cash_dividend_receivable_face_rial": 980.0
+          },
+          {
+            "date": "2024-01-05",
+            "equity_rial": null,
+            "cash_rial": 528.1929145600034,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 8774.976914560004,
+            "cash_dividend_receivable_face_rial": 980.0
+          },
+          {
+            "date": "2024-01-06",
+            "equity_rial": null,
+            "cash_rial": 528.1929145600034,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 8774.976914560004,
+            "cash_dividend_receivable_face_rial": 980.0
+          },
+          {
+            "date": "2024-01-07",
+            "equity_rial": 9746.730130560005,
+            "cash_rial": 9746.730130560005,
+            "positions": 0,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 9746.730130560005,
+            "cash_dividend_receivable_face_rial": 0.0
+          },
+          {
+            "date": "2024-01-08",
+            "equity_rial": 9628.873121920005,
+            "cash_rial": 985.6091219200061,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 9628.873121920005,
+            "cash_dividend_receivable_face_rial": 0.0
+          },
+          {
+            "date": "2024-01-09",
+            "equity_rial": 9628.873121920005,
+            "cash_rial": 985.6091219200061,
+            "positions": 2,
+            "stale_positions": 0,
+            "risk_stopped": false,
+            "stale_fractional_exposures": 0,
+            "noncash_receivable_rial": 0.0,
+            "liquidation_assets_rial": 9628.873121920005,
+            "cash_dividend_receivable_face_rial": 0.0
+          }
+        ],
+        "executions": [
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 100.1,
+            "fee_rial": 18.206988799999998,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 100.1,
+            "fee_rial": 18.206988799999998,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 79.92,
+            "fee_rial": 34.461504,
+            "realized_net_rial": -1041.4884927999992,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 99.9,
+            "fee_rial": 43.07688,
+            "realized_net_rial": -71.08386879999853,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 80.07999999999998,
+            "fee_rial": 14.565591039999997,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 44.0,
+            "price_rial": 100.1,
+            "fee_rial": 16.3491328,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "a",
+            "side": "sell",
+            "quantity": 49.0,
+            "price_rial": 79.92,
+            "fee_rial": 34.461504,
+            "realized_net_rial": -56.867095039999185,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "b",
+            "side": "sell",
+            "quantity": 44.0,
+            "price_rial": 99.9,
+            "fee_rial": 38.68128000000001,
+            "realized_net_rial": -63.83041279999907,
+            "exit_kind": "time"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "a",
+            "side": "buy",
+            "quantity": 49.0,
+            "price_rial": 80.07999999999998,
+            "fee_rial": 14.565591039999997,
+            "realized_net_rial": null,
+            "exit_kind": null
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "side": "buy",
+            "quantity": 48.0,
+            "price_rial": 100.1,
+            "fee_rial": 17.835417599999996,
+            "realized_net_rial": null,
+            "exit_kind": null
+          }
+        ],
+        "decisions": [
+          {
+            "date": "2024-01-01",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-02",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-03",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-04",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-05",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-06",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-07",
+            "symbol": "c",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "a",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "b",
+            "status": "slots_full"
+          },
+          {
+            "date": "2024-01-08",
+            "symbol": "c",
+            "status": "slots_full"
+          }
+        ],
+        "metrics": {
+          "status": "unvalued_receivable_path",
+          "portfolio_simulated": true,
+          "total_return": -0.03711268780799948,
+          "max_drawdown": null,
+          "final_equity_rial": 9628.873121920005,
+          "initial_capital_rial": 10000,
+          "realized_net_rial": -253.269869439996,
+          "fees_rial": 250.41087808,
+          "executions": 10,
+          "open_positions": 2,
+          "corporate_action_events": 1,
+          "noncash_receivable_rial": 0.0,
+          "noncash_receivable_cost_rial": 0,
+          "fractional_exposures": [],
+          "actual_corporate_entitlements_verified": false,
+          "stopped_new_entries": false,
+          "stale_mark_days": 0,
+          "cash_dividend_receivable_face_rial": 0.0,
+          "cash_dividend_income_rial": 980.0,
+          "stock_realized_net_rial": -1233.269869439996,
+          "cash_dividend_claims": [
+            {
+              "event_id": "test-event",
+              "symbol": "a",
+              "entitled_quantity": 49,
+              "dps_rial": "20",
+              "paid_per_share_rial": "20",
+              "outstanding_face_rial": "0",
+              "fair_value_rial": null
+            }
+          ],
+          "cash_dividend_ledger": [
+            {
+              "date": "2024-01-04",
+              "event_id": "test-event",
+              "symbol": "a",
+              "kind": "receivable_created",
+              "quantity": 49,
+              "face_rial": "980",
+              "cash_rial": "0"
+            },
+            {
+              "date": "2024-01-07",
+              "stated_payment_date": "2024-01-07",
+              "event_id": "test-event",
+              "payment_id": "test-payment",
+              "symbol": "a",
+              "kind": "cash_received",
+              "quantity": 49,
+              "cash_rial": "980"
+            }
+          ],
+          "nav_unvalued_days": 3,
+          "liquidation_assets_final_rial": 9628.873121920005,
+          "accepted_for_signals": false,
+          "profitability_proven": false
+        },
+        "assumptions": {
+          "version": "portfolio-cash-dividends-v1",
+          "config": {
+            "initial_capital_rial": 10000,
+            "horizon": 2,
+            "max_positions": 2,
+            "participation": 0.05,
+            "slippage_bps": 10,
+            "max_loss_pct": 0.5,
+            "stress": false,
+            "allow_entry_day_exit": false
+          },
+          "fees": {
+            "buy": 0.003712,
+            "sell": 0.0088
+          },
+          "execution_model": "bounded_daily_vwap_proxy",
+          "corporate_action_model": "explicit_cash_dividend_fixed_shares_unvalued_receivables",
+          "same_day_sale_cash_reused": false,
+          "fractional_valuation": "current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed",
+          "mark_basis": "last_observed_official_close_net_sell_fee",
+          "shorting": false,
+          "queue_position_proven": false,
+          "historical_same_day_resale_permissions_verified": false,
+          "limitations": [
+            "historical universe incomplete",
+            "synthetic corporate actions are not actual entitlements",
+            "halting days retain stale marks",
+            "daily volume is not proof of own fills",
+            "no intraday stop execution",
+            "only explicit cash dividends; no synthetic fallback",
+            "unsettled claims have unknown fair value; announced payment dates are not cash receipts"
+          ],
+          "source_events": [
+            {
+              "event_id": "test-event",
+              "symbol": "a",
+              "record_date": "2024-01-03",
+              "ex_date": "2024-01-04",
+              "dps_rial": "20",
+              "evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "source_payments": [
+            {
+              "payment_id": "test-payment",
+              "event_id": "test-event",
+              "date": "2024-01-07",
+              "per_share_rial": "20",
+              "evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ],
+          "dividend_settlement_verified": false,
+          "historical_entitlement_mapping_verified": false,
+          "claim_fair_value_verified": false,
+          "same_day_dividend_cash_reused": false,
+          "risk_and_budget_basis": "cash_plus_stock_liquidation_proxy_excluding_unvalued_dividend_claims",
+          "dividend_target_policy": "nominal_entry_price_target_unchanged"
+        }
+      }
+    }
+  ]
+}
