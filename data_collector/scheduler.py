@@ -290,13 +290,13 @@ class DataCollector:
         known = {str(s['ins_code']): s for s in scope
                  if s.get('ins_code') and (not wanted or s['symbol_fa'] in wanted)}
         unresolved = wanted - {s['symbol_fa'] for s in known.values()} if wanted else set()
-        from core.legacy_quotes import MAX_INSTRUMENTS, QUOTE_SOURCES, archive_observation, parse_quote
+        from core.quote_context import MAX_INSTRUMENTS, QUOTE_SOURCES, archive_source, parse_source
 
         if quote_source not in QUOTE_SOURCES:
             raise ValueError('منبع مظنه شناخته‌شده نیست')
         source_records, source_errors = {}, {}
         observations, errors, rows = [], [], []
-        if quote_source == 'dated-quote':
+        if quote_source != 'market-watch':
             if not (wanted or instruments is not None) or not 1 <= len(known) + len(unresolved) <= MAX_INSTRUMENTS:
                 raise ValueError('منبع تاریخ‌دار به دامنه صریح حداکثر ده نماد نیاز دارد')
             if any(meta.get('instrument_type_code') not in (300, 303) for meta in known.values()):
@@ -304,12 +304,13 @@ class DataCollector:
             snapshots = []
             for code, meta in known.items():
                 try:
-                    source = self.provider.get_legacy_quote_observation(code)
+                    source = (self.provider.get_legacy_quote_observation(code) if quote_source == 'dated-quote'
+                              else self.provider.get_quote_context_observation(code))
                     if source is not None:
-                        source_records[code] = archive_observation(source)
+                        source_records[code] = archive_source(source, quote_source)
                         if source.get('ins_code') != code:
                             raise ValueError('شناسه پاسخ با دامنه درخواست ناسازگار است')
-                        snapshots.append(parse_quote(source, meta['symbol_fa']))
+                        snapshots.append(parse_source(source, meta['symbol_fa'], quote_source))
                 except (ValueError, KeyError, TypeError, NotImplementedError) as exc:
                     source_errors[code] = type(exc).__name__
         else:
@@ -321,7 +322,7 @@ class DataCollector:
             matches = grouped[ins_code]
             item = dict(ins_code=ins_code, status='missing', provider_timestamp=None, captured_at=None)
             observations.append(item)
-            if quote_source == 'dated-quote':
+            if quote_source != 'market-watch':
                 item['source_observation'] = source_records.get(ins_code)
                 if ins_code in source_errors:
                     item.update(status='rejected', source_error=source_errors[ins_code])
@@ -381,7 +382,7 @@ class DataCollector:
                         unchanged=counts['unchanged'], missing=counts['missing'] + len(unresolved),
                         rejected=counts['rejected'], duplicate=counts['duplicate'],
                         unresolved_symbols=sorted(unresolved), per_instrument=observations)
-        if quote_source == 'dated-quote':
+        if quote_source != 'market-watch':
             coverage['quote_source'] = quote_source
         return self._finish("snapshot", started_at, coverage['expected'], saved, failed or (0 if known else 1), errors,
                             {"market_rows": len(snapshots or []), "unchanged_skipped": counts['unchanged'],

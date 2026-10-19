@@ -639,6 +639,62 @@ class TsetmcProvider(BaseDataProvider):
             logger.warning('دریافت مظنه یکپارچه ناموفق بود: %s', type(error).__name__)
             return None
 
+    def _get_quote_context_json(self, code: str, url: str) -> Optional[Dict[str, Any]]:
+        """بایت محدود برای دو نشانی ثابت مشخصات/دامنه؛ بدون سرآیند یا نشست در خروجی."""
+        from core.quote_context import MAX_JSON_BYTES
+
+        requested, started = now_tehran_iso(), time.monotonic()
+        try:
+            if settings.RATE_LIMIT_DELAY > 0:
+                time.sleep(settings.RATE_LIMIT_DELAY)
+            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+                stream=True, allow_redirects=False, headers={'Accept': 'application/json'})
+            try:
+                response.raise_for_status()
+                if response.status_code != 200 or response.url != url:
+                    raise ValueError('پاسخ جزئی یا تغییرمسیر مشخصات/دامنه مجاز نیست')
+                length = response.headers.get('Content-Length', '')
+                if length.isdigit() and int(length) > MAX_JSON_BYTES:
+                    raise ValueError('پاسخ مشخصات/دامنه از حد حجم گذشت')
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > MAX_JSON_BYTES or time.monotonic()-started > 15:
+                        raise ValueError('پاسخ مشخصات/دامنه از حد حجم یا زمان گذشت')
+                    chunks.append(chunk)
+                content = b''.join(chunks)
+                if not content or content.lstrip().startswith(b'<') or b'\x00' in content:
+                    raise ValueError('پاسخ خالی یا HTML به جای مشخصات/دامنه')
+                return dict(source=self.name, ins_code=code, url=url, requested_at=requested,
+                    received_at=now_tehran_iso(), response_bytes=len(content), content=content,
+                    body_sha256=hashlib.sha256(content).hexdigest())
+            finally:
+                response.close()
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning('دریافت مشخصات/دامنه مجاز ناموفق بود: %s', type(exc).__name__)
+            return None
+
+    def get_quote_context_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        from core.legacy_quotes import parse_quote
+        from core.quote_context import VERSION, context_requests
+
+        code, _ = quote_request(ins_code)
+        quote = self.get_legacy_quote_observation(code)
+        if quote is None:
+            return None
+        bundle = dict(version=VERSION, ins_code=code, requested_at=quote['requested_at'],
+                      received_at=now_tehran_iso(), quote=quote, instrument=None, limits=None)
+        try:
+            day = parse_quote(quote, 'دامنه')['provider_timestamp'][:10]
+        except (ValueError, TypeError, KeyError):
+            # بایتِ مظنه ردشده محفوظ است؛ ساعت یا تاریخ برای عبور حدس زده نمی‌شود.
+            return bundle
+        info_url, limits_url = context_requests(code, day)
+        bundle['instrument'] = self._get_quote_context_json(code, info_url)
+        bundle['limits'] = self._get_quote_context_json(code, limits_url)
+        bundle['received_at'] = now_tehran_iso()
+        return bundle
+
     def get_market_observation(self) -> Optional[Dict[str, Any]]:
         # مسیر مخصوص سهام گاهی yVal/flow ندارد؛ نوع ابزار از نام یا ISIN حدس زده نمی‌شود.
         data = self._get_json(MARKET_WATCH_ALL, rate_limit=False, timeout=max(self.timeout, 120))

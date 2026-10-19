@@ -114,3 +114,7 @@ class BaseDataProvider(ABC):
     def get_legacy_quote_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
         """پاسخ یکپارچه قدیمی قیمت/دفتر سفارش؛ تاریخ و ساختار باید مستقل بررسی شوند."""
         raise NotImplementedError
+
+    def get_quote_context_observation(self, ins_code: str) -> Optional[Dict[str, Any]]:
+        """مجموعه بایتی مظنه، مشخصات بومی و دامنه تاریخ‌دار؛ تطبیق در هسته لازم است."""
+        raise NotImplementedError
