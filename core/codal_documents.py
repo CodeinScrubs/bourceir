@@ -7,7 +7,8 @@ from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 DOCUMENT_VERSION = 'codal-document-v1'
 CODAL_BASE = 'https://codal.ir/'
 PUBLIC_HOSTS = frozenset({'codal.ir', 'www.codal.ir'})
-PUBLIC_PATHS = frozenset({'decision.aspx', 'attachment.aspx', 'downloadfile.aspx'})
+REPORT_ONLY_PATHS = frozenset({'interimstatement.aspx', 'monthlyactivity.aspx'})
+PUBLIC_PATHS = frozenset({'decision.aspx', 'attachment.aspx', 'downloadfile.aspx', *REPORT_ONLY_PATHS})
 
 
 def public_document_url(value, *, base=CODAL_BASE):
@@ -23,6 +24,8 @@ def public_document_url(value, *, base=CODAL_BASE):
         raise ValueError('مسیر سند عمومی کدال مجاز نیست')
     if path.count('/') == 2 and not path.startswith('/reports/'):
         raise ValueError('مسیر سند عمومی کدال مجاز نیست')
+    if path.rsplit('/', 1)[-1] in REPORT_ONLY_PATHS and not path.startswith('/reports/'):
+        raise ValueError('مسیر گزارش مالی فقط زیر Reports مجاز است')
     if any(re.search(r'token|password|session|auth|viewstate|api_key', key, re.I)
            for key, _ in parse_qsl(url.query, keep_blank_values=True)):
         raise ValueError('پیوند دارای اطلاعات ورود مجاز نیست')
