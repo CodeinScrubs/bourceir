@@ -6,8 +6,7 @@ import math
 from collections import Counter
 from datetime import datetime
 
-from core.legacy_quotes import MAX_INSTRUMENTS, QUOTE_SOURCES, parse_quote, restore_observation
-from core.legacy_quotes import VERSION as QUOTE_VERSION
+from core.quote_context import MAX_INSTRUMENTS, QUOTE_SOURCES, SOURCE_CONTRACTS, parse_source, restore_source
 from core.timeutils import TEHRAN_TZ
 
 CAPTURE_VERSION = 'capture-protocol-v2'
@@ -62,9 +61,9 @@ def receipts_from_cycle(evidence):
         raise ValueError('هویت یا ترتیب رویداد دریافت ناسازگار است')
     scope = protocol['instruments']
     quote_source = protocol.get('quote_source', 'market-watch')
-    if quote_source not in QUOTE_SOURCES or (quote_source == 'dated-quote' and
+    if quote_source not in QUOTE_SOURCES or (quote_source != 'market-watch' and
             (protocol.get('scope_kind') != 'explicit' or len(scope) > MAX_INSTRUMENTS
-             or protocol.get('quote_contract_version') != QUOTE_VERSION)):
+             or protocol.get('quote_contract_version') != SOURCE_CONTRACTS[quote_source])):
         raise ValueError('منبع یا دامنه مظنه پروتکل معتبر نیست')
     if (not scope or len({r['symbol_id'] for r in scope}) != len(scope)
             or len({r['ins_code'] for r in scope}) != len(scope)
@@ -94,6 +93,7 @@ def receipts_from_cycle(evidence):
         poll_started_at=started['recorded_at'], poll_finished_at=finished['recorded_at'],
         run_started_at=run['started_at'], provider=protocol['provider'], code=code,
         quote_source=quote_source,
+        **({'symbol_fa': instrument['symbol_fa']} if quote_source == 'dated-quote-context' else {}),
         symbol_id=instrument['symbol_id'], ins_code=instrument['ins_code'],
         instrument_type_code=instrument['instrument_type_code'],
         observation=by_ins.get(instrument['ins_code'])) for instrument in scope}
@@ -123,10 +123,11 @@ def binding_problems(snapshot, receipt, recorded_at, *, max_age=45):
             or binding != snapshot_binding(snapshot)
             or observation.get('provider_timestamp') != snapshot.get('provider_timestamp')):
         return problems + ['snapshot_binding_conflict']
-    if receipt.get('quote_source', 'market-watch') == 'dated-quote':
+    if receipt.get('quote_source', 'market-watch') != 'market-watch':
         try:
-            raw = restore_observation(observation.get('source_observation'))
-            parsed = parse_quote(raw, 'دامنه')
+            quote_source = receipt['quote_source']
+            raw = restore_source(observation.get('source_observation'), quote_source)
+            parsed = parse_source(raw, receipt.get('symbol_fa', 'دامنه'), quote_source)
             if (parsed['ins_code'] != receipt['ins_code'] or raw['received_at'] != observation.get('captured_at')
                     or _clock(raw['requested_at']) < start
                     or any(snapshot.get(key) != value for key, value in parsed.items()

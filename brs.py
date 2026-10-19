@@ -539,7 +539,7 @@ def cmd_live(args) -> int:
         raise ValueError("فاصله دریافت باید مثبت و تعداد چرخه نامنفی باشد")
     selected = _symbols(args.symbols)
     quote_source = getattr(args, 'quote_source', 'market-watch')
-    if quote_source == 'dated-quote' and not 1 <= len(selected or []) <= 10:
+    if quote_source != 'market-watch' and not 1 <= len(selected or []) <= 10:
         raise ValueError('برای منبع تاریخ‌دار، یک تا ده نماد صریح تعیین کنید')
     collector = DataCollector(symbols=selected)
     cycles = 0
@@ -933,7 +933,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=int, default=settings.POLLING_INTERVAL_SECONDS)
     p.add_argument("--cycles", type=int, default=0, help="تعداد چرخه (۰ = بی‌پایان)")
     p.add_argument("--force", action="store_true", help="اجرا حتی خارج از ساعات بازار")
-    p.add_argument('--quote-source', choices=('market-watch', 'dated-quote'), default='market-watch',
+    p.add_argument('--quote-source', choices=('market-watch', 'dated-quote', 'dated-quote-context'), default='market-watch',
                    help='منبع پیش‌فرض دیده‌بان یا پاسخ تاریخ‌دار تک‌نماد برای حداکثر ده نماد صریح')
     p.set_defaults(func=cmd_live)
 

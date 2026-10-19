@@ -270,15 +270,21 @@ def page_home() -> None:
               "اجرای دوباره، اصلاحات اخیر منبع را نیز بررسی می‌کند.")
 
     st.subheader("📡 پایش زنده بازار")
-    quote_mode = st.selectbox('منبع پایش', ['دیده‌بان همه نمادها', 'قیمت تاریخ‌دار نمونه محدود'], key='live-quote-source')
+    quote_mode = st.selectbox('منبع پایش', ['دیده‌بان همه نمادها', 'قیمت تاریخ‌دار نمونه محدود',
+                                          'قیمت با دامنه هم‌روز (آزمایشی)'], key='live-quote-source')
     live_args, disabled = ['live'], False
-    if quote_mode == 'قیمت تاریخ‌دار نمونه محدود':
+    if quote_mode != 'دیده‌بان همه نمادها':
         selected_quotes = st.multiselect('نمادهای پایش تاریخ‌دار', symbol_list(), max_selections=10,
                                         key='live-dated-symbols')
         disabled = not selected_quotes
-        live_args += ['--quote-source', 'dated-quote', '--symbols', ','.join(selected_quotes)]
-        st.info('این مسیر، تاریخ و ساعت قیمت را از همان پاسخ منبع می‌خواند. دامنه مجاز، صف و سرانه تأییدشده '
-                'نمی‌سازد؛ برای ثبت مشاهده آینده است و مجوز معامله نیست.')
+        source_name = 'dated-quote-context' if quote_mode == 'قیمت با دامنه هم‌روز (آزمایشی)' else 'dated-quote'
+        live_args += ['--quote-source', source_name, '--symbols', ','.join(selected_quotes)]
+        if source_name == 'dated-quote-context':
+            st.info('دامنه مجاز را با دو پاسخ هم‌روز و هویت نماد تطبیق می‌دهد؛ درخواست‌های بیشتری دارد. '
+                    'ساعت مستقل دفتر سفارش و پرشدن سفارش هنوز تأیید نیست. این پایش مجوز معامله نیست.')
+        else:
+            st.info('این مسیر، تاریخ و ساعت قیمت را از همان پاسخ منبع می‌خواند. دامنه مجاز، صف و سرانه تأییدشده '
+                    'نمی‌سازد؛ برای ثبت مشاهده آینده است و مجوز معامله نیست.')
     job_panel("live", live_args, "شروع پایش زنده",
               'در ساعات بازار با فاصله تنظیم‌شده دریافت می‌کند و خارج ساعت منتظر می‌ماند. '
               'تاریخ غایب، پاسخ ناموفق و قیمت کهنه در گزارش کیفیت باقی می‌مانند. '
@@ -643,7 +649,8 @@ def page_health() -> None:
                 stop_labels = {'cycles_completed': 'چرخه‌های تعیین‌شده تمام شدند',
                                'user_interrupted': 'توقف دستی', 'error': 'خطا', None: 'پایان ثبت نشده'}
                 runs = [{'شروع پایش': to_jalali(run['started_at'], with_time=True),
-                         'منبع': 'تاریخ‌دار تک‌نماد' if run.get('quote_source') == 'dated-quote' else 'دیده‌بان',
+                         'منبع': {'dated-quote': 'تاریخ‌دار تک‌نماد',
+                                  'dated-quote-context': 'تاریخ‌دار با دامنه هم‌روز'}.get(run.get('quote_source'), 'دیده‌بان'),
                          'نمادهای هدف': run['expected_instruments'], 'شروع دریافت': run['attempted_polls'],
                          'نتیجه نامعلوم': run['pending_polls'], 'پاسخ معتبر همه نمادها': run['complete_scope_polls'],
                          'بیشترین فاصله شروع دریافت (ثانیه)': ('نامعلوم' if run['max_poll_start_gap_seconds'] is None
