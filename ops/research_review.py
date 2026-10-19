@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import io
 import json
 import math
 import re
@@ -10,6 +11,7 @@ from pathlib import Path, PurePosixPath
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from config import settings
 from core.research_review import finite, summarize_evidence
@@ -76,6 +78,28 @@ def _iso(value):
     return value
 
 
+def read_development_parquet(path, expected_sha, cutoff, *, require_date=True):
+    """کنترل تاریخ قبل از مقدار، از همان تصویر بایتی هش‌شده؛ بدون پنجره تعویض فایل."""
+    if (_iso(cutoff) > settings.RESEARCH_CONFIG['holdout_start']
+            or not isinstance(expected_sha, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha)):
+        raise ValueError('مرز یا اثر انگشت پژوهش معتبر نیست')
+    path = Path(path)
+    with path.open('rb') as stream:
+        contents = stream.read(512 * 1024 * 1024 + 1)
+    if len(contents) > 512 * 1024 * 1024 or hashlib.sha256(contents).hexdigest() != expected_sha:
+        raise ValueError('اندازه یا اثر انگشت تصویر پژوهش نامعتبر است')
+    buffer = io.BytesIO(contents)
+    if 'date' in pq.read_schema(buffer).names:
+        buffer.seek(0)
+        dates = pd.read_parquet(buffer, columns=['date']).date
+        if any(_iso(day) >= cutoff for day in dates.unique()):
+            raise ValueError('خواندن مقادیر دوره مهروموم‌شده در بازبینی مجاز نیست')
+    elif require_date or pq.ParquetFile(io.BytesIO(contents)).metadata.num_rows:
+        raise ValueError('ورودی غیرخالی پژوهش باید تاریخ داشته باشد')
+    buffer.seek(0)
+    return pd.read_parquet(buffer)
+
+
 def _equal_number(actual, expected, label):
     if not finite(actual) or not math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-10):
         raise ValueError('آمار گزارش با منحنی محفوظ ناسازگار است: ' + label)
@@ -85,7 +109,7 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
     if not re.fullmatch('[a-z][a-z0-9_-]*', name):
         raise ValueError('نام حالت پژوهش نامعتبر است')
     filenames = {kind: f'fold-{index:02d}-{name}-{kind}.parquet' for kind in ('equity', 'executions', 'picks', 'decisions')}
-    if not set(filenames.values()) <= artifact_names:
+    if not set(filenames.values()) <= set(artifact_names):
         raise ValueError('خروجی یک برش/حالت از شواهد حذف شده است')
     metrics, assumptions = record['metrics'], record['assumptions']
     config = assumptions['config']
@@ -97,7 +121,7 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
     if assumptions['version'] != protocol['portfolio_version'] or assumptions['config']['stress'] is not (
             name in ('stress', 'dip_stress', 'past_baseline_stress') or name.endswith('-stress')):
         raise ValueError('قرارداد یا سناریوی فشار اجرا ناسازگار است')
-    equity = pd.read_parquet(folder / filenames['equity'])
+    equity = read_development_parquet(folder / filenames['equity'], artifact_names[filenames['equity']], protocol['holdout_start'])
     if equity.empty or not {'date', 'equity_rial', 'positions', 'stale_positions'} <= set(equity):
         raise ValueError('منحنی سرمایه خالی یا ناقص است')
     dates = equity['date'].tolist()
@@ -140,7 +164,8 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
         if np.isfinite(values).all():
             raise ValueError('شاهد نامعلوم بودن منحنی در برش نامعتبر موجود نیست')
         checked.update(total_return=None, max_drawdown=None, max_loss_from_initial=None, loss_floor_breached=False)
-    fills = pd.read_parquet(folder / filenames['executions'])
+    fills = read_development_parquet(folder / filenames['executions'], artifact_names[filenames['executions']],
+                                    protocol['holdout_start'], require_date=False)
     for label in ('executions', 'open_positions', 'stale_mark_days', 'corporate_action_events'):
         if isinstance(metrics[label], bool) or not isinstance(metrics[label], int) or metrics[label] < 0:
             raise ValueError('شمار شواهد برش نامعتبر است')
@@ -237,7 +262,7 @@ def review_research(db, experiment_id, *, root=None):
     for i, result in enumerate(results):
         if set(result['modes']) != expected_modes:
             raise ValueError('یکی از حالت‌های لازم پژوهش حذف یا اضافه شده است')
-        checked[i]['modes'] = {name: _checked_mode(folder, i, name, r, result['fold'], protocol, set(artifacts))
+        checked[i]['modes'] = {name: _checked_mode(folder, i, name, r, result['fold'], protocol, artifacts)
                                for name, r in result['modes'].items()}
     output = summarize_evidence(payload, checked)
     output['portfolio_version'] = protocol['portfolio_version']

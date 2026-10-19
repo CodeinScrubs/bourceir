@@ -25,7 +25,7 @@ def _numeric(series):
     return pd.to_numeric(series, errors='coerce')
 
 
-def opportunity_features(features, labels):
+def opportunity_features(features, labels, *, prices=None):
     """قیمت/ارزش روز تصمیم مجاز است؛ وضعیت و بازده آینده وارد رتبه‌بندی نمی‌شوند."""
     if features.duplicated(['date', 'symbol']).any() or labels.duplicated(['date', 'symbol']).any():
         raise ValueError('کلید نماد/تاریخ تکراری است')
@@ -34,11 +34,29 @@ def opportunity_features(features, labels):
         raise ValueError('اطلاعات نتیجه نباید در ورودی رتبه‌بندی باشد')
     if 'value' in features:
         raise ValueError('ارزش روز تصمیم فقط از ورودی خام برچسب محفوظ خوانده می‌شود')
+    nontrading = 0
+    if prices is not None:
+        if prices.duplicated(['date', 'symbol']).any():
+            raise ValueError('کلید قیمت خام تکراری است')
+        observed = features[['date', 'symbol']].merge(prices[['date', 'symbol', 'volume', 'value']],
+            on=['date', 'symbol'], how='left', validate='one_to_one', indicator=True)
+        if observed._merge.ne('both').any():
+            raise ValueError('فیچر بدون قیمت خام متناظر موجود است')
+        # labels فقط جلسه‌های با معامله را دارد؛ صرفاً عدم معامله مشاهده‌شده
+        # با حجم و ارزش هردو صفر از جامعه تصمیم حذف و در پوشش افشا می‌شود.
+        no_trade = _numeric(observed.volume).eq(0).fillna(False) & _numeric(observed.value).eq(0).fillna(False)
+        if observed.loc[no_trade, ['date', 'symbol']].merge(
+                labels[['date', 'symbol']], on=['date', 'symbol'], how='inner').shape[0]:
+            raise ValueError('برچسب معامله با شاهد خام عدم معامله سازگار نیست')
+        nontrading = int(no_trade.sum())
+        features = features.iloc[np.flatnonzero(~no_trade.to_numpy())]
     merged = features.merge(labels[['date', 'symbol', 'value']], on=['date', 'symbol'], how='left',
                             validate='one_to_one', indicator=True)
     if merged['_merge'].ne('both').any():
         raise ValueError('بخشی از فیچرها برچسب/ارزش متناظر ندارد؛ حذف خاموش فرصت مجاز نیست')
-    return merged.drop(columns='_merge')
+    output = merged.drop(columns='_merge')
+    output.attrs['observed_nontrading_feature_rows'] = nontrading
+    return output
 
 
 def select_opportunities(features, strategy, k):

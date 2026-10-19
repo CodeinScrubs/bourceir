@@ -146,7 +146,10 @@ def run_flow_v4(db, *, source_id, initial_capital_rial=None, min_train_sessions=
             randoms = []
             for seed in SEEDS:
                 pool = _picks(test, None, cfg['top_k'], seed + index)
-                randoms.append(pool.loc[pool['rank'] < pool.date.map(counts).fillna(0)])
+                matched = pool.loc[pool['rank'] < pool.date.map(counts).fillna(0)]
+                if matched.groupby('date').size().to_dict() != counts.to_dict():
+                    raise ValueError('جامعه کنترل تصادفی برای تعداد برابر نامزدها کافی نیست')
+                randoms.append(matched)
             for h in HORIZONS:
                 key = f'{name}-{h}d'
                 jobs[key] = (selected, replace(config, horizon=h))

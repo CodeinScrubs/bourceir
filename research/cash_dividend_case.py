@@ -46,7 +46,7 @@ def _load_prices(path, cutoff, *, allow_empty=False):
 
 
 def _source_names():
-    names = {'requirements.lock.txt', 'pyproject.toml'}
+    names = {'requirements.lock.txt', 'pyproject.toml', 'ops/research_review.py'}
     for directory in ('core', 'features', 'database', 'config', 'research', 'backtest'):
         names.update(p.relative_to(settings.BASE_DIR).as_posix() for p in (settings.BASE_DIR / directory).rglob('*')
                      if p.is_file() and p.suffix in ('.py', '.yaml', '.sql'))
