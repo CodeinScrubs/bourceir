@@ -20,7 +20,7 @@ export function readBoardDom() {
 }
 export function normalized(text) {
   return String(text).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776)).replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632))
-    .replace(/٬/g,',').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').replace(/ي/g,'ی').replace(/ك/g,'ک').trim();
+    .replace(/٬/g,',').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').replace(/[يى]/g,'ی').replace(/ك/g,'ک').replace(/ة/g,'ه').replace(/\s+/g,' ').trim();
 }
 function num(s) {
   const t=normalized(s);
@@ -35,9 +35,10 @@ export function parseBoard(raw, receivedAt) {
   if(u.origin!==origin || u.pathname!=='/' || [...u.searchParams.keys()].some(k=>k!=='isin')
     || u.searchParams.getAll('isin').length!==1 || !/^[A-Z0-9]{12}$/.test(u.searchParams.get('isin')||''))
     throw new Error('نشانی تابلوی فارابی نامعتبر است');
-  const symbol=normalized(raw.identity||'').split(' - ')[0];
+  // همان قرارداد core.text.normalize_symbol: حروف فارسی، فاصله یکسان و حذف نیم‌فاصله.
+  const symbol=normalized(raw.identity||'').split(' - ')[0].replace(/\u200c/g,'');
   if(!symbol || !normalized(raw.identity).includes(' - '))throw new Error('هویت تابلو کامل نیست');
-  const title=normalized(raw.title||'');const prefix=symbol+' ';
+  const title=normalized(raw.title||'').replace(/\u200c/g,'');const prefix=symbol+' ';
   if(!title.startsWith(prefix))throw new Error('هویت عنوان با تابلو برابر نیست');
   const priceText=title.slice(prefix.length).match(/^([\d,]+)\s+[▲▼−-]?\s*[\d.]+%$/);
   if(!priceText)throw new Error('قیمت عنوان تابلو شناخته‌شده نیست');

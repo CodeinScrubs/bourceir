@@ -87,6 +87,8 @@ test('DOM تابلو با ریال و تاریخ جلسه کنترل می‌شو
 test('شناسه فارابی الزاماً شناسه TSETMC نیست؛ ارقام فارسی پذیرفته می‌شوند',()=>{
   const r=raw();r.volume='حجم معاملات\n۱٬۰۰۰٬۰۰۰';assert.equal(parseBoard(r,at).volume,1000000);
   assert.equal(tehranNow(new Date('2026-10-20T06:30:00Z')),at);
+  r.identity='آزمو‌نى - شرکت آزمون - فرابورس';r.title='آزمو‌نى 100 ▼ 2.91%';
+  assert.equal(parseBoard(r,at).symbol,'آزمونی');
 });
 test('نشانی سفارش/میزبان دیگر/تاریخ قبل و مظنه ناقص رد می‌شوند',()=>{
   for(const change of [{url:'https://evil.test/?isin=TEST00000001'},{url:'https://farabixo.irfarabi.com/orders?isin=TEST00000001'},
