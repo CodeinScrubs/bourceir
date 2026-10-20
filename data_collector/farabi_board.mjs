@@ -1,5 +1,10 @@
 /** فقط DOM عمومی تابلو. هیچ storage، کوکی، API حساب یا داخلی برنامه خوانده نمی‌شود. */
 export const origin='https://farabixo.irfarabi.com';
+export function isBoardUrl(value) {
+  try{const u=new URL(value);return u.origin===origin&&u.pathname==='/'&&!u.username&&!u.password&&!u.hash
+    &&u.searchParams.getAll('isin').length===1&&[...u.searchParams.keys()].every(k=>k==='isin')
+    &&/^[A-Z0-9]{12}$/.test(u.searchParams.get('isin')||'');}catch{return false;}
+}
 export function tehranNow(date=new Date()) {
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit',
     hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(date);
@@ -7,6 +12,11 @@ export function tehranNow(date=new Date()) {
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}.${String(date.getUTCMilliseconds()).padStart(3,'0')}+03:30`;
 }
 export function readBoardDom() {
+  // بررسی دوباره در خود صفحه لازم است: تب ممکن است پس از انتخاب، به ورود/بازگشت احراز هویت برود.
+  const u=new URL(location.href);
+  if(u.origin!=='https://farabixo.irfarabi.com'||u.pathname!=='/'||u.username||u.password||u.hash
+    ||u.searchParams.getAll('isin').length!==1||[...u.searchParams.keys()].some(k=>k!=='isin')
+    ||!/^[A-Z0-9]{12}$/.test(u.searchParams.get('isin')||''))return {not_a_board:true};
   const norm=s=>s.replace(/\s+/g,' ').trim();
   const field=label=>{
     const es=Array.from(document.querySelectorAll('span')).filter(e=>norm(e.innerText)===label);
@@ -32,7 +42,7 @@ export function parseBoard(raw, receivedAt) {
   const at=new Date(receivedAt);
   if(!Number.isFinite(at.getTime()) || tehranNow(at)!==receivedAt)throw new Error('زمان دریافت باید تهران و استاندارد باشد');
   const u=new URL(raw.url);
-  if(u.origin!==origin || u.pathname!=='/' || [...u.searchParams.keys()].some(k=>k!=='isin')
+  if(u.origin!==origin || u.pathname!=='/' || u.username || u.password || u.hash || [...u.searchParams.keys()].some(k=>k!=='isin')
     || u.searchParams.getAll('isin').length!==1 || !/^[A-Z0-9]{12}$/.test(u.searchParams.get('isin')||''))
     throw new Error('نشانی تابلوی فارابی نامعتبر است');
   // همان قرارداد core.text.normalize_symbol: حروف فارسی، فاصله یکسان و حذف نیم‌فاصله.

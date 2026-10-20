@@ -21,12 +21,14 @@ try {
   ${Array.from({length:5},(_,i)=>`<tr><td>1</td><td>${99-i}<br>10</td><td>${100+i}<br>1000</td><td>1</td></tr>`).join('')}</tbody></table>
   <table><thead><tr><th>دارایی خصوصی</th></tr></thead><tbody><tr><td>DO_NOT_CAPTURE</td></tr></tbody></table>`;
   await page.route('**/*',async route=>{
-    if(route.request().url()==='https://farabixo.irfarabi.com/?isin=TEST00000001')await route.fulfill({contentType:'text/html',body:fixture});
+    if(['https://farabixo.irfarabi.com/?isin=TEST00000001','https://farabixo.irfarabi.com/?isin=TEST00000001&code=TEST_ONLY'].includes(route.request().url()))await route.fulfill({contentType:'text/html',body:fixture});
     else {unexpected++;await route.abort();}
   });
   await page.goto('https://farabixo.irfarabi.com/?isin=TEST00000001');
   const raw=await page.evaluate(readBoardDom);assert(!JSON.stringify(raw).includes('DO_NOT_CAPTURE'));
   assert.equal(parseBoard(raw,tehranNow()).sell_queue,1000);
+  await page.goto('https://farabixo.irfarabi.com/?isin=TEST00000001&code=TEST_ONLY');
+  assert.deepEqual(await page.evaluate(readBoardDom),{not_a_board:true});
   await page.close();
   const html=await fs.readFile(new URL('../dashboard/board_watch.html',import.meta.url));
   let rule={...defaults},posted=null,overrides={};

@@ -5,7 +5,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {BoardAlerts,defaults,validateRule,version} from '../core/board_alerts.mjs';
-import {origin,readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
+import {origin,isBoardUrl,readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateRoot=path.resolve(root,'data/private');
@@ -74,9 +74,8 @@ export async function main() {
   function serialize(fn){const p=mutation.then(fn);mutation=p.catch(()=>{});return p;}
   async function addBoard(url) {
     const u=new URL(url);
-    if(u.origin!==origin||u.pathname!=='/'||[...u.searchParams.keys()].some(k=>k!=='isin')||u.searchParams.getAll('isin').length!==1
-      ||!/^[A-Z0-9]{12}$/.test(u.searchParams.get('isin')||''))throw new Error('لینک تابلو را از خود فارابی کپی کنید');
-    if(context.pages().filter(p=>p.url().startsWith(origin+'/')).length>=10)throw new Error('حداکثر ده تابلو در هر نشست');
+    if(!isBoardUrl(u.href))throw new Error('لینک تابلو را از خود فارابی کپی کنید');
+    if(context.pages().filter(p=>isBoardUrl(p.url())).length>=10)throw new Error('حداکثر ده تابلو در هر نشست');
     const page=await context.newPage();await page.goto(u.href,{waitUntil:'domcontentloaded',timeout:15000});
   }
   try {
@@ -126,7 +125,7 @@ export async function main() {
   async function poll() {
     const begin=performance.now(),at=tehranNow();
     if(previousPoll!==null){gaps.push(begin-previousPoll);if(gaps.length>2000)gaps.shift();}previousPoll=begin;
-    const pages=context.pages().filter(p=>p.url().startsWith(origin+'/')).slice(0,10);
+    const pages=context.pages().filter(p=>isBoardUrl(p.url())).slice(0,10);
     const reads=await Promise.allSettled(pages.map(async page=>{
       if(pendingReads.has(page))throw new Error('خواندن قبلی این تب هنوز تمام نشده است');
       const t=performance.now(),job=page.evaluate(readBoardDom).then(raw=>({page,raw,read_ms:performance.now()-t,
@@ -180,7 +179,7 @@ export async function main() {
     const summary=arr=>{if(!arr.length)return null;const sorted=[...arr].sort((a,b)=>a-b);return {p50:sorted[Math.floor((sorted.length-1)*.5)],p95:sorted[Math.floor((sorted.length-1)*.95)],max:sorted.at(-1)};};
     status={...status,updated_at:tehranNow(),cycles:++cycles,rule,rule_overrides:Object.fromEntries(engine.overrides),boards:[...rows.values()].map(({book_hash,...q})=>q),
       valid_board_count:[...rows.values()].filter(q=>q.ok).length,pending_login_or_board:![...rows.values()].some(q=>q.ok),
-      extra_tabs_ignored:Math.max(0,context.pages().filter(p=>p.url().startsWith(origin+'/')).length-10),
+      extra_tabs_ignored:Math.max(0,context.pages().filter(p=>isBoardUrl(p.url())).length-10),
       cycle_ms:summary(durations),poll_gap_ms:summary(gaps)};
     await atomic(path.join(out,'status.json'),status);
   }

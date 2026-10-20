@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {BoardAlerts,validateRule} from '../core/board_alerts.mjs';
-import {parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
+import {isBoardUrl,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 import {reviewArchive} from '../scripts/farabi_watch_review.mjs';
 import {atomic} from '../scripts/farabi_watch.mjs';
 
@@ -93,10 +93,19 @@ test('شناسه فارابی الزاماً شناسه TSETMC نیست؛ ارق
 });
 test('نشانی سفارش/میزبان دیگر/تاریخ قبل و مظنه ناقص رد می‌شوند',()=>{
   for(const change of [{url:'https://evil.test/?isin=TEST00000001'},{url:'https://farabixo.irfarabi.com/orders?isin=TEST00000001'},
-    {url:'https://farabixo.irfarabi.com/?isin=TEST00000001&buy=1'},{title:'دیگر 100 ▼ 2.91%'},
+    {url:'https://farabixo.irfarabi.com/?isin=TEST00000001&buy=1'},
+    {url:'https://farabixo.irfarabi.com/?isin=TEST00000001#access_token=TEST_ONLY'},
+    {url:'https://user@farabixo.irfarabi.com/?isin=TEST00000001'},{title:'دیگر 100 ▼ 2.91%'},
     {last_trade:'زمان آخرین معامله\n1405/7/27 10:00:00'},{last_trade:'زمان آخرین معامله\n1405/7/28 10:00:01'},
     {volume:'حجم معاملات\n-'},{depth:[]}])assert.throws(()=>parseBoard({...raw(),...change},at));
   const r=raw();r.depth[0][2]='100';assert.throws(()=>parseBoard(r,at));
+});
+test('صفحات حساب، ورود و بازگشت احراز هویت هرگز تابلو محسوب نمی‌شوند',()=>{
+  assert(isBoardUrl(raw().url));
+  for(const url of ['https://farabixo.irfarabi.com/','https://farabixo.irfarabi.com/account-turnover',
+    'https://farabixo.irfarabi.com/?isin=TEST00000001&code=TEST_ONLY',
+    'https://farabixo.irfarabi.com/?isin=TEST00000001#access_token=TEST_ONLY',
+    'https://user@farabixo.irfarabi.com/?isin=TEST00000001'])assert.equal(isBoardUrl(url),false);
 });
 test('دفتر خالی صفر فرض نمی‌شود و ترتیب سطوح باید روشن باشد',()=>{
   const r=raw();r.depth=Array.from({length:5},()=>['-','-','-','-']);assert.equal(parseBoard(r,at).sell_queue,null);
