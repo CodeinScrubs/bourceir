@@ -22,10 +22,25 @@ export function readBoardDom() {
     const es=Array.from(document.querySelectorAll('span')).filter(e=>norm(e.innerText)===label);
     return es.length===1?es[0].parentElement.innerText:null;
   };
+  const lastTrade=()=>{
+    const label='زمان آخرین معامله';
+    const es=Array.from(document.querySelectorAll('span')).filter(e=>norm(e.innerText)===label);
+    if(es.length!==1)return null;
+    // برچسب ممکن است در پوش جدا و مقدار در همسایه باشد؛ فقط یک فیلد کامل و محدود پذیرفته می‌شود.
+    // متن پوش هرگز ذخیره نمی‌شود؛ ساعت سیستم، tooltip و مقدار پنهان جای تاریخ بومی نیستند.
+    let element=es[0].parentElement;
+    for(let level=0;element&&element!==document.body&&level<3;level++,element=element.parentElement){
+      const text=norm(element.innerText).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776))
+        .replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632)).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'');
+      if(text.length>100)break;
+      if(/^زمان آخرین معامله\s+\d{4}\/\d{1,2}\/\d{1,2}\s+\d{2}:\d{2}:\d{2}$/.test(text))return text;
+    }
+    return null;
+  };
   const ts=Array.from(document.querySelectorAll('table')).filter(t=>norm(t.querySelector('thead')?.innerText||'')==='تعداد حجم قیمت قیمت حجم تعداد');
   return {url:location.href,title:document.title,
     identity:document.querySelector('input[placeholder="جست‌و‌جوی نماد یا شرکت"]')?.value??null,
-    volume:field('حجم معاملات'),last_trade:field('زمان آخرین معامله'),limits:field('بازه مجاز روزانه'),
+    volume:field('حجم معاملات'),last_trade:lastTrade(),limits:field('بازه مجاز روزانه'),
     depth:ts.length===1?Array.from(ts[0].querySelectorAll('tbody tr')).map(r=>Array.from(r.querySelectorAll('td')).map(e=>e.innerText)):null};
 }
 export function normalized(text) {

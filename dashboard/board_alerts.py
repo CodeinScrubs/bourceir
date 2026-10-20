@@ -34,7 +34,10 @@ def board_alert_panel():
             if not any(q.get('ok') for q in status['boards']):
                 st.warning('هیچ تابلوی معتبر جاری دریافت نشده است؛ پایش شرایط قابل اتکا نیست.')
         else:
-            st.info('منتظر ورود یا بازکردن تابلوی معتبر در پنجره پایش هستیم.')
+            if status.get('feed_state') == 'invalid_board':
+                st.warning('تابلو باز است؛ داده معتبر نیست و هشدار آن متوقف است.')
+            else:
+                st.info('منتظر ورود یا بازکردن تابلو در پنجره پایش هستیم.')
             if status.get('last_error'):
                 st.warning(status['last_error']['reason'])
         labels = {'sell_queue_drop': 'افت صف فروش', 'sell_queue_drop_with_volume': 'افت صف فروش همراه حجم',

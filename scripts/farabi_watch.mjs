@@ -9,6 +9,11 @@ import {origin,isBoardUrl,readBoardDom,parseBoard,tehranNow} from '../data_colle
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateRoot=path.resolve(root,'data/private');
+export function boardFeedState(pageCount,boards) {
+  const valid=boards.filter(q=>q.ok).length;
+  return {board_page_count:pageCount,valid_board_count:valid,pending_login_or_board:valid===0,
+    feed_state:!pageCount?'awaiting_board':!valid?'invalid_board':valid<pageCount?'partial':'observed'};
+}
 export async function atomic(file,value,rename=fs.rename) {
   const temp=file+'.tmp';await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');
   // خواننده کوتاه‌عمر ویندوز می‌تواند rename را موقتاً قفل کند؛ جایگزینی غیراتمی مجاز نیست.
@@ -67,7 +72,7 @@ export async function main() {
   catch(e){await browser.close().catch(()=>{});throw e;}
   const rows=new Map(),pageKeys=new Map(),identities=new Map(),symbolKeys=new Map(),durations=[],gaps=[],pendingReads=new Map();
   let status={version,pid:process.pid,running:true,started_at:plan.started_at,updated_at:tehranNow(),rule,boards:[],alerts:[],
-    rule_overrides:saved.overrides,archive:out,independent_book_clock_verified:false,exchange_latency_seconds:null,accepted_for_signals:false};
+    ...boardFeedState(0,[]),rule_overrides:saved.overrides,archive:out,independent_book_clock_verified:false,exchange_latency_seconds:null,accepted_for_signals:false};
   let server,stopped=false,localUrl,cycles=0,previousPoll=null;
   const body=await fs.readFile(path.join(root,'dashboard/board_watch.html'));
   let mutation=Promise.resolve();
@@ -168,8 +173,10 @@ export async function main() {
         for(const event of outcome.events){await journal('alert',event);status.alerts.push({...event,id:seq});if(status.alerts.length>100)status.alerts.shift();console.log('\x07'+event.kind+' '+event.symbol);}
       }catch(e){
         status.last_error={at:received_at,reason:e.message};
-        const key=q?.key||oldKey;
-        if(key){await invalidate(key,'parse_rejected');seen.add(key);rows.set(key,{...(rows.get(key)||{}),ok:false,error:e.message,observed_at:received_at});}
+        const key=q?.key||(isBoardUrl(raw.url)?new URL(raw.url).searchParams.get('isin'):null)||oldKey;
+        if(oldKey&&key!==oldKey){await invalidate(oldKey,'navigation');rows.delete(oldKey);}
+        if(key){pageKeys.set(page,key);await invalidate(key,'parse_rejected');seen.add(key);
+          rows.set(key,{...(rows.get(key)||{}),key,ok:false,error:e.message,observed_at:received_at});}
         await journal('parse_rejected',{page_index:i,reason:e.message});
       }
     }
@@ -178,7 +185,7 @@ export async function main() {
     durations.push(performance.now()-begin);if(durations.length>2000)durations.shift();
     const summary=arr=>{if(!arr.length)return null;const sorted=[...arr].sort((a,b)=>a-b);return {p50:sorted[Math.floor((sorted.length-1)*.5)],p95:sorted[Math.floor((sorted.length-1)*.95)],max:sorted.at(-1)};};
     status={...status,updated_at:tehranNow(),cycles:++cycles,rule,rule_overrides:Object.fromEntries(engine.overrides),boards:[...rows.values()].map(({book_hash,...q})=>q),
-      valid_board_count:[...rows.values()].filter(q=>q.ok).length,pending_login_or_board:![...rows.values()].some(q=>q.ok),
+      ...boardFeedState(pages.length,[...rows.values()]),
       extra_tabs_ignored:Math.max(0,context.pages().filter(p=>isBoardUrl(p.url())).length-10),
       cycle_ms:summary(durations),poll_gap_ms:summary(gaps)};
     await atomic(path.join(out,'status.json'),status);
