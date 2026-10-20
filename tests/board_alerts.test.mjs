@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import {BoardAlerts,validateRule} from '../core/board_alerts.mjs';
 import {parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 import {reviewArchive} from '../scripts/farabi_watch_review.mjs';
+import {atomic} from '../scripts/farabi_watch.mjs';
 
 const at='2026-10-20T10:00:00.000+03:30';
 const quote=(queue=59000000,volume=1000000,extra={})=>({key:'TEST00000001',symbol:'آزمون',market_day:'2026-10-20',
@@ -131,6 +132,16 @@ async function removeFixture(dir) {
   assert(path.basename(dir).startsWith('brs-board-test-'));
   await fs.rm(dir,{recursive:true,force:true});
 }
+test('قفل گذرای ویندوز نوشتن اتمی را به فایل ناقص تبدیل نمی‌کند',async()=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'brs-board-test-'));let calls=0;
+  try{
+    const target=path.join(dir,'status.json');await fs.writeFile(target,'{"old":true}');
+    await atomic(target,{fresh:true},async(a,b)=>{if(++calls<3){const e=new Error('locked');e.code='EPERM';throw e;}await fs.rename(a,b);});
+    assert.equal(calls,3);assert.deepEqual(JSON.parse(await fs.readFile(target,'utf8')),{fresh:true});
+    await assert.rejects(atomic(target,{bad:true},async()=>{const e=new Error('full');e.code='ENOSPC';throw e;}),/full/);
+    assert.deepEqual(JSON.parse(await fs.readFile(target,'utf8')),{fresh:true});
+  }finally{await removeFixture(dir);}
+});
 test('دفتر آفلاین با بایت/کد محفوظ و بازاجرای هشدار بررسی می‌شود',async()=>{
   const dir=await archiveFixture();try{const r=await reviewArchive(dir);assert.equal(r.alerts,3);assert.equal(r.complete,true);assert.equal(r.accepted_for_signals,false);}
   finally{await removeFixture(dir);}

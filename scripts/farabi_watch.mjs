@@ -9,8 +9,14 @@ import {origin,readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateRoot=path.resolve(root,'data/private');
-async function atomic(file,value) {
-  const temp=file+'.tmp';await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');await fs.rename(temp,file);
+export async function atomic(file,value,rename=fs.rename) {
+  const temp=file+'.tmp';await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');
+  // خواننده کوتاه‌عمر ویندوز می‌تواند rename را موقتاً قفل کند؛ جایگزینی غیراتمی مجاز نیست.
+  for(const delay of [0,10,30,60,120,240]){
+    if(delay)await new Promise(r=>setTimeout(r,delay));
+    try{await rename(temp,file);return;}
+    catch(e){if(!['EPERM','EBUSY','EACCES'].includes(e.code)||delay===240)throw e;}
+  }
 }
 export async function main() {
   const modulePath=process.env.BRS_PLAYWRIGHT_MODULE;
@@ -29,7 +35,9 @@ export async function main() {
   let saved={rule:validateRule(defaults),overrides:{}};
   try{
     const parsed=JSON.parse(await fs.readFile(path.join(privateRoot,'farabi-board','rules.json'),'utf8'));
-    if(!parsed.overrides||Array.isArray(parsed.overrides)||typeof parsed.overrides!=='object'||Object.keys(parsed.overrides).length>200)
+    if(!parsed||Object.keys(parsed).sort().join(',')!=='overrides,rule'||!parsed.rule||typeof parsed.rule!=='object'
+      ||Object.keys(parsed.rule).sort().join(',')!==Object.keys(defaults).sort().join(',')
+      ||!parsed.overrides||Array.isArray(parsed.overrides)||typeof parsed.overrides!=='object'||Object.keys(parsed.overrides).length>200)
       throw new Error('تنظیمات محفوظ نمادها نامعتبر است');
     saved={rule:validateRule(parsed.rule),overrides:{}};
     for(const [key,value]of Object.entries(parsed.overrides)){
@@ -171,7 +179,8 @@ export async function main() {
     durations.push(performance.now()-begin);if(durations.length>2000)durations.shift();
     const summary=arr=>{if(!arr.length)return null;const sorted=[...arr].sort((a,b)=>a-b);return {p50:sorted[Math.floor((sorted.length-1)*.5)],p95:sorted[Math.floor((sorted.length-1)*.95)],max:sorted.at(-1)};};
     status={...status,updated_at:tehranNow(),cycles:++cycles,rule,rule_overrides:Object.fromEntries(engine.overrides),boards:[...rows.values()].map(({book_hash,...q})=>q),
-      pending_login_or_board:rows.size===0,extra_tabs_ignored:Math.max(0,context.pages().filter(p=>p.url().startsWith(origin+'/')).length-10),
+      valid_board_count:[...rows.values()].filter(q=>q.ok).length,pending_login_or_board:![...rows.values()].some(q=>q.ok),
+      extra_tabs_ignored:Math.max(0,context.pages().filter(p=>p.url().startsWith(origin+'/')).length-10),
       cycle_ms:summary(durations),poll_gap_ms:summary(gaps)};
     await atomic(path.join(out,'status.json'),status);
   }

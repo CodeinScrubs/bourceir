@@ -26,10 +26,13 @@ def board_alert_panel():
         st.caption('این هشدارها برای بررسی شخصی تابلو هستند. ساعت مستقل صف و تأخیر بورس تا فارابی نامعلوم‌اند؛ '
                    'افت صف و افزایش حجم، برگشت قیمت یا اجرای سفارش را ثابت نمی‌کنند.')
         if status['boards']:
-            st.dataframe(pd.DataFrame([{'نماد': q.get('symbol', q.get('key')), 'آخرین قیمت (ریال)': q.get('last_price'),
-                'حجم روز': q.get('volume'), 'عرضه در کف': q.get('sell_queue'), 'تقاضا در سقف': q.get('buy_queue'),
+            st.dataframe(pd.DataFrame([{'نماد': q.get('symbol', q.get('key')), 'آخرین قیمت (ریال)': q.get('last_price') if q.get('ok') else None,
+                'حجم روز': q.get('volume') if q.get('ok') else None, 'عرضه در کف': q.get('sell_queue') if q.get('ok') else None,
+                'تقاضا در سقف': q.get('buy_queue') if q.get('ok') else None,
                 'وضعیت': 'مشاهده DOM' if q.get('ok') else q.get('error', 'نامعلوم')} for q in status['boards']]),
                 hide_index=True, width='stretch')
+            if not any(q.get('ok') for q in status['boards']):
+                st.warning('هیچ تابلوی معتبر جاری دریافت نشده است؛ پایش شرایط قابل اتکا نیست.')
         else:
             st.info('منتظر ورود یا بازکردن تابلوی معتبر در پنجره پایش هستیم.')
             if status.get('last_error'):
