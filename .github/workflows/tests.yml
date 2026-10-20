@@ -52,7 +52,7 @@ jobs:
         node-version: '22'
 
     - name: Check read-only capture validation
-      run: node --test tests/farabi_capture.test.mjs
+      run: node --test tests/farabi_capture.test.mjs tests/board_alerts.test.mjs
 
     - name: Run Pytest test suite (offline)
       run: python -m pytest tests/ -m "not network" -v
@@ -94,6 +94,10 @@ jobs:
         $env:BRS_PLAYWRIGHT_MODULE = Join-Path $PWD 'data/runtime/farabi/node_modules/playwright/index.mjs'
         $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PWD 'data/runtime/farabi/browsers'
         node tests/farabi_capture.browser.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        node tests/board_watch.browser.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmd /c "call WATCH_FARABI.bat --check"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Capture entry point must propagate an invalid custom runtime

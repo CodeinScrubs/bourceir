@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BRS — هشدار سریع تابلو</title>
+<style>
+body{font-family:Tahoma,sans-serif;background:#0e1420;color:#e7edf6;margin:auto;max-width:1150px;padding:24px;line-height:1.8}h1{font-size:24px}h2{font-size:18px}section{background:#172231;border:1px solid #304156;border-radius:12px;padding:18px;margin:16px 0}button,input,select{font:inherit;border:1px solid #61738c;border-radius:6px;padding:7px 10px;background:#101c2c;color:#e7edf6}button{cursor:pointer;background:#173d56}label{display:inline-flex;flex-direction:column;gap:4px;font-size:13px}form{display:flex;flex-wrap:wrap;gap:12px;align-items:end}input{width:135px}#url{width:min(620px,75vw);direction:ltr}table{width:100%;border-collapse:collapse;white-space:nowrap}td,th{padding:8px;text-align:right;border-bottom:1px solid #304156}small,.muted{color:#b2c0d5}.bad{color:#ffb5ad}.good{color:#8de0bb}.event{border-right:4px solid #e6ba65;padding:10px;margin:8px 0;background:#233147}.scroll{overflow:auto}#message{min-height:28px}a{color:#9ad8ff}@media(max-width:600px){body{padding:12px}section{padding:12px}h1{font-size:21px}}
+</style>
+<h1>هشدار سریع تابلو</h1>
+<p>صف و حجمِ قابل مشاهده در فارابیکسو؛ برای جلب توجه و تصمیم شخصی شما. هشدار، سیگنال خرید یا فروش نیست.</p>
+<p id="health" aria-live="polite">در انتظار اتصال…</p><button id="stop">توقف پایش و بستن مرورگر موقت</button>
+<section><h2>تابلوهای زیر نظر</h2><p class="muted">در پنجره موقت وارد فارابی شوید و تابلوها را باز کنید. حداکثر ۱۰ تب؛ لینک هر تابلو را از خود فارابی کپی کنید. شناسه TSETMC ممکن است متفاوت باشد.</p>
+<form id="watch"><label>لینک تابلو در فارابی<input id="url" type="url" placeholder="https://farabixo.irfarabi.com/?isin=…" required></label><button>افزودن تابلو</button></form>
+<div class="scroll"><table><thead><tr><th>نماد</th><th>قیمت (ریال)</th><th>حجم روز</th><th>عرضه در کف</th><th>تقاضا در سقف</th><th>آخرین تغییر دفتر</th><th>وضعیت</th></tr></thead><tbody id="boards"></tbody></table></div>
+<p class="muted">ساعت مستقل دفتر و تأخیر بورس تا کارگزاری نامعلوم است. مظنه بیرون دامنه قابل اجرا فرض نمی‌شود. دفتر خالی یا خطای دریافت، صف صفر نیست.</p></section>
+<section><h2>شرایط دلخواه هشدار</h2><p class="muted">این مقادیر، تنظیمات اولیه قابل تغییر هستند و سودآوری آزموده‌شده ندارند. تغییر تنظیمات، مبنای مقایسه را از نو می‌سازد. افزایش حجم، علت کوچک‌شدن صف را اثبات نمی‌کند.</p>
+<form id="rule">
+<label>دامنه تنظیمات<select id="scope"><option value="">پیش‌فرض همه نمادها</option></select></label>
+<label>سمت صف<select id="sides"><option value="sell">صف فروش</option><option value="buy">صف خرید</option><option value="both">هر دو</option></select></label>
+<label>صف شروع (سهم)<input id="queue_start" type="number" min="1" required></label>
+<label>صف باقی‌مانده حداکثر<input id="queue_remaining" type="number" min="0" required></label>
+<label>کاهش حداقل (درصد)<input id="drop_pct" type="number" min="1" max="100" required></label>
+<label>بازه افت صف (ثانیه)<input id="window_seconds" type="number" min="3" max="3600" required></label>
+<label>حجم معامله همراه حداقل<input id="min_traded" type="number" min="1" required></label>
+<label>حجم ناگهانی حداقل<input id="burst_volume" type="number" min="1" required></label>
+<label>بازه حجم (ثانیه)<input id="burst_seconds" type="number" min="3" max="3600" required></label>
+<label>عبور رو به بالای قیمت (ریال)<input id="price_above" type="number" min="1" placeholder="اختیاری"></label>
+<label>عبور رو به پایین قیمت (ریال)<input id="price_below" type="number" min="1" placeholder="اختیاری"></label>
+<button>ثبت شرایط و شروع مبنای تازه</button><button type="button" id="reset-rule" disabled>بازگشت این نماد به پیش‌فرض</button></form><p id="message" aria-live="polite"></p></section>
+<section><h2>رویدادها <button id="sound">فعال‌کردن صدا</button></h2><p class="muted">برای شنیدن هشدار این پنل را باز بگذارید و صدا را فعال کنید. تحویل صدا در حالت خواب سیستم یا محدودیت مرورگر تضمین نیست. پس از قطع داده بیش از ۳ ثانیه، مقایسه از نو شروع می‌شود.</p><div id="events" aria-live="polite">هنوز رویدادی ثبت نشده است.</div></section>
+<script>
+const $=id=>document.getElementById(id),fmt=n=>n===null||n===undefined?'نامعلوم':Number(n).toLocaleString('fa-IR');
+const titles={sell_queue_drop:'کاهش شدید صف فروش',sell_queue_drop_with_volume:'کاهش شدید صف فروش همراه با افزایش حجم',buy_queue_drop:'کاهش شدید صف خرید',buy_queue_drop_with_volume:'کاهش شدید صف خرید همراه با افزایش حجم',volume_burst:'افزایش سریع حجم معاملات',price_above:'عبور قیمت از سطح بالا',price_below:'عبور قیمت از سطح پایین'};
+let initial=false,lastId=null,audio=null,lastStatus=null;
+const cell=(tr,text)=>{const td=document.createElement('td');td.textContent=text;tr.append(td);};
+async function post(route,data){const r=await fetch(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const v=await r.json();if(!r.ok)throw Error(v.error||'خطای درخواست');return v;}
+$('watch').onsubmit=async e=>{e.preventDefault();try{await post('/watch',{url:$('url').value});$('message').textContent='تابلو در تب تازه باز شد؛ منتظر دریافت معتبر بمانید.';}catch(e){$('message').textContent=e.message;}};
+$('stop').onclick=async()=>{try{await post('/stop',{});$('health').textContent='در حال توقف؛ این پنجره موقت بسته می‌شود.';}catch(e){$('message').textContent=e.message;}};
+function populateRule(){const k=$('scope').value,r=lastStatus.rule_overrides?.[k]||lastStatus.rule;for(const name of ['queue_start','queue_remaining','window_seconds','min_traded','burst_volume','burst_seconds','price_above','price_below'])$(name).value=r[name]??'';$('drop_pct').value=r.drop_fraction*100;$('sides').value=r.sides.length===2?'both':r.sides[0];$('reset-rule').disabled=!k;}
+$('scope').onchange=populateRule;
+$('reset-rule').onclick=async()=>{const key=$('scope').value;try{await post('/rule-for',{key,rule:null});if(lastStatus.rule_overrides)delete lastStatus.rule_overrides[key];populateRule();$('message').textContent='تنظیم اختصاصی حذف شد؛ این نماد از پیش‌فرض استفاده می‌کند.';}catch(e){$('message').textContent=e.message;}};
+$('rule').onsubmit=async e=>{e.preventDefault();$('message').textContent='در حال ثبت شرایط…';try{const key=$('scope').value,r={...(lastStatus.rule_overrides?.[key]||lastStatus.rule)};for(const k of ['queue_start','queue_remaining','window_seconds','min_traded','burst_volume','burst_seconds'])r[k]=Number($(k).value);for(const k of ['price_above','price_below'])r[k]=$(k).value===''?null:Number($(k).value);r.drop_fraction=Number($('drop_pct').value)/100;r.sides=$('sides').value==='both'?['sell','buy']:[$('sides').value];await post(key?'/rule-for':'/rule',key?{key,rule:r}:r);$('message').textContent='شرایط ثبت شد؛ مبنای قبلی پاک و نمونه تازه لازم شد.';}catch(e){$('message').textContent=e.message;}};
+function beep(){if(!audio)return;const o=audio.createOscillator(),g=audio.createGain();o.connect(g);g.connect(audio.destination);g.gain.value=.1;o.frequency.value=880;o.start();o.stop(audio.currentTime+.35);}
+$('sound').onclick=async()=>{try{audio=audio||new AudioContext();await audio.resume();beep();$('sound').textContent='صدا فعال است — آزمون دوباره';}catch(e){$('message').textContent='مرورگر اجازه صدا نداد: '+e.message;}};
+async function refresh(){try{
+const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error('خطای دریافت پنل');const s=await r.json();lastStatus=s;
+const stale=Date.now()-Date.parse(s.updated_at)>3500;
+$('health').className=stale||!s.running?'bad':'good';$('health').textContent=(stale||!s.running?'پایش متوقف یا کهنه است؛ به آخرین عدد اتکا نکنید.':s.pending_login_or_board?'منتظر ورود یا بازکردن تابلوی معتبر… '+(s.last_error?.reason||''):'خواندن DOM برقرار است؛ تازگی مستقل بورس تأیید نشده.')+' | فاصله نمونه‌ها p95: '+fmt(s.poll_gap_ms?.p95?.toFixed(0))+' میلی‌ثانیه';
+for(const q of s.boards)if(q.key&&!Array.from($('scope').options).some(o=>o.value===q.key)){const o=document.createElement('option');o.value=q.key;o.textContent=q.symbol||q.key;$('scope').append(o);}
+if(!initial){populateRule();initial=true;}
+$('boards').replaceChildren();for(const q of s.boards){const tr=document.createElement('tr');for(const text of [q.symbol||q.key,fmt(q.last_price),fmt(q.volume),fmt(q.sell_queue),fmt(q.buy_queue),q.book_changed_at?.slice(11,23)||'نامعلوم',!q.ok?q.error:!q.session_open?'خارج جلسه':q.out_of_band_levels?'دارای مظنه بیرون دامنه؛ بررسی تابلو':'مشاهده DOM'])cell(tr,text);if(!q.ok)tr.className='bad';$('boards').append(tr);}
+const newest=s.alerts.at(-1)?.id;if(lastId!==null&&newest&&newest!==lastId)beep();lastId=newest??0;
+$('events').replaceChildren();if(!s.alerts.length)$('events').textContent='هنوز رویدادی ثبت نشده است.';
+for(const a of [...s.alerts].reverse().slice(0,30)){const div=document.createElement('div');div.className='event';const h=document.createElement('strong');h.textContent=a.symbol+' — '+(titles[a.kind]||a.kind);const p=document.createElement('p');p.textContent=a.observed_at.slice(11,23)+' | حجم معامله همراه: '+fmt(a.traded_volume)+(a.queue_now===undefined?'':' | صف: '+fmt(a.queue_before)+' ← '+fmt(a.queue_now))+' | تصمیم با شماست';div.append(h,p);$('events').append(div);}
+}catch(e){$('health').className='bad';$('health').textContent='ارتباط پنل قطع است؛ داده قبلی زنده نیست. '+e.message;}finally{setTimeout(refresh,500);}}
+refresh();
+</script></html>
