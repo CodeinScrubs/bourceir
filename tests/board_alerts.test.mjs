@@ -111,6 +111,12 @@ test('دفتر خالی صفر فرض نمی‌شود و ترتیب سطوح ب�
   const r=raw();r.depth=Array.from({length:5},()=>['-','-','-','-']);assert.equal(parseBoard(r,at).sell_queue,null);
   r.depth[1]=['1','100\n10','101\n10','1'];assert.throws(()=>parseBoard(r,at));
 });
+test('حجم خلاصه‌شده دقیق فرض نمی‌شود؛ حجم روز و قیمت همچنان قابل مشاهده‌اند',()=>{
+  const r=raw();r.depth[0][2]='100\n17M';const q=parseBoard(r,at);
+  assert.equal(q.sell_queue,null);assert.equal(q.rows[0].ask.volume,null);
+  assert.equal(q.rows[0].ask.volume_display,'17M');assert.equal(q.rounded_volume_levels,1);
+  assert.equal(q.volume,1000000);assert.equal(q.last_price,100);
+});
 
 async function archiveFixture({badResult=false}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'brs-board-test-'));

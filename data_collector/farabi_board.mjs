@@ -37,7 +37,12 @@ function num(s) {
   if(!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(t))throw new Error('عدد صحیح تابلو شناخته‌شده نیست');
   const n=Number(t.replaceAll(',',''));if(!Number.isSafeInteger(n))throw new Error('عدد تابلو خارج از حد است');return n;
 }
-function pair(s) { const p=normalized(s).split(/\s+/);if(p.length!==2)throw new Error('قیمت/حجم مظنه مبهم است');return p.map(num); }
+function pair(s) {
+  const p=normalized(s).split(/\s+/);if(p.length!==2)throw new Error('قیمت/حجم مظنه مبهم است');
+  // M/K/B/T مقدار گرد‌شده‌اند؛ ضرب آن‌ها در ضریب، تعداد دقیق سهم نمی‌سازد.
+  const compact=/^\d+(?:\.\d+)?[KMBT]$/i.test(p[1]);
+  return [num(p[0]),compact?null:num(p[1]),p[1]];
+}
 export function parseBoard(raw, receivedAt) {
   const at=new Date(receivedAt);
   if(!Number.isFinite(at.getTime()) || tehranNow(at)!==receivedAt)throw new Error('زمان دریافت باید تهران و استاندارد باشد');
@@ -75,9 +80,10 @@ export function parseBoard(raw, receivedAt) {
       if(!cell.trim()||/^(?:[-–—]|0)$/.test(cell.trim())) {
         if(count.trim()&&!/^(?:[-–—]|0)$/.test(count.trim()))throw new Error('مظنه ناقص است');return null;
       }
-      const [price,volume]=pair(cell),n=num(count);
-      if(price<=0||volume<=0||n<=0)throw new Error('مظنه مثبت لازم است');
-      return {price,volume,count_display:n,within_band:price>=low&&price<=high};
+      const [price,volume,volumeDisplay]=pair(cell),n=num(count);
+      if(price<=0||volume!==null&&volume<=0||n<=0)throw new Error('مظنه مثبت لازم است');
+      return {price,volume,volume_display:volumeDisplay,volume_precision:volume===null?'rounded_unknown':'integer',
+        count_display:n,within_band:price>=low&&price<=high};
     };return {bid:side(row[1],row[0]),ask:side(row[2],row[3])};
   });
   for(const side of ['bid','ask']) {
@@ -91,5 +97,6 @@ export function parseBoard(raw, receivedAt) {
     price_unit:'Rial',last_price:last,volume:num(v[1]),low_limit:low,high_limit:high,
     sell_queue:queue('ask',low),buy_queue:queue('bid',high),rows,trade_timestamp:tradeStamp,trade_age_seconds:age,
     independent_book_clock_verified:false,identity_mapping_independently_verified:false,exchange_latency_seconds:null,research_universe_member:null,
+    rounded_volume_levels:rows.reduce((n,row)=>n+['bid','ask'].filter(s=>row[s]&&row[s].volume_precision==='rounded_unknown').length,0),
     out_of_band_levels:rows.reduce((n,row)=>n+['bid','ask'].filter(s=>row[s]&&!row[s].within_band).length,0)};
 }
