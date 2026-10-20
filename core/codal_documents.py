@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 DOCUMENT_VERSION = 'codal-document-v1'
 CODAL_BASE = 'https://codal.ir/'
 PUBLIC_HOSTS = frozenset({'codal.ir', 'www.codal.ir'})
-REPORT_ONLY_PATHS = frozenset({'interimstatement.aspx', 'monthlyactivity.aspx'})
+REPORT_ONLY_PATHS = frozenset({'interimstatement.aspx', 'monthlyactivity.aspx', 'extraassembly.aspx'})
 PUBLIC_PATHS = frozenset({'decision.aspx', 'attachment.aspx', 'downloadfile.aspx', *REPORT_ONLY_PATHS})
 
 
