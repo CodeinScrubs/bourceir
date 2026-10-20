@@ -1,4 +1,4 @@
-param([switch] $Check)
+param([switch] $Check, [switch] $Watch)
 $ErrorActionPreference = 'Stop'
 try {
     $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -37,7 +37,8 @@ try {
     }
     if ($Check) { Write-Host 'Capture entry point check passed. No website or account was opened.'; exit 0 }
     $env:BRS_PLAYWRIGHT_MODULE = $modulePath
-    & $nodeExe (Join-Path $PSScriptRoot 'farabi_capture.mjs')
+    $entryScript = if ($Watch) { 'farabi_watch.mjs' } else { 'farabi_capture.mjs' }
+    & $nodeExe (Join-Path $PSScriptRoot $entryScript)
     exit $LASTEXITCODE
 } catch {
     Write-Host "Farabi capture could not start: $($_.Exception.Message)"

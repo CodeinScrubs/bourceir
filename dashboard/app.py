@@ -411,6 +411,9 @@ def feature_panel(symbol: str) -> None:
 
 def page_live() -> None:
     st.title("📡 دیده‌بان زنده")
+    from dashboard.board_alerts import board_alert_panel
+
+    board_alert_panel()
     status = jobs.job_status("live")
     if not status["running"]:
         st.info("پایش زنده خاموش است. از صفحه «خانه» آن را روشن کنید. (جدول زیر آخرین وضعیت ثبت‌شده را نشان می‌دهد)")
