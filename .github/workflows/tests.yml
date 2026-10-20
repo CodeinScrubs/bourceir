@@ -97,6 +97,8 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         node tests/board_watch.browser.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # مسیر fixture فقط نصف محیط سفارشی است؛ آزمون launcher باید از نصب پیش‌فرض کامل استفاده کند.
+        Remove-Item Env:BRS_PLAYWRIGHT_MODULE
         cmd /c "call WATCH_FARABI.bat --check"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
