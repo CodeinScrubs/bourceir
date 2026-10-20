@@ -133,7 +133,7 @@ def test_redirect_limit_is_bounded_and_all_responses_close():
     assert len(session.calls) == 4 and all(row.closed for row in responses)
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
 def test_official_new_report_redirect_can_be_archived(tmp_path,route):
     target='/Reports/'+route+'?LetterSerial=test'
     redirect=Response(status=302,headers={'Location':target});body=Response()
@@ -144,14 +144,14 @@ def test_official_new_report_redirect_can_be_archived(tmp_path,route):
     assert redirect.closed and body.closed and not result['text_extraction_complete']
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
 def test_official_new_report_root_path_is_not_assumed_public(route):
     api,session=provider()
     with pytest.raises(ValueError):api.get_document('https://codal.ir/'+route+'?LetterSerial=test')
     assert session.calls==[]
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
 @pytest.mark.parametrize('unsafe',['https://evil.test/Reports/','https://codal.ir/Reports/'])
 def test_official_new_report_does_not_allow_external_or_session_redirects(route,unsafe):
     target=unsafe+route+'?LetterSerial=test'+('&session=secret' if 'codal.ir' in unsafe else '')
