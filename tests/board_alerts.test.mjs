@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import {BoardAlerts,validateRule} from '../core/board_alerts.mjs';
 import {isBoardUrl,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 import {reviewArchive} from '../scripts/farabi_watch_review.mjs';
-import {atomic} from '../scripts/farabi_watch.mjs';
+import {atomic,boardFeedState} from '../scripts/farabi_watch.mjs';
 
 const at='2026-10-20T10:00:00.000+03:30';
 const quote=(queue=59000000,volume=1000000,extra={})=>({key:'TEST00000001',symbol:'آزمون',market_day:'2026-10-20',
@@ -15,6 +15,15 @@ const quote=(queue=59000000,volume=1000000,extra={})=>({key:'TEST00000001',symbo
 const raw=()=>({url:'https://farabixo.irfarabi.com/?isin=TEST00000001',title:'آزمون 100 ▼ 2.91%',
   identity:'آزمون - شرکت آزمون - فرابورس',volume:'حجم معاملات\n1,000,000',last_trade:'زمان آخرین معامله\n1405/7/28 09:59:59',
   limits:'100\nبازه مجاز روزانه\n110',depth:Array.from({length:5},(_,i)=>['1',`${99-i}\n10`,`${100+i}\n${1000+i}`,'1'])});
+
+test('تابلوی باز با تاریخ نامعلوم، انتظار ورود یا دریافت معتبر معرفی نمی‌شود',()=>{
+  assert.equal(boardFeedState(0,[]).feed_state,'awaiting_board');
+  const invalid=boardFeedState(1,[{ok:false,error:'تاریخ جلسه در تابلو معلوم نیست'}]);
+  assert.equal(invalid.feed_state,'invalid_board');assert.equal(invalid.valid_board_count,0);
+  assert.equal(boardFeedState(2,[{ok:true},{ok:false}]).feed_state,'partial');
+  assert.equal(boardFeedState(1,[{ok:true}]).feed_state,'observed');
+  assert.throws(()=>parseBoard({...raw(),last_trade:null},at),/تاریخ جلسه/);
+});
 
 test('اولین مشاهده هشدار نمی‌سازد و آستانه دلخواه معتبر است',()=>{
   const a=new BoardAlerts();assert.deepEqual(a.observe(quote(),0).events,[]);
