@@ -50,3 +50,28 @@ def test_archive_must_be_private_and_timestamps_aware(tmp_path):
     pointer['archive'] = str(tmp_path)
     (root / 'farabi-board' / 'current.json').write_text(json.dumps(pointer), encoding='utf-8')
     assert read_board_status(root, at=at)['state'] == 'invalid'
+
+
+def test_dashboard_monitor_uses_selected_data_directory_not_source_checkout(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from config import settings
+    from core.timeutils import now_tehran_iso
+
+    source = tmp_path / 'source'
+    runtime = tmp_path / 'runtime'
+    for directory, symbol in [(source / 'data', 'مبدأآزمون'), (runtime, 'اجرا‌آزمون')]:
+        root = directory / 'private'
+        archive = root / 'farabi-board/watch-test'
+        archive.mkdir(parents=True)
+        (root / 'farabi-board/current.json').write_text(json.dumps(dict(
+            url='http://127.0.0.1:12345', archive=str(archive))), encoding='utf-8')
+        (archive / 'status.json').write_text(json.dumps(dict(
+            version='visible-board-alerts-v1', running=True, updated_at=now_tehran_iso(),
+            boards=[dict(key='TEST00000001', symbol=symbol, ok=True, last_price=100, volume=1000)], alerts=[])),
+            encoding='utf-8')
+    monkeypatch.setattr(settings, 'BASE_DIR', source)
+    monkeypatch.setattr(settings, 'DATA_DIR', runtime)
+    app = AppTest.from_string('from dashboard.board_alerts import board_alert_panel\nboard_alert_panel()').run()
+    assert not app.exception
+    assert app.dataframe[0].value['نماد'].tolist() == ['اجرا‌آزمون']

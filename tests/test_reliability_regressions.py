@@ -50,7 +50,7 @@ def test_invalid_legal_value_is_distinguishable_from_absence():
     assert result.loc[24,'buy_legal_value_quality']=='invalid'
 
 
-def test_all_unknown_live_metrics_do_not_crash_or_display_invalid_flow(monkeypatch):
+def test_all_unknown_live_metrics_do_not_crash_or_display_invalid_flow(monkeypatch, isolated_board_monitor):
     bad=dict(symbol_fa='آزمون',real_buy_volume=3000.,real_sell_volume=400.,real_buy_count=10.,
              real_sell_count=10.,legal_buy_volume=400.,legal_sell_volume=600.,volume=1000.,value=100_000.,
              last_price=100.,ref_price=100.,close_price=100.,buy_queue_volume=0.,sell_queue_volume=0.,

@@ -139,3 +139,16 @@ def db(tmp_path):
     database = DatabaseManager(db_path=tmp_path / "test_brs.db")
     yield database
     database.close()
+
+
+@pytest.fixture
+def isolated_board_monitor(monkeypatch):
+    """آزمون صفحه هرگز فایل یا سرویس پایش واقعیِ دستگاه توسعه‌دهنده را نمی‌خواند."""
+    from dashboard import board_alerts
+
+    def provide(result=None):
+        value = {'state': 'absent'} if result is None else result
+        monkeypatch.setattr(board_alerts, 'read_board_status', lambda _: value)
+
+    provide()
+    return provide

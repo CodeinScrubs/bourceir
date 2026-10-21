@@ -92,8 +92,11 @@ export function parseBoard(raw, receivedAt) {
   const rows=raw.depth.map(row=>{
     if(!Array.isArray(row)||row.length!==4||row.some(s=>typeof s!=='string'))throw new Error('ستون‌های دفتر تغییر کرده‌اند');
     const side=(cell,count)=>{
-      if(!cell.trim()||/^(?:[-–—]|0)$/.test(cell.trim())) {
-        if(count.trim()&&!/^(?:[-–—]|0)$/.test(count.trim()))throw new Error('مظنه ناقص است');return null;
+      const empty=normalized(cell),orders=normalized(count);
+      // فارابی برای سطح بدون سفارش، قیمت و حجم صفر را در یک سلول جدا با خط جدید نمایش می‌دهد.
+      // فقط صفر صریحِ تمام اجزا خالی است؛ قیمت/حجم مثبت یا شمار سفارش مثبت همچنان تعارض‌اند.
+      if(!empty||/^(?:[-–—]|0(?:\s+0)?)$/.test(empty)) {
+        if(orders&&!/^(?:[-–—]|0)$/.test(orders))throw new Error('مظنه ناقص است');return null;
       }
       const [price,volume,volumeDisplay]=pair(cell),n=num(count);
       if(price<=0||volume!==null&&volume<=0||n<=0)throw new Error('مظنه مثبت لازم است');

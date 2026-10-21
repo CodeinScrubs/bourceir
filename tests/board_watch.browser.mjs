@@ -47,6 +47,16 @@ try {
     if(valid){assert(current.last_trade);assert.equal(parseBoard(current,tehranNow()).sell_queue,1000);}
     else{assert.equal(current.last_trade,null);assert.throws(()=>parseBoard(current,tehranNow()),/تاریخ جلسه/);}
   }
+  // چیدمان صفرهای صریحِ سمت بدون سفارش؛ فقط داده آزمون و بدون خواندن حساب واقعی.
+  for(const emptySide of ['bid','ask','both']){
+    fixture=template.replace('TIMESTAMP_FIELD',clock).replace(/<tr><td>1<\/td><td>(\d+)<br>10<\/td><td>(\d+)<br>1000<\/td><td>1<\/td><\/tr>/g,
+      (_,bid,ask)=>`<tr><td>${emptySide==='ask'?'1':'0'}</td><td>${emptySide==='ask'?bid+'<br>10':'0<br>0'}</td><td>${emptySide==='bid'?ask+'<br>1000':'0<br>0'}</td><td>${emptySide==='bid'?'1':'0'}</td></tr>`);
+    await page.reload();
+    const q=parseBoard(await page.evaluate(readBoardDom),tehranNow());
+    if(emptySide!=='ask'){assert(q.rows.every(row=>row.bid===null));assert.equal(q.buy_queue,null);}
+    if(emptySide!=='bid'){assert(q.rows.every(row=>row.ask===null));assert.equal(q.sell_queue,null);}
+    assert(!JSON.stringify(q).includes('DO_NOT_CAPTURE'));
+  }
   await page.goto('https://farabixo.irfarabi.com/?isin=TEST00000001&code=TEST_ONLY');
   assert.deepEqual(await page.evaluate(readBoardDom),{not_a_board:true});
   await page.close();
