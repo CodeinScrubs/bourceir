@@ -12,7 +12,7 @@ def board_alert_panel():
 
     @st.fragment(run_every=1)
     def panel():
-        result = read_board_status(settings.BASE_DIR / 'data' / 'private')
+        result = read_board_status(settings.DATA_DIR / 'private')
         if result['state'] == 'absent':
             st.info('برای هشدار نیم‌ثانیه‌ای، WATCH_FARABI.bat را اجرا کنید و در مرورگر موقت وارد فارابی شوید.')
             return

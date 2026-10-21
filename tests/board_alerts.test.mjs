@@ -120,6 +120,36 @@ test('دفتر خالی صفر فرض نمی‌شود و ترتیب سطوح ب�
   const r=raw();r.depth=Array.from({length:5},()=>['-','-','-','-']);assert.equal(parseBoard(r,at).sell_queue,null);
   r.depth[1]=['1','100\n10','101\n10','1'];assert.throws(()=>parseBoard(r,at));
 });
+
+test('قیمت و حجم صفر صریح در سمت خالی، سمت سالم دفتر را نامعتبر نمی‌کند',()=>{
+  for(const [cell,count]of [['0\n0','0'],['۰\n۰','۰'],['٠\n٠','٠']]){
+    for(const side of ['bid','ask']){
+      const r=raw();
+      for(const row of r.depth){if(side==='ask'){row[2]=cell;row[3]=count;}else{row[0]=count;row[1]=cell;}}
+      const q=parseBoard(r,at);
+      assert(q.rows.every(row=>row[side]===null));
+      assert.equal(q[side==='ask'?'sell_queue':'buy_queue'],null);
+      assert(q.rows.every(row=>row[side==='ask'?'bid':'ask']!==null));
+    }
+  }
+});
+
+test('نمایش تمام‌صفر دفتر، صف صفر یا افت قابل هشدار نمی‌سازد',()=>{
+  const r=raw();r.depth=Array.from({length:5},()=>['0','0\n0','0\n0','0']);
+  const q=parseBoard(r,at);assert.equal(q.sell_queue,null);assert.equal(q.buy_queue,null);
+  assert(q.rows.every(row=>row.bid===null&&row.ask===null));
+  const a=new BoardAlerts();a.observe(quote(),0);
+  assert.deepEqual(a.observe(quote(q.sell_queue),500).events,[]);
+});
+
+test('صفر ناقص، ردیف متعارض و سطح مثبت پس از سطح خالی همچنان رد می‌شوند',()=>{
+  for(const [cell,count]of [['0\n0','1'],['۰\n۰','۱'],['100\n0','0'],['0\n100','0'],['0\n0\n0','0']]){
+    const r=raw();r.depth[0][2]=cell;r.depth[0][3]=count;
+    assert.throws(()=>parseBoard(r,at));
+  }
+  const r=raw();r.depth[0][2]='0\n0';r.depth[0][3]='0';
+  assert.throws(()=>parseBoard(r,at),/ترتیب مظنه/);
+});
 test('حجم خلاصه‌شده دقیق فرض نمی‌شود؛ حجم روز و قیمت همچنان قابل مشاهده‌اند',()=>{
   const r=raw();r.depth[0][2]='100\n17M';const q=parseBoard(r,at);
   assert.equal(q.sell_queue,null);assert.equal(q.rows[0].ask.volume,null);

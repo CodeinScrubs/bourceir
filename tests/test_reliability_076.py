@@ -106,7 +106,12 @@ def test_explicit_feature_target_cannot_add_a_fund_to_ordinary_equities(db):
 
 
 @pytest.mark.parametrize('all_unknown', [True, False])
-def test_live_page_all_null_and_mixed_rows_render_without_invalid_flow(monkeypatch, all_unknown):
+@pytest.mark.parametrize('monitor_present', [True, False])
+def test_live_page_all_null_and_mixed_rows_render_without_invalid_flow(monkeypatch, all_unknown, monitor_present,
+                                                                     isolated_board_monitor):
+    if monitor_present:
+        isolated_board_monitor(dict(state='current', url='http://127.0.0.1:1', status=dict(
+            boards=[dict(key='TEST00000001', symbol='تابلوآزمون', ok=True, last_price=100, volume=1000)], alerts=[])))
     bad = live_snapshot(symbol_fa='آزمون', real_buy_volume=3000., value=100_000., ref_price=100.,
                         close_price=100., captured_at=now_tehran_iso(), provider_timestamp=now_tehran_iso(),
                         buy_queue_volume=0., sell_queue_volume=0.)
@@ -121,11 +126,16 @@ def test_live_page_all_null_and_mixed_rows_render_without_invalid_flow(monkeypat
     monkeypatch.setattr(st, '_brs_live_acceptance', namespace['page_live'], raising=False)
     app = AppTest.from_string('import streamlit as st\nst._brs_live_acceptance()').run()
     assert not app.exception
-    table = app.dataframe[0].value
+    metric = 'برآورد پول حقیقی (میلیارد تومان)'
+    tables = [frame.value for frame in app.dataframe if metric in frame.value.columns]
+    assert len(tables) == 1
+    table = tables[0]
     assert pd.isna(table.loc[table['نماد'].eq('آزمون'), 'برآورد پول حقیقی (میلیارد تومان)']).all()
     if all_unknown:
         app.radio[0].set_value('قدرت خریدار > ۲').run()
-        assert not app.exception and not app.dataframe
+        assert not app.exception
+        assert not any(metric in frame.value.columns for frame in app.dataframe)
+        assert len(app.dataframe) == int(monitor_present)
 
 
 def test_runtime_mismatch_masks_all_current_profit_paths_in_export(paper, db, monkeypatch):
