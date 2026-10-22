@@ -3,6 +3,8 @@
 from collections import Counter, defaultdict
 from decimal import Decimal
 
+from config import settings
+from core.fee_audit import compare_export_fees
 from core.screening import current_daily_row
 
 
@@ -122,6 +124,7 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                                fees_rial=float(sum((Decimal(str(x['fee_rial'])) for x in records), Decimal(0))),
                                missing_symbol_count=sum(x['raw_symbol'] is None for x in records),
                                side_counts=dict(Counter(r['side'] for r in records)))
+        report['fee_comparison'] = compare_export_fees(records, dict(settings.FEES))
         if turnover:
             report['trade_cash_comparison'] = compare_trade_cash(turnover['rows'], records)
     if baseline:

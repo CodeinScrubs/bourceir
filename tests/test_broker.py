@@ -5,6 +5,7 @@ import io
 import json
 import sqlite3
 import zipfile
+from types import SimpleNamespace
 from xml.sax.saxutils import escape
 
 import pytest
@@ -142,6 +143,71 @@ def test_fills_preserve_identical_executions_actual_fractional_fees_and_missing_
     assert result['rows'][0]['fee_rial'] == 7.424
     assert result['rows'][2]['raw_symbol'] is None
     assert not result['actual_history_complete']
+
+
+def test_account_fee_comparison_uses_reported_charges_without_creating_or_repairing_fills(db, capture):
+    repo = BrokerRepository(db)
+    import_report(repo, encoded(capture), 'portfolio.json')
+    source = import_report(repo, workbook([FILLS_HEADERS,
+        ['1400/01/02 10:00:00', 'خرید', '', 2, 1000, 9.424],
+        ['1400/01/02 10:00:00', 'خرید', '', 2, 1000, 5.424]]), 'orders.xlsx')
+    before = db.conn.total_changes
+    report = broker_report(db)
+    costs = report['fee_comparison']
+    assert db.conn.total_changes == before
+    assert costs['row_count'] == 2 and costs['different_row_count'] == 2
+    assert costs['sides']['buy']['missing_symbol_rows'] == 2
+    assert float(costs['sides']['buy']['absolute_difference_rial']) == 4
+    assert float(costs['sides']['buy']['reported_minus_scenario_rial']) == 0
+    assert not costs['historical_fee_schedule_verified']
+    assert report['sources']['fills']['id'] == source
+    assert [r['fee_rial'] for r in repo.latest('fills')['rows']] == [9.424, 5.424]
+    assert db.conn.execute('SELECT COUNT(*) FROM journal_executions').fetchone()[0] == 0
+
+
+def test_readonly_account_report_command_keeps_database_and_imports_unchanged(db, capture, tmp_path, monkeypatch):
+    from brs import cmd_broker_report
+    from config import settings
+
+    repo = BrokerRepository(db)
+    import_report(repo, encoded(capture), 'portfolio.json')
+    import_report(repo, workbook([FILLS_HEADERS,
+        ['1400/01/02 10:00:00', 'خرید', '', 2, 1000, 7.424]]), 'orders.xlsx')
+    monkeypatch.setattr(settings, 'DB_PATH', db.db_path)
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    path = tmp_path / 'private' / 'report.json'
+    before = '\n'.join(db.conn.iterdump())
+    assert cmd_broker_report(SimpleNamespace(report=path)) == 0
+    result = json.loads(path.read_text(encoding='utf-8'))
+    assert result['database_access'] == 'read_only_consistent_snapshot'
+    assert result['fee_comparison']['row_count'] == 1
+    assert result['fee_comparison']['different_row_count'] == 0
+    assert '\n'.join(db.conn.iterdump()) == before
+    with pytest.raises(ValueError):
+        cmd_broker_report(SimpleNamespace(report=tmp_path / 'public.json'))
+
+
+def test_readonly_account_report_does_not_create_a_database_or_report_when_missing(tmp_path, monkeypatch):
+    from brs import cmd_broker_report
+    from config import settings
+
+    monkeypatch.setattr(settings, 'DB_PATH', tmp_path / 'missing.db')
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    output = tmp_path / 'private' / 'report.json'
+    with pytest.raises(sqlite3.OperationalError):
+        cmd_broker_report(SimpleNamespace(report=output))
+    assert not settings.DB_PATH.exists() and not output.exists()
+
+
+def test_readonly_account_report_returns_no_portfolio_without_a_fake_report(db, tmp_path, monkeypatch):
+    from brs import cmd_broker_report
+    from config import settings
+
+    monkeypatch.setattr(settings, 'DB_PATH', db.db_path)
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    output = tmp_path / 'private' / 'report.json'
+    assert cmd_broker_report(SimpleNamespace(report=output)) == 2
+    assert not output.exists()
 
 
 def test_xlsx_rejects_formulas_entities_and_truncated_zip():
@@ -324,6 +390,8 @@ def test_populated_broker_page_and_actual_cash_use_import_not_paper_capital(dash
         repo.adopt_baseline(source)
     app = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     app.sidebar.radio[0].set_value('🏦 حساب و تطبیق فارابی').run()
+    assert any('مقایسه کارمزد گزارش‌شده' in x.label for x in app.expander)
+    assert any('از 1 ردیف، 0 ردیف' in str(x.value) for x in app.markdown)
     assert not app.exception
     assert next(m for m in app.metric if m.label == 'قدرت خرید در فارابی').value == '20 تومان'
     assert len(app.dataframe[0].value) == 2
