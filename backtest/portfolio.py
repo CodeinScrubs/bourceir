@@ -12,6 +12,7 @@ from core import market_rules
 from core.risk import finite_number
 
 PORTFOLIO_VERSION = "portfolio-v4"
+RISK_EXIT_VERSION = "portfolio-risk-floor-exit-v1"
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,8 @@ def _calendar(values):
 
 def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                      config: PortfolioConfig, start: str | None = None, end: str | None = None,
-                     dip_rule=None, *, cash_dividends=None, bonus_shares=None, subscription_rights=None) -> PortfolioResult:
+                     dip_rule=None, *, cash_dividends=None, bonus_shares=None, subscription_rights=None,
+                     loss_floor_exit=False) -> PortfolioResult:
     """Decisions t -> next session; shared cash, slots, partial fills and delayed exits.
 
     Purchases precede sales in daily bookkeeping, so same-day sale proceeds cannot fund an earlier
@@ -67,6 +69,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     Unknown action/mark for an open position invalidates returns and halts the replay.
     """
     calendar = _calendar(calendar)
+    if type(loss_floor_exit) is not bool:
+        raise ValueError('گزینه خروج پس از حد زیان باید بولی صریح باشد')
     if subscription_rights is not None:
         from backtest.subscription_rights import LIMIT, SubscriptionRightsBook
 
@@ -120,6 +124,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     buy_fee, sell_fee = settings.FEES["buy"], settings.FEES["sell"]
     fractions = SyntheticFractionBook(sell_fee=sell_fee)
     slip, stopped, invalid, action_count = config.slippage_bps / 10000, False, False, 0
+    risk_exit_active, risk_exit_request_date = False, None
     day_position = {day: i for i, day in enumerate(calendar)}
 
     def held(symbol):
@@ -303,17 +308,19 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             break
         for key, pos in list(positions.items()):
             symbol = pos.get('symbol', key)
+            if risk_exit_active:
+                note(day, symbol, 'risk_exit_attempt', trigger_date=risk_exit_request_date)
             if subscription_rights is not None and day < pos.get('valuation_not_before', day):
                 note(day, symbol, 'credited_share_waiting_ex_price')
                 continue
-            lot_dip = None if pos.get('credit_only') else dip_rule
-            if lot_dip is None and index < pos["due"]:
+            lot_dip = None if pos.get('credit_only') or risk_exit_active else dip_rule
+            if lot_dip is None and index < pos["due"] and not risk_exit_active:
                 continue
             row = session.get(symbol)
             if row is None or not row["valid"] or row["down"]:
                 note(day, symbol, "exit_delayed")
                 continue
-            exit_kind = 'time'
+            exit_kind = 'loss_floor' if risk_exit_active else 'time'
             if lot_dip is not None:
                 opening = row['open_raw']
                 if not math.isfinite(opening) or not 0 < row['low_raw'] <= opening <= row['high_raw']:
@@ -410,6 +417,14 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         else:
             stopped |= floor_breached
             rights_pause = False
+        # A newly observed EOD breach can only request disposal from the next loop/session.
+        # An unvalued dividend/share claim is not a finite model NAV loss observation.
+        nav_known = not unvalued_share_rights() and not (
+            cash_dividends is not None and cash_dividends.outstanding_face_rial > 0)
+        if loss_floor_exit and floor_breached and nav_known and not risk_exit_active:
+            risk_exit_active, risk_exit_request_date = True, day
+            note(day, '', 'risk_exit_trigger', model_equity_rial=equity,
+                 floor_rial=config.initial_capital_rial*(1-config.max_loss_pct))
         stale = (sum(p['mark_date'] != day for p in positions.values()) if share_book is None else
                  len({p['symbol'] for p in positions.values() if p['mark_date'] != day}))
         curve.append(dict(date=day, equity_rial=equity, cash_rial=cash, positions=position_count(),
@@ -438,6 +453,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             if unvalued_share_rights():
                 curve[-1]['equity_rial'] = np.nan
                 curve[-1]['noncash_receivable_rial'] = np.nan
+        if loss_floor_exit:
+            curve[-1]['risk_exit_requested'] = risk_exit_active
         if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped and not rights_pause:
             reservable_cash = cash
             occupied=exposure_symbols()
@@ -592,4 +609,19 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 'no rights market execution or queue position inferred from a disposal receipt',
                 'simultaneous dividend/right ex-dates, bonus mixtures and overlapping uncredited actions require separate contracts',
                 'unknown pre-ex credited-share marks and unsettled claims keep economic NAV unknown'])
+    if loss_floor_exit:
+        risk_sells = [row for row in executions if row.get('exit_kind') == 'loss_floor']
+        unvalued_claim = unvalued_share_rights() or (
+            cash_dividends is not None and cash_dividends.outstanding_face_rial > 0)
+        fully_flat = position_count() == 0 and not fractions.exposures and not unvalued_claim
+        metrics.update(risk_exit_request_date=risk_exit_request_date,
+            risk_exit_sell_executions=len(risk_sells),
+            risk_exit_first_sale_date=risk_sells[0]['date'] if risk_sells else None,
+            risk_exit_remaining_positions=position_count(),
+            risk_exit_fully_liquidated=None if risk_exit_request_date is None else fully_flat)
+        assumptions.update(base_accounting_version=assumptions['version'], version=RISK_EXIT_VERSION,
+            risk_exit_policy='finite marked model NAV EOD breach; pause entries and request all whole-share exits next session',
+            risk_exit_unknown_nav_triggered=False, risk_exit_threshold_is_execution_price=False,
+            risk_exit_stale_marks='retained under existing model and reported; not verified current liquidation value',
+            risk_exit_queue_capacity_enforced=True, risk_exit_loss_cap_guaranteed=False)
     return PortfolioResult(equity_frame, pd.DataFrame(executions), pd.DataFrame(decisions), metrics, assumptions)
