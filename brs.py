@@ -158,6 +158,28 @@ def cmd_broker_import(args) -> int:
     return 0
 
 
+def cmd_broker_report(args) -> int:
+    from core.timeutils import now_tehran_iso
+    from database.broker import broker_report
+    from database.db import DatabaseManager
+    from ops.report_files import private_report_path, write_private_report
+
+    output = private_report_path(args.report, forbidden_paths=(settings.DB_PATH,))
+    with DatabaseManager(read_only=True) as db:
+        db.conn.execute('BEGIN')
+        try:
+            report = broker_report(db)
+        finally:
+            db.conn.rollback()
+    if report is None:
+        print('گزارش سبد وارد نشده است؛ گزارش تازه ساخته نشد.')
+        return 2
+    report.update(report_generated_at=now_tehran_iso(), database_access='read_only_consistent_snapshot')
+    write_private_report(output, report, forbidden_paths=(settings.DB_PATH,))
+    print('گزارش خصوصی حساب و مقایسه فرض کارمزد، فقط از داده محلی ساخته شد؛ تعرفه تاریخی تأیید نمی‌شود.')
+    return 0
+
+
 def cmd_broker_quotes(args) -> int:
     import json
 
@@ -781,6 +803,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--report', default=str(settings.DATA_DIR / 'private' / 'farabi-reconciliation.json'))
     p.add_argument('--adopt-baseline', action='store_true', help='شروع صریح مرحله جدید با سرمایه اسنپ‌شات و سقف زیان ۱۰٪')
     p.set_defaults(func=cmd_broker_import)
+
+    p = sub.add_parser('broker-report', help='گزارش آفلاین و فقط‌خواندنی حساب و مقایسه فرض کارمزد؛ بدون اتصال به کارگزاری')
+    p.add_argument('--report', default=str(settings.DATA_DIR / 'private' / 'farabi-reconciliation.json'))
+    p.set_defaults(func=cmd_broker_report)
 
     p = sub.add_parser('broker-refresh-quotes', help='تازه‌سازی قیمت عمومی همه دارایی‌های واردشده، بدون اتصال به کارگزاری')
     p.add_argument('--report', default=str(settings.DATA_DIR / 'private' / 'farabi-reconciliation.json'))

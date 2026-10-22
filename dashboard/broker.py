@@ -119,6 +119,19 @@ def page_broker():
         st.write(f"خروجی سابقه سفارشات: {fills['count']} ردیف معاملات؛ جمع کارمزد گزارش‌شده در همین فایل: {_toman(fills['fees_rial'])}؛ "
                  f"تعداد نام نماد نامعلوم در خروجی: {fills['missing_symbol_count']}")
         st.caption('ردیف‌های این خروجی شناسه یکتای اجرای بورس ندارند. این شمار، تعداد سفارش یا اجراهای مستقل و کامل حساب را اثبات نمی‌کند.')
+    if report.get('fee_comparison'):
+        costs = report['fee_comparison']
+        with st.expander('مقایسه کارمزد گزارش‌شده با فرض ثابت پژوهش'):
+            st.write(f"از {costs['row_count']} ردیف، {costs['different_row_count']} ردیف بیش از "
+                     f"{costs['tolerance_rial']} ریال با محاسبه نرخ ثابت تنظیمات اختلاف دارند.")
+            st.caption('این مقایسه، تعرفه رسمی تاریخ معامله را تأیید نمی‌کند. نوع ورقه، تغییر تعرفه، سقف کارمزد، تخفیف و گردشدن قیمت میانگین ممکن است اختلاف ایجاد کنند؛ کارمزد گزارش‌شده حفظ می‌شود.')
+            rows = [dict(side={'buy': 'خرید', 'sell': 'فروش'}[side], **values)
+                    for side, values in costs['sides'].items()]
+            st.dataframe(pd.DataFrame(rows)[['side', 'row_count', 'reported_fee_rial', 'scenario_fee_rial',
+                                            'absolute_difference_rial']].rename(columns={
+                'side': 'سمت', 'row_count': 'ردیف', 'reported_fee_rial': 'کارمزد گزارش (ریال)',
+                'scenario_fee_rial': 'کارمزد سناریو (ریال)',
+                'absolute_difference_rial': 'جمع قدرمطلق اختلاف‌ها (ریال)'}), hide_index=True)
     if report.get('trade_cash_comparison'):
         comparison = report['trade_cash_comparison']
         counts = comparison['status_counts']
