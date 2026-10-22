@@ -97,6 +97,7 @@ def test_session_candles_from_market_watch(db, market_watch_rows, closing_price_
         "GetClosingPriceDailyList": {"closingPriceDaily": closing_price_daily},
     }
     collector = _collector(db, routes)
+    collector.provider.supports_dated_publications = False  # Retain explicit coverage of the legacy watch contract.
     collector.sync_universe()
     collector.collect_history(symbols=["فولاد"])
     report = collector.collect_session_candles()

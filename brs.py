@@ -80,7 +80,8 @@ def _print_report(title: str, report: dict) -> None:
     print(f"\n📊 {title}: وضعیت {report.get('status')} | موفق {report.get('symbols_succeeded', 0)} "
           f"| ناموفق {report.get('symbols_failed', 0)}", flush=True)
     for key in ("rows_inserted", "anomalies_flagged", "new_announcements", "received", "deactivated",
-                "unchanged_skipped", "market_date"):
+                "unchanged_skipped", "market_date", "zero_activity_observations", "coherent_retail_pairs",
+                "unknown_retail_pairs", "evidence_path"):
         if key in report:
             print(f"   • {key}: {report[key]}")
     for err in (report.get("errors") or [])[:10]:
@@ -107,6 +108,15 @@ def cmd_doctor(args) -> int:
         }, forbidden_paths=[settings.DB_PATH])
         print(f"گزارش JSON: {target}")
     return 1 if report.worst == ERROR else 0
+
+
+def cmd_publication_review(args) -> int:
+    import json
+
+    from data_collector.daily_publications import review_archive
+
+    print(json.dumps(review_archive(args.path), ensure_ascii=False, allow_nan=False))
+    return 0
 
 
 def cmd_audit(args) -> int:
@@ -176,14 +186,14 @@ def cmd_update(args) -> int:
     try:
         print("📥 به‌روزرسانی داده‌ها آغاز شد...", flush=True)
         reports = collector.update_all(full=args.full, progress=_progress)
-        titles = {"universe": "جامعه سهام", "session_candles": "کندل امروز (دیده‌بان)", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
+        titles = {"universe": "جامعه سهام", "session_candles": "کندل تاریخ‌دار امروز", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
         for key, report in reports.items():
             _print_report(titles.get(key, key), report)
         complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
-        # Validated daily history/client types are required; the session watch is supplemental.
-        # Its failure remains visible in reports/exit status, never relabeled as success.
+        # The legacy watch is supplemental. A failed native publication stage must not
+        # publish a newly dated feature manifest over an incomplete refresh.
         usable = all(r.get("status") in {'success', 'skipped'} for k, r in reports.items()
-                     if k not in {"codal", "session_candles"})
+                     if k != 'codal' and (k != 'session_candles' or r.get('native_date_and_identity_required')))
         if usable and not args.symbols and not args.no_features:
             _build_features(collector.db)
         elif not usable:
@@ -755,6 +765,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("audit", help="گزارش فقط‌خواندنی کیفیت آرشیو واقعی، بدون اتصال اینترنت")
     p.add_argument("--json", default="logs/data-audit.json", help="مسیر گزارش کیفیت داده")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser('publication-review', help='بازخوانی بایت و محاسبات آرشیو دریافت روزانه؛ تأیید سود نیست')
+    p.add_argument('path', type=Path, help='پوشه DAYPUB در آرشیو خصوصی دریافت روزانه')
+    p.set_defaults(func=cmd_publication_review)
 
     p = sub.add_parser('market-review', help='بررسی توصیفی جلسه جاری با تاریخ مستقل هر سهم و شواهد محفوظ')
     p.add_argument('--workers', type=int, choices=(1, 2, 3, 4), default=3)

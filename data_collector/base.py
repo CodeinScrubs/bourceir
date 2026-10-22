@@ -37,6 +37,14 @@ class BaseDataProvider(ABC):
     """کلاس پایه انتزاعی برای تامین‌کنندگان داده بازار بورس."""
 
     name: str = "base"
+    supports_dated_publications: bool = False
+
+    def close(self) -> None:
+        """آزادکردن منابع یک نمونه ساخته‌شده توسط گردآورنده؛ پیش‌فرض منبعی ندارد."""
+
+    def get_daily_publication_observation(self, ins_code: str, trade_date: str, kind: str) -> Optional[Dict[str, Any]]:
+        """بایت بومی قیمت/client با هویت و تاریخ صریح؛ دریافت به معنی اعتبار یا اجرای معامله نیست."""
+        raise NotImplementedError
 
     @abstractmethod
     def test_connection(self) -> bool:

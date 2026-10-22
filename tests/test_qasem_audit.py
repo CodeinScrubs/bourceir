@@ -161,6 +161,7 @@ def test_selected_update_collects_codal_for_each_selected_symbol(explicit):
     collector = DataCollector.__new__(DataCollector)
     collector.symbols = None if explicit else ['کیان', 'دیگر']
     collector.collect_history = lambda *a, **k: success
+    collector.collect_session_candles = lambda *a, **k: success
     collector.collect_client_types = lambda *a, **k: success
     collector.collect_announcements = lambda pages, symbol_fa: requested.append(symbol_fa) or success
     collector.db = SimpleNamespace(log_collection=lambda **_: None)
