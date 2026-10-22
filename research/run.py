@@ -141,7 +141,8 @@ def build_label_store(db: DatabaseManager, root: Optional[Path] = None, end_date
         "slippage_bps_each_side": settings.BACKTEST_CONFIG["default_slippage_bps"],
         "lock_min_move_pct": settings.BACKTEST_CONFIG["lock_min_move_pct"],
         "execution": "entry next market session VWAP+slippage; exit h sessions later VWAP-slippage, "
-                     "rolled to first non-locked day; censored exits stay unknown; synthetic corporate-action share multiplier",
+                     "rolled to first non-locked calendar session; calendar-conflicted paths invalid; "
+                     "censored exits stay unknown; synthetic corporate-action share multiplier",
         "database_schema_version": schema,
         "parquet_sha256": _sha256(tmp),
     }
