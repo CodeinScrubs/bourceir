@@ -7,8 +7,8 @@ and content-bound observations available before those times can be joined.
 import hashlib
 import json
 import re
-from datetime import datetime
-from numbers import Real
+from datetime import date, datetime, timedelta
+from numbers import Integral, Real
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,8 @@ from config import settings
 from core.text import normalize_symbol
 from core.timeutils import TEHRAN_TZ, is_canonical_iso_date
 
-VERSION = 'research-extension-panel-v1'
+VERSION = 'research-extension-panel-v2'
+FINGERPRINT_VERSION = 'typed-ordered-panel-sha256-v1'
 KEYS = ['date', 'symbol']
 METADATA = {'date', 'symbol', 'feature', 'value', 'unit', 'observed_at', 'available_at',
             'source', 'source_sha256', 'module_version', 'quality_status'}
@@ -51,6 +52,38 @@ def _number(value):
         return None
 
 
+def _cell(value):
+    """Typed scalar encoding; preserve float bits and never pickle objects."""
+    if value is None or value is pd.NA or value is pd.NaT:
+        return ['missing']
+    if isinstance(value, (bool, np.bool_)):
+        return ['bool', bool(value)]
+    if isinstance(value, Integral):
+        return ['integer', str(int(value))]
+    if isinstance(value, Real):
+        return ['float', float(value).hex()]
+    if isinstance(value, (datetime, date)):
+        return ['datetime' if isinstance(value, datetime) else 'date', value.isoformat()]
+    if isinstance(value, str):
+        return ['text', value]
+    if isinstance(value, tuple):
+        return ['tuple', [_cell(item) for item in value]]
+    raise ValueError('نوع سلول برای اثر انگشت پژوهش پشتیبانی نمی‌شود؛ ورودی صریح لازم است')
+
+
+def _fingerprint(frame):
+    """Bind ordered normalized values, columns, dtypes and index with bounded memory."""
+    digest = hashlib.sha256()
+    def add(value):
+        digest.update(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode())
+        digest.update(b'\n')
+    add(dict(version=FINGERPRINT_VERSION, columns=[_cell(c) for c in frame.columns],
+             dtypes=[str(t) for t in frame.dtypes], index_names=[_cell(n) for n in frame.index.names]))
+    for index, row in zip(frame.index, frame.itertuples(index=False, name=None)):
+        add([_cell(index), [_cell(v) for v in row]])
+    return digest.hexdigest()
+
+
 def _keys(frame, before):
     if not isinstance(frame, pd.DataFrame) or frame.columns.duplicated().any() or not set(KEYS) <= set(frame):
         raise ValueError('جدول باید ستون‌های یکتای تاریخ و نماد داشته باشد')
@@ -65,7 +98,7 @@ def _keys(frame, before):
 
 
 def merge_research_extension(base, observations, *, module, module_version, feature_units,
-                             sources, module_code_sha256, end_exclusive):
+                             sources, module_code_sha256, end_exclusive, max_age_seconds=None):
     """Left join one research family without extending the sealed selection window.
 
     Observations are LONG form: one row per date/symbol/feature, plus METADATA.
@@ -73,6 +106,8 @@ def merge_research_extension(base, observations, *, module, module_version, feat
     Availability means actual strategy availability, not an effective/report date.
     Matching bytes and timestamps do not independently certify their semantics.
     Missing, bad, late and unmatched observations never become usable zeroes.
+    Optional per-feature ages are measured from observation/confirmation to the
+    canonical decision, not from a later receipt or re-publication timestamp.
     """
     cutoff = settings.RESEARCH_CONFIG['holdout_start']
     if (not is_canonical_iso_date(end_exclusive) or end_exclusive > cutoff
@@ -84,6 +119,13 @@ def merge_research_extension(base, observations, *, module, module_version, feat
         raise ValueError('فهرست صریح فیچر و واحد لازم است؛ برچسب آینده فیچر نیست')
     if not isinstance(sources, dict):
         raise ValueError('بدنه منابع باید صریح باشد')
+    limits = dict.fromkeys(feature_units)
+    if max_age_seconds is not None:
+        if (not isinstance(max_age_seconds, dict) or set(max_age_seconds) != set(feature_units)
+                or any(v is not None and (type(v) is not int or not 0 <= v <= 2**31-1)
+                       for v in max_age_seconds.values())):
+            raise ValueError('حد تازگی تمام فیچرها باید ثانیه صحیح غیرمنفی یا None صریح باشد')
+        limits = dict(max_age_seconds)
     for digest, body in sources.items():
         if (not isinstance(digest, str) or not isinstance(body, bytes)
                 or hashlib.sha256(body).hexdigest() != digest):
@@ -105,8 +147,9 @@ def merge_research_extension(base, observations, *, module, module_version, feat
         raise ValueError('نسخه یا کلید تکراری باید پیش از ادغام تطبیق داده شود')
     names = {f: f'{module}__{f}' for f in feature_units}
     added = [c for n in names.values() for c in (n, n+'__status')]
-    if set(added) & set(out):
+    if len(set(added)) != len(added) or set(added) & set(out):
         raise ValueError('نام خروجی ماژول با ستون موجود برخورد دارد')
+    base_sha, observations_sha = _fingerprint(out), _fingerprint(obs)
     for name in names.values():
         out[name] = np.nan
         out[name+'__status'] = 'no_observation'
@@ -127,6 +170,8 @@ def merge_research_extension(base, observations, *, module, module_version, feat
             reason = 'unknown_or_naive_timestamp'
         elif not observed <= available <= decision:
             reason = 'unavailable_at_decision'
+        elif limits[feature] is not None and observed < decision - timedelta(seconds=limits[feature]):
+            reason = 'stale_observation'
         elif not isinstance(row['module_version'], str) or row['module_version'] != module_version:
             reason = 'module_version_mismatch'
         elif not isinstance(row['quality_status'], str) or row['quality_status'] != 'valid':
@@ -158,6 +203,9 @@ def merge_research_extension(base, observations, *, module, module_version, feat
         end_exclusive=end_exclusive, holdout_start=cutoff, base_rows=len(out),
         output_rows=len(out), observation_rows=len(obs), outside_base_rows=outside,
         status_counts=counts, source_sha256=sorted(sources), base_decisions_sha256=decisions_hash,
+        max_age_seconds=limits, fingerprint_contract=FINGERPRINT_VERSION,
+        normalized_base_sha256=base_sha, normalized_observations_sha256=observations_sha,
+        output_panel_sha256=_fingerprint(out),
         observations=audit_rows, native_semantics_independently_verified=False,
         historical_universe_verified=False, accepted_for_signals=False,
         profitability_proven=False, feature_store_mutated=False)

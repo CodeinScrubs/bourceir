@@ -151,3 +151,104 @@ def test_timezone_equivalence_and_normalized_symbol_match():
 def test_new_unmatched_symbol_does_not_expand_universe():
     out, audit = merge([observation(), observation(symbol='خارج')])
     assert len(out) == 1 and audit['outside_base_rows'] == 1
+
+
+def test_generated_status_column_cannot_also_be_a_feature():
+    rows = [observation(), observation(feature='metric__status', value=42.)]
+    with pytest.raises(ValueError, match='برخورد'):
+        merge(rows, feature_units={'metric':'Rial', 'metric__status':'Rial'})
+
+
+def test_manifest_changes_when_the_observed_feature_value_changes():
+    _, first = merge([observation(value=1.)])
+    _, second = merge([observation(value=2.)])
+    assert first != second
+
+
+def test_manifest_changes_when_a_base_feature_changes():
+    _, first = merge(canonical=base(ret_1d=.01))
+    _, second = merge(canonical=base(ret_1d=.02))
+    assert first != second
+
+
+def test_manifest_changes_when_an_unmatched_observation_changes():
+    _, first = merge([observation(symbol='خارج', value=1.)])
+    _, second = merge([observation(symbol='خارج', value=2.)])
+    assert first != second
+
+
+@pytest.mark.parametrize('observed,limit,status', [
+    ('2024-01-02T08:59:00+03:30', 60, 'eligible'),
+    ('2024-01-02T08:58:59.999999999+03:30', 60, 'stale_observation'),
+    ('2024-01-02T08:00:00+03:30', 60, 'stale_observation'),
+    ('2024-01-02T09:00:00+03:30', 0, 'eligible'),
+    ('2024-01-02T08:59:59.999999999+03:30', 0, 'stale_observation'),
+])
+def test_declared_freshness_uses_observation_not_a_late_receipt(observed, limit, status):
+    out, audit = merge([observation(observed_at=observed, available_at='2024-01-02T09:00:00+03:30')],
+                       max_age_seconds={'metric':limit})
+    assert out.loc[77, 'test__metric__status'] == status
+    assert pd.isna(out.loc[77, 'test__metric']) == (status != 'eligible')
+    assert audit['max_age_seconds'] == {'metric':limit}
+    assert not audit['accepted_for_signals']
+
+
+@pytest.mark.parametrize('limits', [{}, {'other':60}, {'metric':60, 'extra':60}, [],
+    {'metric':True}, {'metric':1.5}, {'metric':-1}, {'metric':'60'}, {'metric':float('inf')}, {'metric':2**40}])
+def test_freshness_policy_is_explicit_for_the_whole_declared_family(limits):
+    with pytest.raises(ValueError, match='حد تازگی'):
+        merge(max_age_seconds=limits)
+
+
+def test_unknown_freshness_limit_is_explicit_and_not_an_implicit_seconds_feed():
+    rows = [observation(observed_at='2024-01-02T08:00:00+03:30')]
+    out, audit = merge(rows)
+    assert out.loc[77, 'test__metric__status'] == 'eligible'  # Timing contract only.
+    assert audit['max_age_seconds'] == {'metric':None}
+    assert not audit['native_semantics_independently_verified']
+
+
+def test_freshness_limits_are_specific_to_each_feature():
+    rows = [observation(observed_at='2024-01-02T08:00:00+03:30'),
+            observation(feature='context', observed_at='2024-01-02T08:00:00+03:30')]
+    out, audit = merge(rows, feature_units={'metric':'Rial','context':'Rial'},
+        max_age_seconds={'metric':60,'context':None})
+    assert out.loc[77, 'test__metric__status'] == 'stale_observation'
+    assert out.loc[77, 'test__context__status'] == 'eligible'
+    assert audit['status_counts'] == {'stale_observation':1,'eligible':1}
+
+
+def test_manifest_binds_values_without_rounding_away_one_float_step():
+    _, first = merge([observation(value=1.)])
+    _, second = merge([observation(value=np.nextafter(1., 2.))])
+    assert first['normalized_observations_sha256'] != second['normalized_observations_sha256']
+    assert first['output_panel_sha256'] != second['output_panel_sha256']
+    assert first['normalized_base_sha256'] == second['normalized_base_sha256']
+
+
+def test_fingerprints_are_repeatable_and_preserve_nondefault_index():
+    b = base()
+    b.index = pd.MultiIndex.from_tuples([('sample', 77)], names=['case','row'])
+    out, first = merge(canonical=b)
+    _, second = merge(canonical=b)
+    assert first == second and out.index.equals(b.index)
+    assert first['version'] == 'research-extension-panel-v2'
+
+
+def test_unserializable_objects_fail_closed_instead_of_an_unbound_manifest():
+    with pytest.raises(ValueError, match='اثر انگشت'):
+        merge([observation(value=object())])
+
+
+def test_sealed_boundary_is_checked_before_cell_fingerprints():
+    class NeverInspect:
+        def __repr__(self):
+            raise AssertionError('sealed value inspected')
+    with pytest.raises(ValueError, match='مرز'):
+        merge([observation(date='2026-10-20', symbol='خارج', value=NeverInspect())])
+
+
+def test_missing_and_nonfinite_cells_have_json_safe_fingerprints():
+    _, audit = merge([observation(value=float('nan'))], canonical=base(ret_1d=float('inf')))
+    assert audit['status_counts'] == {'unknown_or_invalid_number':1}
+    json.dumps(audit, allow_nan=False)
