@@ -25,6 +25,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import settings
+from core.daily_publications import publication_request
 from core.dividend_evidence import MAX_BYTES, dividend_request
 from core.instrument_history import history_request
 from core.legacy_quotes import MAX_BYTES as QUOTE_MAX_BYTES
@@ -57,6 +58,17 @@ class TsetmcProvider(BaseDataProvider):
     """تامین‌کننده داده بازار سهام از وب‌سرویس JSON سایت TSETMC."""
 
     name = "tsetmc"
+    supports_dated_publications = True
+
+    def close(self) -> None:
+        if hasattr(self.session, 'close'):
+            self.session.close()
+
+    def get_daily_publication_observation(self, ins_code: str, trade_date: str, kind: str) -> Optional[Dict[str, Any]]:
+        code, url = publication_request(ins_code, trade_date, kind)
+        observation = self._get_quote_context_json(code, url)
+        return (None if observation is None else dict(observation, kind=kind,
+                requested_date=trade_date, price_unit='Rial'))
 
     def __init__(self, session: Optional[requests.Session] = None, *, realtime=False):
         if type(realtime) is not bool:

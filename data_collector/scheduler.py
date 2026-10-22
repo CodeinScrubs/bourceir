@@ -19,10 +19,13 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from config import settings
+from core.client_quality import validated_client_data
+from core.daily_publications import publication_request
 from core.text import normalize_symbol
-from core.timeutils import is_market_open, now_tehran, now_tehran_iso
+from core.timeutils import is_canonical_iso_date, is_market_open, now_tehran, now_tehran_iso
 from data_collector.base import DAILY_COLUMNS, BaseDataProvider
 from data_collector.codal import CodalProvider
+from data_collector.daily_publications import DailyPublicationArchive
 from data_collector.tsetmc import TsetmcProvider
 from data_collector.universe import UniverseManager
 from data_collector.validator import DataValidator
@@ -33,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # اگر فاصله آخرین داده موجود بیشتر از این تعداد روز باشد، تاریخچه کامل دوباره دریافت می‌شود
 INCREMENTAL_LOOKBACK_ROWS = 30
-# داده دیده‌بان بعد از این ساعت (به وقت تهران) برای کندل روز نهایی فرض می‌شود
+# دریافت کندل روز جاری زودتر از این ساعت مجاز نیست؛ پایان انتشار مستقل اثبات نمی‌شود.
 SESSION_FINAL_AFTER = "13:00"
 INCREMENTAL_MAX_GAP_DAYS = 25
 CLIENT_TYPE_REFRESH_SESSIONS = 5
@@ -50,12 +53,15 @@ class DataCollector:
     """کلاس هماهنگ‌کننده گردآوری داده‌ها و ذخیره‌سازی در پایگاه داده."""
 
     def __init__(self, symbols: Optional[List[str]] = None, db: Optional[DatabaseManager] = None,
-                 provider: Optional[BaseDataProvider] = None, codal: Optional[CodalProvider] = None):
+                 provider: Optional[BaseDataProvider] = None, codal: Optional[CodalProvider] = None,
+                 publication_provider_factory=None):
         self.db = db if db is not None else DatabaseManager()
         self.provider = provider or TsetmcProvider()
         self.codal = codal or CodalProvider()
         self.universe = UniverseManager(db=self.db, provider=self.provider)
         self.symbols = list(symbols) if symbols else None
+        self.publication_provider_factory = (publication_provider_factory if publication_provider_factory is not None
+            else (lambda: TsetmcProvider(realtime=True)) if provider is None else None)
         # اثر انگشت آخرین اسنپ‌شات هر نماد؛ اسنپ‌شات بدون تغییر دوباره ذخیره نمی‌شود
         self._last_fingerprints: Dict[str, tuple] = {}
         self._last_snapshot_times: Dict[str, str] = {}
@@ -207,18 +213,20 @@ class DataCollector:
         return self._finish("history", started_at, len(targets), succeeded, failed, errors,
                             {"rows_inserted": rows_saved, "anomalies_flagged": anomalies})
 
-    def collect_session_candles(self) -> Dict[str, Any]:
-        """
-        ثبت کندل امروز همه سهام با یک درخواست به دیده‌بان بازار (بعد از ساعت ۱۳).
-        سرویس تاریخچه روزانه TSETMC کندل امروز را تا عصر به‌تدریج منتشر می‌کند؛ این مرحله داده امروز را
-        بلافاصله کامل می‌کند و به‌روزرسانی بعدی تاریخچه، همان رکورد را با داده رسمی بازنویسی می‌کند.
+    def collect_session_candles(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """پس از ساعت ۱۳ روز معاملاتی، دریافت تاریخ‌دار برای دامنه انتخاب‌شده.
+
+        منبع فاقد قابلیت بومی از قرارداد دیده‌بان قبلی استفاده می‌کند. هیچ‌یک،
+        پایان انتشار یا کامل‌بودن مستقل جلسه را صرفاً از ساعت محلی نتیجه نمی‌گیرند.
         """
         started_at = now_tehran_iso()
         now = now_tehran()
         if not self.db.is_trading_day(now.date().isoformat()) or now.strftime('%H:%M') < SESSION_FINAL_AFTER:
             return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
                     "symbols_failed": 0, "errors": [],
-                    "message": "دیده‌بان کندل امروز در روز تعطیل ثبت‌شده یا پیش از ساعت ۱۳ لازم نیست؛ تاریخچه مستقل دریافت می‌شود."}
+                    "message": "کندل امروز در روز تعطیل ثبت‌شده یا پیش از ساعت ۱۳ دریافت نمی‌شود؛ تاریخچه مستقل دریافت می‌شود."}
+        if getattr(self.provider, 'supports_dated_publications', False):
+            return self._collect_published_prices(now.date().isoformat(), started_at, symbols)
         result = self.provider.get_session_candles()
         if not result:
             return self._finish("session_candles", started_at, 0, 0, 1, ["دیده‌بان بازار یا تاریخ روز معاملاتی دریافت نشد"])
@@ -226,7 +234,10 @@ class DataCollector:
             return {"collection_type": "session_candles", "status": "skipped", "symbols_succeeded": 0,
                     "symbols_failed": 0, "errors": [], "message": "معاملات امروز هنوز نهایی نشده است (بعد از ساعت ۱۳)."}
 
-        known = {s["ins_code"]: s for s in self.db.get_universe_symbols() if s.get("ins_code")}
+        selected = symbols or self.symbols
+        scope = set(normalize_symbol(s) for s in selected) if selected else None
+        known = {s["ins_code"]: s for s in self.db.get_universe_symbols(include_inactive=bool(scope))
+                 if s.get("ins_code") and (scope is None or normalize_symbol(s['symbol_fa']) in scope)}
         saved = rejected = 0
         for candle in result["candles"]:
             sym = known.get(candle["ins_code"])
@@ -247,6 +258,161 @@ class DataCollector:
 
     def collect_client_types(self, symbols: Optional[List[str]] = None,
                              progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
+        if getattr(self.provider, 'supports_dated_publications', False):
+            return self._collect_published_clients(symbols, progress)
+        return self._collect_client_types_legacy(symbols, progress)
+
+    def _publication_capture(self, tasks, progress=None):
+        if self.db.conn.in_transaction:
+            raise ValueError('دریافت شبکه روزانه داخل تراکنش باز مجاز نیست')
+        root = self.db.db_path.resolve().parent / 'private' / 'daily-publications'
+        archive = DailyPublicationArchive(root, tasks, workers=3 if self.publication_provider_factory else 1)
+        records = archive.capture(self.provider, provider_factory=self.publication_provider_factory, progress=progress)
+        return archive, records
+
+    @staticmethod
+    def _publication_task(meta, day, kind):
+        if (type(meta.get('instrument_type_code')) is not int or meta['instrument_type_code'] not in (300, 303)
+                or type(meta.get('id')) is not int or meta['id'] <= 0 or not meta.get('ins_code')
+                or not is_canonical_iso_date(day) or day > now_tehran().date().isoformat()):
+            raise ValueError('منبع بومی روزانه فقط سهام عادی بورس و فرابورس را می‌پذیرد')
+        code, _ = publication_request(meta['ins_code'], day, kind)
+        symbol = normalize_symbol(meta['symbol_fa'])
+        if not symbol or symbol[-1:].isdigit():
+            raise ValueError('نام سهم عادی لازم است')
+        return dict(symbol_id=meta['id'], symbol=symbol, ins_code=code,
+                    instrument_type_code=meta['instrument_type_code'], date=day, kind=kind)
+
+    def _collect_published_prices(self, day, started_at, symbols=None):
+        selected = symbols or self.symbols
+        known = (list(dict.fromkeys(normalize_symbol(s) for s in selected))
+                 if selected else self.db.get_universe_symbols())
+        if not known:
+            return self._finish('session_candles', started_at, 0, 0, 1, ['جامعه ثبت‌شده‌ای برای قیمت بومی وجود ندارد'],
+                                dict(native_date_and_identity_required=True))
+        tasks, preparation_errors = [], []
+        for item in known:
+            try:
+                meta = self._resolve(item) if selected else item
+                if meta is None:
+                    raise ValueError('هویت سهم انتخاب‌شده شناسایی نشد')
+                if selected and normalize_symbol(meta['symbol_fa']) != item:
+                    raise ValueError('نام سهم شناسایی‌شده با درخواست برابر نیست')
+                tasks.append(self._publication_task(meta, day, 'price'))
+            except (ValueError, KeyError, TypeError) as exc:
+                preparation_errors.append(f"{item if selected else item.get('symbol_fa', 'نماد انتخاب‌شده')}: {exc}")
+        if not tasks:
+            return self._finish('session_candles', started_at, len(known), 0, len(known), preparation_errors,
+                                dict(native_date_and_identity_required=True))
+        archive, records = self._publication_capture(tasks)
+        saved = zero = 0
+        failed = len(preparation_errors)
+        errors, application = preparation_errors, []
+        for record in records:
+            task, parsed = record['task'], record['parsed']
+            outcome = dict(symbol_id=task['symbol_id'], date=day, stored=False, status=parsed['status'])
+            try:
+                if parsed['status'] == 'valid_price':
+                    self.db.upsert_daily_prices_df(task['symbol_id'], pd.DataFrame([parsed['row']])[DAILY_COLUMNS])
+                    saved += 1
+                    outcome['stored'] = True
+                elif parsed['status'] == 'observed_zero_activity':
+                    previous = self.db.conn.execute('''SELECT volume FROM daily_prices
+                        WHERE symbol_id=? AND date=? AND source='tsetmc' ''', (task['symbol_id'], day)).fetchone()
+                    if previous and previous['volume'] and previous['volume'] > 0:
+                        raise ValueError('گزارش صفر با کندل دارای معامله موجود تعارض دارد؛ حذف خودکار مجاز نیست')
+                    zero += 1
+                else:
+                    raise ValueError(parsed.get('error', parsed['status']))
+            except Exception as exc:
+                failed += 1
+                outcome.update(status='not_applied', error_type=type(exc).__name__)
+                errors.append(f"{task['symbol']}: {exc}")
+            application.append(outcome)
+        path = archive.finish(dict(rows_stored=saved, zero_activity_observations=zero, failed=failed, records=application))
+        return self._finish('session_candles', started_at, len(known), saved+zero, failed, errors,
+            dict(rows_inserted=saved, market_date=day, zero_activity_observations=zero,
+                 zero_activity_full_session_verified=False, native_date_and_identity_required=True,
+                 evidence_path=path, full_session_coverage_verified=False))
+
+    def _collect_published_clients(self, symbols, progress):
+        started_at = now_tehran_iso()
+        targets = list(dict.fromkeys(normalize_symbol(s) for s in self.target_symbols(symbols)))
+        resolved, failed, errors, tasks = {}, set(), [], []
+        stored, bootstrap, applied = {}, [], []
+        for symbol in targets:
+            try:
+                meta = self._resolve(symbol)
+                if not meta:
+                    raise ValueError('هویت سهم داخل دامنه شناسایی نشد')
+                if normalize_symbol(meta['symbol_fa']) != symbol:
+                    raise ValueError('نام سهم شناسایی‌شده با درخواست برابر نیست')
+                self._publication_task(meta, now_tehran().date().isoformat(), 'client')
+                resolved[meta['id']] = meta
+                dates = self._missing_client_type_dates(meta['id'])
+                if dates is None:
+                    # Initial full histories retain the legacy provider contract. The recent
+                    # sessions are independently refreshed through byte-bound native receipts.
+                    df = self.provider.get_client_types_history(meta['ins_code'], dates=None)
+                    if df is None or df.empty:
+                        failed.add(symbol)
+                        errors.append(f'{symbol}: تاریخچه اولیه حقیقی/حقوقی دریافت نشد')
+                    else:
+                        stored[symbol] = self.db.upsert_client_types_df(meta['id'], df)
+                    bootstrap.append(symbol)
+                    dates = [r['date'] for r in self.db.conn.execute('''SELECT date FROM daily_prices
+                        WHERE symbol_id=? AND source='tsetmc' AND date<=? ORDER BY date DESC LIMIT ?''',
+                        (meta['id'], now_tehran().date().isoformat(), CLIENT_TYPE_REFRESH_SESSIONS))]
+                tasks.extend(self._publication_task(meta, day, 'client') for day in dates)
+            except Exception as exc:
+                logger.exception('آماده‌سازی آمار روزانه %s ناموفق بود', symbol)
+                failed.add(symbol)
+                errors.append(f'{symbol}: {exc}')
+        archive, records = self._publication_capture(tasks, progress) if tasks else (None, [])
+        grouped = defaultdict(list)
+        for record in records:
+            task, parsed = record['task'], record['parsed']
+            if parsed['status'] == 'observed_client':
+                grouped[task['symbol_id']].append(parsed['row'])
+            else:
+                failed.add(task['symbol'])
+                errors.append(f"{task['symbol']} {task['date']}: {parsed.get('error', parsed['status'])}")
+        coherent = unknown = 0
+        for sid, rows in grouped.items():
+            meta = resolved[sid]
+            symbol = meta['symbol_fa']
+            try:
+                df = pd.DataFrame(rows)
+                dates = set(df['date'])
+                prices = self.db.get_daily_prices_df(symbol, start_date=min(dates), end_date=max(dates))
+                clean = validated_client_data(prices, df)
+                pairs = clean.buy_i_value.notna() & clean.sell_i_value.notna() & clean.date.isin(dates)
+                known = int(pairs.sum())
+                missing = len(rows)-known
+                # Preserve observed raw values, including honest None; the shared feature
+                # validator masks incoherent components. An incomplete run is never success.
+                count = self.db.upsert_client_types_df(sid, df)
+                stored[symbol] = stored.get(symbol, 0)+count
+                coherent += known
+                unknown += missing
+                if missing:
+                    failed.add(symbol)
+                    errors.append(f'{symbol}: {missing} زوج ارزش حقیقی نامعلوم یا ناسازگار با قیمت روز')
+                applied.append(dict(symbol_id=sid, dates=sorted(dates), rows_stored=count,
+                                    coherent_retail_pairs=known, unknown_retail_pairs=missing))
+            except Exception as exc:
+                logger.exception('ورود آمار بومی روزانه %s ناموفق بود', symbol)
+                failed.add(symbol)
+                errors.append(f'{symbol}: {exc}')
+        path = archive.finish(dict(records=applied, coherent_retail_pairs=coherent, unknown_retail_pairs=unknown,
+            failed_symbols=sorted(failed), bootstrap_history_without_byte_receipts=bootstrap)) if archive else None
+        return self._finish('client_types', started_at, len(targets), len(set(targets)-failed), len(failed), errors,
+            dict(rows_inserted=sum(stored.values()), partial_symbols=sum(s in failed for s in stored),
+                 coherent_retail_pairs=coherent, unknown_retail_pairs=unknown, evidence_path=path,
+                 native_date_and_identity_required=True, bootstrap_history_without_byte_receipts=bootstrap))
+
+    def _collect_client_types_legacy(self, symbols: Optional[List[str]] = None,
+                                    progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
         """دریافت تاریخچه روزانه معاملات حقیقی/حقوقی."""
         targets = self.target_symbols(symbols)
         started_at = now_tehran_iso()
@@ -441,12 +607,12 @@ class DataCollector:
 
     def update_all(self, symbols: Optional[List[str]] = None, full: bool = False,
                    progress: Optional[ProgressFn] = None) -> Dict[str, Dict[str, Any]]:
-        """یک دکمه برای همه‌چیز: جامعه سهام ← تاریخچه قیمت ← حقیقی/حقوقی ← کدال."""
+        """جامعه سهام ← تاریخچه قیمت ← قیمت بومی امروز ← حقیقی/حقوقی ← کدال."""
         reports: Dict[str, Dict[str, Any]] = {}
         if not symbols and not self.symbols:
             reports["universe"] = self.sync_universe()
-            reports["session_candles"] = self.collect_session_candles()
         reports["history"] = self.collect_history(symbols, full=full, progress=progress)
+        reports["session_candles"] = self.collect_session_candles(symbols)
         reports["client_types"] = self.collect_client_types(symbols, progress=progress)
         requested = symbols or self.symbols
         if requested:
