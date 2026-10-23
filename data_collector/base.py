@@ -38,12 +38,17 @@ class BaseDataProvider(ABC):
 
     name: str = "base"
     supports_dated_publications: bool = False
+    supports_dated_instrument_states: bool = False
 
     def close(self) -> None:
         """آزادکردن منابع یک نمونه ساخته‌شده توسط گردآورنده؛ پیش‌فرض منبعی ندارد."""
 
     def get_daily_publication_observation(self, ins_code: str, trade_date: str, kind: str) -> Optional[Dict[str, Any]]:
         """بایت بومی قیمت/client با هویت و تاریخ صریح؛ دریافت به معنی اعتبار یا اجرای معامله نیست."""
+        raise NotImplementedError
+
+    def get_dated_instrument_state_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        """بایت وضعیت روز درخواستی؛ هویت/تاریخ بومی و معنای زمان باید جدا بررسی شوند."""
         raise NotImplementedError
 
     @abstractmethod
