@@ -59,6 +59,7 @@ class TsetmcProvider(BaseDataProvider):
 
     name = "tsetmc"
     supports_dated_publications = True
+    supports_dated_instrument_states = True
 
     def close(self) -> None:
         if hasattr(self.session, 'close'):
@@ -69,6 +70,23 @@ class TsetmcProvider(BaseDataProvider):
         observation = self._get_quote_context_json(code, url)
         return (None if observation is None else dict(observation, kind=kind,
                 requested_date=trade_date, price_unit='Rial'))
+
+    def get_dated_instrument_state_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
+        from core.instrument_states import MAX_BYTES as STATE_MAX_BYTES
+        from core.instrument_states import state_request
+
+        code, url = state_request(ins_code, trade_date)
+        if trade_date > now_tehran().date().isoformat():
+            raise ValueError('درخواست وضعیت تاریخی برای روز آینده مجاز نیست')
+        observation = self._get_quote_context_json(code, url)
+        if observation is None:
+            return None
+        # The shared transport has its existing larger bound; state observations
+        # have a stricter acceptance bound without changing other callers.
+        if observation['response_bytes'] > STATE_MAX_BYTES:
+            logger.warning('پاسخ وضعیت نماد از حد حجم مجاز گذشت')
+            return None
+        return dict(observation, requested_date=trade_date, observation_kind='instrument_state')
 
     def __init__(self, session: Optional[requests.Session] = None, *, realtime=False):
         if type(realtime) is not bool:

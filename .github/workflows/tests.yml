@@ -19,7 +19,8 @@ jobs:
         # کاربر روی ویندوز کار می‌کند؛ لینوکس با TZ=UTC تضمین می‌کند کد به ساعت محلی وابسته نیست
         os: [ ubuntu-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows also verifies fresh Node/Chromium installation after the research suite.
+    timeout-minutes: 40
     env:
       TZ: UTC
       PYTHONUTF8: "1"

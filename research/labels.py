@@ -5,13 +5,16 @@
 قرارداد اجرا (همان موتور بکتست؛ قیمت در بازه روز محدود می‌شود؛ پرشدن واقعی سفارش از OHLC اثبات نمی‌شود):
 - تصمیم: پایان روز t (فقط با داده تا پایان t). معامله با قیمت پایانی روز t ممکن نیست، چون بعد از بسته شدن
   بازار محاسبه می‌شود.
-- ورود: «روز معاملاتی بعدی بازار» به میانگین موزون قیمت آن روز (ارزش ÷ حجم) + لغزش. اگر نماد آن روز معامله
-  نداشت (توقف) یا صف خرید قفل بود، ورود ممکن نیست (برچسب خالی، ولی ثبت می‌شود: خودش اطلاعات مهمی است).
+- ورود: «روز معاملاتی بعدی بازار» به میانگین موزون قیمت آن روز (ارزش ÷ حجم) + لغزش. اگر نماد آن روز ردیف
+  معامله نداشت یا صف خرید قفل بود، ورود در مدل انجام نمی‌شود؛ نبود ردیف به‌تنهایی توقف نماد را اثبات نمی‌کند.
 - خروج: h جلسه معاملاتی بازار بعد از روز ورود، به میانگین موزون آن روز − لغزش. اگر آن روز صف فروش قفل یا نماد
   متوقف بود، خروج به اولین روز قابل فروش بعدی منتقل می‌شود (گیر افتادن در صف/توقف، ریسک واقعی است).
 - اقدام شرکتی با ضریب مصنوعی تعداد سهم مدل می‌شود؛ نوع رویداد، زمان وصول سود و قابلیت فروش سهام جدید تأیید نشده‌اند.
   شمار عبور از این رویداد جدا گزارش می‌شود؛ نتیجه، برآورد پژوهشی است.
 - کارمزد خرید و فروش از config (منبع یکتا).
+- فقط تاریخ داخل تقویم می‌تواند روز تصمیم/اجرای معتبر باشد. مشاهده خارج تقویم در فاصله تصمیم تا ورود
+  یا در مسیر نگهداری تا خروج، نتیجه را invalid_data می‌کند؛ از مسیر تعدیل/بیشینه/کمینه حذف نمی‌شود.
+  تعارض پس از خروج کامل، نتیجه قبلی را تغییر نمی‌دهد. تقویم استنباطی، تقویم رسمی تأییدشده نیست.
 
 خروجی هر ردیف (نماد، روز تصمیم): بازده خالص هر افق (و نسخه «بدترین اجرا»: خرید در سقف و فروش در کف
 همان روزها)، بیشترین سود و زیان شناور در طول نگهداری (MFE/MAE) بر
@@ -26,7 +29,7 @@ import pandas as pd
 from config import settings
 from core import market_rules
 
-LABEL_SET_VERSION = "labels-v4"   # missing official close remains unknown
+LABEL_SET_VERSION = "labels-v5"   # calendar-conflicted outcome paths remain unknown
 DEFAULT_HORIZONS = (1, 2, 3, 5)
 CALENDAR_MIN_SYMBOLS = 20          # روزی «روز معاملاتی بازار» است که دست‌کم این تعداد نماد معامله داشته باشند
 
@@ -43,6 +46,10 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
     """برچسب‌های یک نماد. df: ردیف‌های همان نماد، مرتب بر اساس تاریخ، فقط روزهای دارای معامله."""
     n = len(df)
     dates = df["date"].to_numpy().astype(str)
+    on_calendar = np.isin(dates, calendar)
+    # Keep anomalous observations in the path; silently dropping them could change
+    # the corporate-action chain and extrema while appearing to repair execution.
+    off_calendar_cum = np.r_[0, np.cumsum(~on_calendar)]
     vwap = market_rules.daily_vwap(df).to_numpy(dtype=float)
     locks = market_rules.lock_flags(df)
     locked_up = locks["locked_up"].to_numpy()
@@ -65,7 +72,10 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
     j_ok &= dates[j_safe] == entry_date
     refs = df["ref_price_raw"].to_numpy(dtype=float)
     execution_valid = np.isfinite(vwap) & np.isfinite(refs) & (refs > 0)
-    entry_executable = j_ok & ~locked_up[j_safe] & execution_valid[j_safe]
+    entry_observed_end = np.searchsorted(dates, entry_date, side="right")
+    entry_calendar_conflict = ~on_calendar | (has_next & (
+        off_calendar_cum[entry_observed_end] - off_calendar_cum[np.arange(n)] > 0))
+    entry_executable = j_ok & ~locked_up[j_safe] & execution_valid[j_safe] & ~entry_calendar_conflict
     entry_price = np.where(entry_executable, np.minimum(vwap[j_safe] * (1 + buy_cost), high[j_safe]), np.nan)
     out["entry_executable"] = entry_executable
     out["entry_date"] = entry_date
@@ -73,7 +83,7 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
     action_cum = np.cumsum((np.abs(factors - 1.0) > 1e-6).astype(int))
 
     # اولین ردیف «قابل فروش» از هر ردیف به بعد (نه صف فروش قفل، با میانگین موزون معتبر)
-    sellable = ~locked_down & execution_valid
+    sellable = on_calendar & ~locked_down & execution_valid
     next_sellable = np.full(n + 1, n)
     for idx in range(n - 1, -1, -1):
         next_sellable[idx] = idx if sellable[idx] else next_sellable[idx + 1]
@@ -90,8 +100,13 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
         status[has_next & (~j_ok | locked_up[j_safe])] = "entry_blocked"
         bad_entry = j_ok & ~execution_valid[j_safe]
         bad_window = valid & ((invalid_cum[k_safe] - invalid_cum[j_safe]) > 0)
+        # When exit is not yet observable, a known calendar conflict in the held
+        # prefix is still invalid data, not merely an unresolved future outcome.
+        observed_end = np.where(planned_ok & (k < n), k, n - 1)
+        calendar_window_conflict = entry_executable & (
+            off_calendar_cum[observed_end + 1] - off_calendar_cum[j_safe] > 0)
         status[valid & ~bad_window] = "complete"
-        status[bad_entry | bad_window] = "invalid_data"
+        status[bad_entry | bad_window | entry_calendar_conflict | calendar_window_conflict] = "invalid_data"
         valid &= status == "complete"
         out[f"label_status_{h}d"] = status
         out[f"planned_exit_date_{h}d"] = planned_date
