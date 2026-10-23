@@ -1,5 +1,6 @@
 """Calendar-bounded first-hit labels for a fixed cohort; synthetic growth, never a fill or forecast."""
 
+import json
 from datetime import date
 from fractions import Fraction
 from numbers import Real
@@ -40,7 +41,7 @@ def _number(value):
     return float(value) if np.isfinite(value) else np.nan
 
 
-def compute_rare_events(prices, decisions, calendar, *, observed_through, horizons=HORIZONS, threshold=2.):
+def _compute_rare_events(prices, decisions, calendar, *, observed_through, horizons=HORIZONS, threshold=2., _marks=None):
     """Index starts at 1 at the decision close; future official/reference factors define the event.
 
     Missing data before a crossing prevents confirmation. An established first hit survives later
@@ -91,6 +92,7 @@ def compute_rare_events(prices, decisions, calendar, *, observed_through, horizo
         multiple, previous_close, hit_session, hit_date = 1., base['close_final_raw'] if base else np.nan, None, None
         exact_multiple = Fraction(1)
         path, action_count, actions = [], 0, []
+        mark_steps = []
         problems = []
         for step in range(1, max(horizons)+1):
             expected = calendar[start+step] if start+step < len(calendar) else None
@@ -99,12 +101,24 @@ def compute_rare_events(prices, decisions, calendar, *, observed_through, horizo
                     issue, issue_date = 'calendar_conflict', first_conflict
                 elif expected is None or expected > observed_through:
                     issue, issue_date = 'right_censored', None
-                elif expected not in rows:
-                    issue, issue_date = 'missing_observation', expected
                 else:
-                    row = rows[expected]
-                    if not (np.isfinite(row['volume']) and row['volume'] > 0 and row['volume'].is_integer()
-                            and np.isfinite(row['factor']) and row['factor'] > 0):
+                    row, using_mark = rows.get(expected), False
+                    if row is None:
+                        mark = (_marks or {}).get((symbol, expected))
+                        if mark is None:
+                            issue, issue_date = 'missing_observation', expected
+                        elif mark['status'] != 'observed_flat_mark':
+                            issue, issue_date = 'unusable_no_trade_evidence', expected
+                        elif Fraction(str(mark['reference_rial'])) != Fraction(str(previous_close)):
+                            issue, issue_date = 'no_trade_reference_conflict', expected
+                        else:
+                            row = dict(close_final_raw=mark['official_close_rial'],
+                                ref_price_raw=mark['reference_rial'], factor=mark['factor'])
+                            using_mark = True
+                    if row is None:
+                        pass
+                    elif not ((using_mark or np.isfinite(row['volume']) and row['volume'] > 0 and row['volume'].is_integer())
+                              and np.isfinite(row['factor']) and row['factor'] > 0):
                         issue, issue_date = 'invalid_observation', expected
                     else:
                         with np.errstate(over='ignore', invalid='ignore'):
@@ -118,6 +132,8 @@ def compute_rare_events(prices, decisions, calendar, *, observed_through, horizo
                             exact_multiple *= Fraction(str(row['close_final_raw'])) / Fraction(str(row['ref_price_raw']))
                             action_count += int(abs(row['ref_price_raw']/previous_close-1) > 1e-6)
                             previous_close = row['close_final_raw']
+                            if using_mark:
+                                mark_steps.append((step, expected))
                             if hit_session is None and exact_multiple >= exact_threshold:
                                 hit_session, hit_date = step, expected
             path.append(multiple if issue is None else np.nan)
@@ -138,10 +154,16 @@ def compute_rare_events(prices, decisions, calendar, *, observed_through, horizo
                 observed_through=observed_through, valid_prefix_sessions=valid_prefix,
                 prefix_reference_changes=actions[horizon-1], path_problem=problem, path_problem_date=problem_date,
                 economic_double=None, executable_return=None))
+            if _marks is not None:
+                accepted = [d for step, d in mark_steps if step <= horizon]
+                output[-1].update(no_trade_mark_sessions=len(accepted),
+                    no_trade_mark_dates=json.dumps(accepted, separators=(',', ':')))
     columns = ['symbol', 'date', 'horizon_sessions', 'threshold', 'status', 'outcome', 'first_hit_date',
         'first_hit_session', 'resolved_at', 'nominal_end_date', 'endpoint_multiple', 'observed_through',
         'valid_prefix_sessions', 'prefix_reference_changes', 'path_problem', 'path_problem_date',
         'economic_double', 'executable_return']
+    if _marks is not None:
+        columns += ['no_trade_mark_sessions', 'no_trade_mark_dates']
     result = pd.DataFrame(output, columns=columns)
     text_columns = ['symbol', 'date', 'status', 'first_hit_date', 'resolved_at', 'nominal_end_date',
                     'observed_through', 'path_problem', 'path_problem_date']
@@ -150,7 +172,16 @@ def compute_rare_events(prices, decisions, calendar, *, observed_through, horizo
     for column in ('first_hit_session', 'endpoint_multiple'):
         result[column] = result[column].astype(float)
     result['outcome'] = pd.array(result.outcome, dtype='boolean')
+    if _marks is not None:
+        result['no_trade_mark_sessions'] = result['no_trade_mark_sessions'].astype('int64')
+        result['no_trade_mark_dates'] = result['no_trade_mark_dates'].astype('string')
     return result
+
+
+def compute_rare_events(prices, decisions, calendar, *, observed_through, horizons=HORIZONS, threshold=2.):
+    """Original strict traded-observation contract; no official-mark substitution."""
+    return _compute_rare_events(prices, decisions, calendar, observed_through=observed_through,
+                                horizons=horizons, threshold=threshold)
 
 
 def summarize_rare_events(outcomes):
