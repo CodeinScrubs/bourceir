@@ -2,7 +2,7 @@ name: BRS CI Tests
 
 on:
   push:
-    branches: [ master, "feature/**" ]
+    branches: [ master, "feature/**", "feat/**" ]
   pull_request:
     branches: [ master ]
   workflow_dispatch:
