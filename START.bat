@@ -22,11 +22,12 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-rem اگر داشبورد از قبل در حال اجراست، فقط مرورگر باز شود
+rem اشغال بودن پورت هویت سرویس را ثابت نمی‌کند؛ سرویس نامعلوم را باز نکنید.
 netstat -ano | findstr /R /C:":8501 .*LISTENING" > nul
 if %errorlevel%==0 (
-    start "" "http://127.0.0.1:8501"
-    exit /b 0
+    echo [BRS] Port 8501 is already in use; the service identity was not verified.
+    echo If BRS is already open, use its existing tab. Otherwise free the port and retry.
+    exit /b 1
 )
 
 set PYTHONIOENCODING=utf-8

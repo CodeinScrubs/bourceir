@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from core.timeutils import is_canonical_iso_date
-from research.baselines import STRATEGIES, pick_top
+from research.baselines import STRATEGIES, decision_score_inputs, eligible_strategy_score, pick_top
 
 VERSION = 'temporal-frequency-v1'
 TARGET = 'positive net daily-proxy return per resolved selected opportunity; blocked entry is not a win'
@@ -63,7 +63,7 @@ def select_opportunities(features, strategy, k):
     rule = next((s for s in STRATEGIES if s.name == strategy), None)
     if rule is None:
         raise ValueError('فقط قواعد پایه ثابت پشتیبانی می‌شوند')
-    selected = pick_top(features, rule.score(features), k)
+    selected = pick_top(features, eligible_strategy_score(decision_score_inputs(features), rule), k)
     return selected[['date', 'symbol', '_score']].reset_index(drop=True)
 
 

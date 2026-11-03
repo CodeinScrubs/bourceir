@@ -104,11 +104,11 @@ def test_upsert_symbol_never_duplicates(db):
 
 def test_daily_upsert_updates_and_recomputes_adjustments(db, closing_price_daily):
     from data_collector.tsetmc import TsetmcProvider
-    from tests.conftest import FakeSession
+    from tests.conftest import FOOLAD_INS, FakeSession
 
     provider = TsetmcProvider(session=FakeSession({"GetClosingPriceDailyList": {"closingPriceDaily": closing_price_daily}}))
-    df = provider.get_symbol_history("x")
-    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": "x"})
+    df = provider.get_symbol_history(FOOLAD_INS)
+    sym_id = db.upsert_symbol({"symbol_fa": "فولاد", "ins_code": FOOLAD_INS})
     assert db.upsert_daily_prices_df(sym_id, df) == len(df)
     assert db.upsert_daily_prices_df(sym_id, df) == len(df)  # اجرای دوباره رکورد تکراری نمی‌سازد
     assert db.conn.execute("SELECT COUNT(*) FROM daily_prices;").fetchone()[0] == len(df)

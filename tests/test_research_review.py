@@ -101,15 +101,22 @@ def test_curve_recomputed_stress_failure_not_promoted_to_profitability(db, evide
     assert 'میانگین حساب‌های مستقل' in format_review(result)
     assert not result['verified']['external_authenticity_verified']
     assert not result['fractional_valuation_corrected']
+    # The stored legacy flag only meant zero observed reference changes.
+    # Re-reading it must not certify actual historical rights or settlement.
+    assert evidence['payload']['results'][0]['modes']['selected']['metrics']['actual_corporate_entitlements_verified']
+    assert result['legacy_entitlement_claim_reinterpreted']
+    assert not selected['normal']['actual_corporate_entitlements_verified']
+    assert 'actual_corporate_entitlements_unverified' in selected['blockers']
 
 
 @pytest.mark.parametrize('omit_count', [False, True])
-def test_v4_review_counts_fraction_only_stale_days_and_preserves_v3_reader(db, evidence, omit_count):
+@pytest.mark.parametrize('version', ['portfolio-v4', 'portfolio-v5', 'portfolio-v6', 'portfolio-v7'])
+def test_review_counts_fraction_only_stale_days_and_preserves_version_reader(db, evidence, omit_count, version):
     p = evidence['payload']
-    p['protocol']['portfolio_version'] = 'portfolio-v4'
+    p['protocol']['portfolio_version'] = version
     for index, result in enumerate(p['results']):
         for name, record in result['modes'].items():
-            record['assumptions']['version'] = 'portfolio-v4'
+            record['assumptions']['version'] = version
             record['metrics']['stale_mark_days'] = 1
             path = evidence['folder'] / f'fold-{index:02d}-{name}-equity.parquet'
             curve = pd.read_parquet(path)
@@ -122,8 +129,37 @@ def test_v4_review_counts_fraction_only_stale_days_and_preserves_v3_reader(db, e
             review_research(db, EXPERIMENT, root=evidence['root'])
     else:
         result = review_research(db, EXPERIMENT, root=evidence['root'])
-        assert result['fractional_valuation_corrected'] and result['portfolio_version'] == 'portfolio-v4'
+        assert result['fractional_valuation_corrected'] and result['portfolio_version'] == version
         assert 'stale_marks_present' in result['candidates']['dip']['blockers']
+
+
+def test_review_rejects_unrecognized_future_portfolio_contract(db, evidence):
+    evidence['payload']['protocol']['portfolio_version'] = 'portfolio-v9'
+    update_report(db, evidence)
+    with pytest.raises(ValueError, match='قراردادهای توسعه'):
+        review_research(db, EXPERIMENT, root=evidence['root'])
+
+
+def test_review_accepts_new_portfolio_contract_only_with_unverified_actual_entitlements(db, evidence):
+    p = evidence['payload']
+    p['protocol']['portfolio_version'] = 'portfolio-v8'
+    for index, result in enumerate(p['results']):
+        for name, record in result['modes'].items():
+            record['assumptions']['version'] = 'portfolio-v8'
+            record['metrics']['actual_corporate_entitlements_verified'] = False
+            path = evidence['folder'] / f'fold-{index:02d}-{name}-equity.parquet'
+            curve = pd.read_parquet(path)
+            curve['stale_fractional_exposures'] = 0
+            curve.to_parquet(path, index=False)
+    update_report(db, evidence)
+    report = review_research(db, EXPERIMENT, root=evidence['root'])
+    assert not report['legacy_entitlement_claim_reinterpreted']
+    assert 'actual_corporate_entitlements_unverified' in report['candidates']['selected']['blockers']
+
+    p['results'][0]['modes']['selected']['metrics']['actual_corporate_entitlements_verified'] = True
+    update_report(db, evidence)
+    with pytest.raises(ValueError, match='حقوق واقعی'):
+        review_research(db, EXPERIMENT, root=evidence['root'])
 
 
 def test_positive_everywhere_still_requires_independent_evidence(db, evidence):

@@ -120,3 +120,22 @@ def test_missing_clients_do_not_claim_flow_readiness_or_block_price_only_contrac
     report = research_preflight(db)
     assert report['input_contract_passed']
     assert not report['client_value_pairs_complete'] and report['unknown_client_pairs'] == len(prices)
+
+
+def test_cli_detail_limit_preserves_counts_and_marks_truncated_details(db, tmp_path, monkeypatch):
+    import brs
+
+    prices, _, sid = store(db)
+    prices.loc[[23, 24], 'ref_price_raw'] = 0.
+    db.upsert_daily_prices_df(sid, prices)
+    monkeypatch.setattr(settings, 'DB_PATH', db.db_path)
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    short = tmp_path/'private/short.json'
+    full = tmp_path/'private/full.json'
+    assert brs.main(['research-preflight', '--json', str(short), '--detail-limit', '1']) == 2
+    assert brs.main(['research-preflight', '--json', str(full), '--detail-limit', '2']) == 2
+    first, second = (json.loads(path.read_text(encoding='utf-8')) for path in (short, full))
+    assert first['detail_limit'] == 1 and second['detail_limit'] == 2
+    assert len(first['price_issues']) == 1 and len(second['price_issues']) == 2
+    assert first['price_details_truncated'] is True and second['price_details_truncated'] is False
+    assert first['price_issue_counts'] == second['price_issue_counts']

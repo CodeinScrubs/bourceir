@@ -213,8 +213,7 @@ def flow_metrics_v4(prices, clients, *, calendar=None):
         ret = market_rules.pit_daily_returns(group)
         locks = market_rules.lock_flags(group)
         # نبود مرجع/بازه معتبر را «قفل نیست» معرفی نمی‌کنیم.
-        valid = (_number(group, 'ref_price_raw') > 0) & (_number(group, 'low_raw') > 0)
-        valid &= (_number(group, 'high_raw') >= _number(group, 'low_raw'))
+        valid = market_rules.lock_inputs_known(group)
         valid &= _number(group, 'close_raw').between(_number(group, 'low_raw'), _number(group, 'high_raw'))
         group['not_locked_up'] = (~locks.locked_up).astype('boolean').where(valid)
         surge = ((group.volume_ratio_30d >= 2.5) & (group.buyer_power_value >= 1.8)

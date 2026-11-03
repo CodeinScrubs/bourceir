@@ -1,15 +1,16 @@
 """نمایش گزارش محفوظ قرارداد داده؛ اجرای بررسی سنگین فقط با کار پس‌زمینه."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from config import settings
-from core.timeutils import is_canonical_iso_date, to_jalali
+from core.recovery_lineage import VERSION as LINEAGE_VERSION
+from core.timeutils import is_canonical_iso_date, now_tehran, to_jalali
 from features.provenance import feature_environment, feature_logic_fingerprint
-from ops import research_preflight
+from ops import research_preflight, trader_readiness
 
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 BLOCKERS_FA = {
@@ -28,6 +29,19 @@ PRICE_FIELDS_FA = {'open_raw': 'اولین معامله', 'close_raw': 'آخری
                    'volume': 'حجم', 'value': 'ارزش معاملات'}
 
 
+def _unique_json_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('کلید تکراری در گزارش منشأ')
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_):
+    raise ValueError('عدد نامتناهی در گزارش منشأ')
+
+
 def price_reason_fa(reason):
     for prefix, label in (('missing_or_nonfinite_', 'نامعلوم/نامعتبر: '),
                           ('nonpositive_', 'صفر/منفی: '), ('outside_range_', 'بیرون از بازه معاملات: ')):
@@ -35,6 +49,73 @@ def price_reason_fa(reason):
             return label + PRICE_FIELDS_FA.get(reason[len(prefix):], reason[len(prefix):])
     return {'fractional_volume': 'حجم کسری', 'inverted_range': 'کمترین بیشتر از بیشترین',
             'vwap_outside_range': 'میانگین ارزش به حجم بیرون از بازه'}.get(reason, reason)
+
+
+def load_lineage_report(path):
+    with path.open('rb') as handle:
+        contents = handle.read(MAX_REPORT_BYTES + 1)
+    if len(contents) > MAX_REPORT_BYTES:
+        raise ValueError('گزارش منشأ بزرگ‌تر از حد مجاز است')
+    report = json.loads(contents, object_pairs_hook=_unique_json_pairs, parse_constant=_reject_json_constant)
+    lineage = report.get('recovery_lineage') if isinstance(report, dict) else None
+    if (not isinstance(report, dict) or report.get('version') != trader_readiness.VERSION
+            or not isinstance(lineage, dict) or lineage.get('version') != LINEAGE_VERSION
+            or report.get('accepted_for_signals') is not False or report.get('profitability_proven') is not False
+            or lineage.get('accepted_for_signals') is not False
+            or lineage.get('independent_source_correctness_verified') is not False
+            or lineage.get('historical_availability_verified') is not False
+            or lineage.get('source_conflict_count_known') is not False
+            or lineage.get('cutoff_exclusive') != settings.RESEARCH_CONFIG['holdout_start']
+            or lineage.get('development_start') != settings.RESEARCH_CONFIG['dev_start']):
+        raise ValueError('نسخه یا مرز گزارش منشأ قدیمی یا نامعتبر است')
+    counts = ('legacy_trade_receipts', 'retained_all_rows', 'retained_partial_rows', 'superseded_rows',
+              'retained_development_rows', 'retained_prior_rows', 'unrecognized_receipts',
+              'malformed_receipts', 'excluded_out_of_scope')
+    if any(type(lineage.get(key)) is not int or lineage[key] < 0 for key in counts):
+        raise ValueError('شمار گزارش منشأ نامعتبر است')
+    retained = lineage['retained_all_rows'] + lineage['retained_partial_rows']
+    clear = not retained and not lineage['unrecognized_receipts'] and not lineage['malformed_receipts']
+    if (lineage['retained_development_rows'] + lineage['retained_prior_rows'] != retained
+            or retained + lineage['superseded_rows'] > lineage['legacy_trade_receipts']
+            or type(lineage.get('review_clear')) is not bool or lineage['review_clear'] is not clear
+            or lineage.get('status') != ('no_retained_trade_only_rows' if clear else 'unresolved')
+            or report.get('status') not in ('blocked', 'research_only')
+            or not clear and report.get('status') != 'blocked'):
+        raise ValueError('شمار یا وضعیت گزارش منشأ ناسازگار است')
+    at = datetime.fromisoformat(report['generated_at'])
+    if at.tzinfo is None or at.utcoffset() is None or at > now_tehran() + timedelta(seconds=5):
+        raise ValueError('زمان گزارش منشأ نامعتبر است')
+    return report
+
+
+def show_recovery_lineage(job_panel):
+    job_panel('trader-readiness', ['trader-readiness'], 'بررسی آمادگی و منشأ قیمت‌ها',
+              'فقط‌خواندنی؛ گزارش جداگانه در پوشه خصوصی ذخیره می‌شود.')
+    target = settings.DATA_DIR / 'private' / 'trader-readiness.json'
+    if not target.exists():
+        st.warning('منشأ بازیابی‌های قیمت هنوز در گزارش آمادگی بررسی نشده است؛ بررسی را اجرا کن.')
+        return
+    try:
+        report = load_lineage_report(target)
+        if report.get('code') != trader_readiness.code_identity():
+            st.warning('گزارش منشأ با کد فعلی یکسان نیست و آرشیوی است؛ بررسی را دوباره اجرا کن.')
+            return
+        lineage = report['recovery_lineage']
+        st.caption('گزارش منشأ محفوظ: ' + to_jalali(report['generated_at'], with_time=True)
+                   + '؛ تغییرات بعدی داده را خودکار تأیید نمی‌کند.')
+        if lineage['review_clear']:
+            st.caption('در این بررسی مقدار فعلی با منشأ صرفاً ریزمعامله یافت نشد؛ صحت مستقل داده اثبات نشده است.')
+        else:
+            retained = lineage['retained_all_rows'] + lineage['retained_partial_rows']
+            st.warning(f"{retained:,} ردیف فعلی قیمتِ بازیابی‌شده از ریزمعامله دارند؛ "
+                       f"{lineage['retained_development_rows']:,} در توسعه و "
+                       f"{lineage['retained_prior_rows']:,} در تاریخچه پیشین. "
+                       'این منشأ به‌تنهایی غلط‌بودن همه را ثابت نمی‌کند؛ '
+                       'تعداد تعارض با کندل تاریخ‌دار در این گزارش نامعلوم است.')
+            if lineage['unrecognized_receipts'] or lineage['malformed_receipts']:
+                st.warning('برخی رسیدهای منشأ نامشخص یا نامعتبرند؛ پیش از اعتماد به داده بررسی شوند.')
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        st.warning('گزارش منشأ قدیمی یا نامعتبر است؛ بررسی آمادگی را دوباره اجرا کن.')
 
 
 def load_report(path):
@@ -105,6 +186,7 @@ def show_reliability(job_panel):
     st.subheader('قرارداد داده پیش از پژوهش')
     st.caption('این بررسی فقط دوره توسعه را می‌خواند؛ آزمون نهایی مهر و موم می‌ماند. '
                'سازگاری عددی داده، اثبات صحت مستقل منبع یا سودآوری روش نیست.')
+    show_recovery_lineage(job_panel)
     job_panel('research-preflight', ['research-preflight'], 'بررسی کیفیت داده پژوهش',
               'فقط‌خواندنی؛ نتیجه در گزارش خصوصی محفوظ می‌شود. داده بازار و حساب تغییر نمی‌کند.')
     target = settings.DATA_DIR / 'private' / 'research-preflight.json'
@@ -127,7 +209,7 @@ def show_reliability(job_panel):
         else:
             st.error('قرارداد داده عبور نکرده است؛ پیش از استفاده پژوهشی، موارد ناسازگار را بررسی کن.')
         cols = st.columns(4)
-        cols[0].metric('ردیف قیمت توسعه', f"{report['price_rows']:,}")
+        cols[0].metric('ردیف قیمت بررسی‌شده', f"{report['price_rows']:,}")
         cols[1].metric('جفت حقیقی سازگار', f"{report['coherent_client_pairs']:,}")
         cols[2].metric('جفت حقیقی نامعلوم', f"{report['unknown_client_pairs']:,}")
         invalid_prices = sum(row['invalid_price_rows'] for row in report['records'])

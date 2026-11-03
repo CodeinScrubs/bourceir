@@ -45,7 +45,8 @@ def test_empty_price_panel_is_supported():
 
 def test_cohort_calendar_keeps_days_without_a_signal():
     dates = pd.date_range('2025-01-01', periods=40).strftime('%Y-%m-%d').tolist()
-    panel = pd.DataFrame(dict(date=dates, symbol='x', value=1e10, score=np.nan, net_ret_1d=0.1))
+    panel = pd.DataFrame(dict(date=dates, symbol='x', value=1e10, score=np.nan, net_ret_1d=0.1,
+                              label_status_1d='complete'))
     panel.loc[::4, 'score'] = 1.0
     picks = pick_top(panel, panel['score'], 1)
     result = evaluate_picks(picks, pd.Series(0.0, index=dates), 1, 1)

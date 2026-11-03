@@ -18,6 +18,27 @@ from research.baselines import STRATEGIES
 from research.portfolio_run import verified_baseline_inputs
 
 
+def latest_baseline_source(*, root=None):
+    """Resolve one recorded source, never pick a winner or scan for a fallback.
+
+    The returned ID is pinned for this export. The existing exporter still
+    verifies registration, hashes, development boundaries and allowed columns.
+    """
+    root = Path(root) if root is not None else settings.DATA_DIR / 'research'
+    try:
+        pointer = _load_json(root / 'latest.json')
+    except FileNotFoundError as exc:
+        raise ValueError('آرشیو BASELINES موجود نیست؛ ابتدا پژوهش توسعه با داده واقعی لازم است') from exc
+    if not isinstance(pointer, dict) or set(pointer) != {'experiment_id'}:
+        raise ValueError('اشاره‌گر آخرین پژوهش باید فقط شناسه صریح داشته باشد')
+    source = pointer['experiment_id']
+    if (not isinstance(source, str)
+            or not re.fullmatch(r'EXP-\d{4}-\d{2}-\d{2}-BASELINES-[a-f0-9]{32}', source)
+            or not is_canonical_iso_date(source[4:14])):
+        raise ValueError('شناسه آخرین پژوهش BASELINES نامعتبر است')
+    return source
+
+
 def export_research_bundle(db, source_id, *, root=None, output=None):
     root = Path(root) if root is not None else settings.DATA_DIR / 'research'
     source_id, frames, hashes = verified_baseline_inputs(root, source_id)
@@ -118,13 +139,17 @@ def main(argv=None):
     from database.db import DatabaseManager
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', required=True)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument('--source')
+    source_group.add_argument('--latest', action='store_true',
+                              help='use the recorded latest BASELINES source; no result-based selection')
     parser.add_argument('--output')
     args = parser.parse_args(argv)
     if not settings.DB_PATH.is_file():
         raise ValueError('دیتابیس موجود پژوهش لازم است؛ پایگاه خالی ساخته نمی شود')
+    source = latest_baseline_source() if args.latest else args.source
     with DatabaseManager(read_only=True) as db:
-        result = export_research_bundle(db, args.source, output=args.output)
+        result = export_research_bundle(db, source, output=args.output)
     print(result['path'])
     return 0
 

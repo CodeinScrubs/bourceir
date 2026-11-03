@@ -417,7 +417,7 @@ class SubscriptionRightsBook:
             if self.dividends is not None:
                 self.dividends.begin_day(day, session)
             for symbol, row in session.items():
-                if row.get('valid'):
+                if row.get('mark_valid',row.get('valid',False)):
                     mark = float(_money(row.get('mark'), positive=True))
                     self.last_marks[symbol] = (mark, day)
             for event in self.events:

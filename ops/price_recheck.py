@@ -22,7 +22,7 @@ SOURCE_FILES = ('ops/price_recheck.py', 'ops/research_preflight.py', 'ops/report
                 'core/price_quality.py', 'core/client_quality.py', 'core/timeutils.py', 'core/text.py',
                 'core/data_quality.py', 'core/market_rules.py',
                 'features/provenance.py', 'database/db.py', 'data_collector/base.py',
-                'data_collector/tsetmc.py', 'data_collector/validator.py',
+                'data_collector/tsetmc.py', 'data_collector/daily_history.py', 'data_collector/validator.py', 'core/order_book.py',
                 'config/settings.py', 'config/default.yaml', 'requirements.lock.txt')
 
 

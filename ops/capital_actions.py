@@ -13,7 +13,7 @@ from config import settings
 from core.capital_actions import MAX_TEXT_CHARS, primary_capital_registration
 from core.codal_documents import public_document_url
 from core.timeutils import TEHRAN_TZ, is_canonical_iso_date, now_tehran_iso
-from ops.codal_documents import load_codal_document
+from ops.codal_documents import load_codal_document, read_codal_document_file, read_codal_document_files
 from ops.report_files import private_report_path, read_private_report, write_private_report
 
 VERSION = 'capital-registration-study-v1'
@@ -38,13 +38,13 @@ def _clock(value):
 def _source(folder, notice):
     if not re.fullmatch(r'CODAL-[a-f0-9]{32}', Path(folder).name):
         raise ValueError('شناسه سند اولیه معتبر نیست')
-    text_file = Path(folder) / 'report.txt'
-    if not text_file.is_file() or text_file.stat().st_size > 4 * MAX_TEXT_CHARS:
-        raise ValueError('سند باید متن محدود پشتیبانی‌شده باشد')
     manifest = load_codal_document(folder)
     if manifest['format'] != 'text' or public_document_url(notice['url']) != manifest['source_url']:
         raise ValueError('آرشیو متن همان نشانی اطلاعیه لازم است')
-    return manifest, (Path(folder) / 'report.txt').read_text(encoding='utf-8')
+    text = read_codal_document_file(folder, 'report.txt')
+    if len(text) > 4 * MAX_TEXT_CHARS:
+        raise ValueError('سند باید متن محدود پشتیبانی‌شده باشد')
+    return manifest, text.decode('utf-8')
 
 
 def create_capital_study(*, notice_path, document, root=None, end_exclusive=None):
@@ -61,10 +61,11 @@ def create_capital_study(*, notice_path, document, root=None, end_exclusive=None
     prefix = 'document/' + manifest['snapshot_id'] + '/'
     copy = folder / 'document' / manifest['snapshot_id']
     files = ['manifest.json', manifest['content_file'], *manifest['source_files_sha256']]
+    bodies = read_codal_document_files(original)
     for name in files:
         target = copy / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((original / name).read_bytes())
+        target.write_bytes(bodies[name])
     copied, copied_text = _source(copy, notice)
     if copied != manifest or copied_text != text:
         raise ValueError('سند هنگام کپی مطالعه تغییر کرد؛ تلاش ناقص محفوظ است')

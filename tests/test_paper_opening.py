@@ -104,6 +104,26 @@ def test_missing_market_marks_do_not_reuse_opening_prices_as_current(mirror, db)
     assert repo.report(key)['events'] == []
 
 
+def test_ui_identifies_missing_broker_opening_mark_without_claiming_a_trade(dashboard_db, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from database.db import DatabaseManager
+    from tests.test_dashboard import DASHBOARD
+
+    with DatabaseManager(db_path=dashboard_db) as db:
+        repo, _, source = prepare(db, monkeypatch)
+        repo.create_from_broker(source, mode='manual')
+        with db.conn:
+            db.conn.execute('DELETE FROM daily_prices WHERE symbol_id=?', (db.get_symbol_id('آزمونالف'),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('💼 پورتفوی مجازی').run()
+    assert not at.exception
+    table = next(frame.value for frame in at.dataframe if 'علت نامعلومی ارزش‌گذاری' in frame.value.columns)
+    issue = table.loc[table['نماد'].eq('آزمونالف'), 'علت نامعلومی ارزش‌گذاری'].iloc[0]
+    assert 'پس از شروع کپی سبد' in issue and 'پس از معامله' not in issue
+    assert any('خرید مجازی تازه' in warning.value and 'متوقف است' in warning.value for warning in at.warning)
+
+
 def test_portfolio_value_uses_last_trade_not_official_close(mirror, db):
     repo, _, _ = mirror
     with db.conn:

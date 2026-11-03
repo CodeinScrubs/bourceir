@@ -4,9 +4,29 @@ import json
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from config import settings
+
+_WINDOWS = os.name == 'nt'
+_LOCK_RETRY_DELAYS = (.01, .02, .04, .08)
+
+
+def _retry_windows_file_lock(operation):
+    """Retry only bounded Windows sharing/access denials, preserving the first error."""
+    original = None
+    for delay in (*_LOCK_RETRY_DELAYS, None):
+        try:
+            return operation()
+        except PermissionError as error:
+            if not _WINDOWS or getattr(error, 'winerror', None) not in (5, 32, 33):
+                raise
+            if original is None:
+                original = error
+            if delay is None:
+                raise original
+            time.sleep(delay)
 
 
 def json_report_path(path, *, forbidden_paths=()):
@@ -32,6 +52,7 @@ def write_json_report(path, payload, *, forbidden_paths=()):
     body = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
+    primary_error = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=target.parent,
                                          prefix='.' + target.name + '.', suffix='.tmp', delete=False) as handle:
@@ -39,10 +60,20 @@ def write_json_report(path, payload, *, forbidden_paths=()):
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, target)
+        _retry_windows_file_lock(lambda: os.replace(temporary, target))
+        temporary = None  # A successful atomic move leaves no source file to clean up.
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
         if temporary is not None:
-            temporary.unlink(missing_ok=True)
+            try:
+                _retry_windows_file_lock(lambda: temporary.unlink(missing_ok=True))
+            except OSError as error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(f'Temporary JSON cleanup also failed ({type(error).__name__}); '
+                                       f'temporary file may remain: {temporary}')
     return target
 
 

@@ -21,6 +21,20 @@ from database.db import DatabaseManager
 from database.flow_data import load_flow_inputs
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_v3_metrics(input_digest, version, _prices, _clients):
+    """Reuse exact inputs only; excluded frame arguments are fully covered by the digest."""
+    return flow_metrics(_prices, _clients)
+
+
+def _v3_metrics(prices, clients):
+    from dashboard.operator_status import _v4_input_digest
+
+    # The shared digest covers every row, dtype, index, calculation source and
+    # effective lock setting. Streamlit's default large-frame sampling does not.
+    return _cached_v3_metrics(_v4_input_digest(prices, clients), FLOW_FILTER_VERSION, prices, clients)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _latest_metrics(database_path, version):
     if version == FLOW_FILTER_V4_VERSION:
@@ -30,7 +44,7 @@ def _latest_metrics(database_path, version):
         prices, clients = load_flow_inputs(db, tail_per_symbol=65, include_inactive=False)
     if prices.empty:
         return pd.DataFrame()
-    metrics = flow_metrics(prices, clients)
+    metrics = _v3_metrics(prices, clients)
     # One common as-of date: never mix each symbol's last session into a market cross-section.
     return metrics.loc[metrics.date == metrics.date.max()].reset_index(drop=True)
 

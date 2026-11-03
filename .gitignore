@@ -77,4 +77,9 @@ doctor-ci.json
 *.db-wal
 *.db-shm
 .ruff_cache/
+tests/.timing-output/
 node_modules/
+
+# Generated reports can include private account context; retain them locally.
+/outputs/
+/temp_full_report.md

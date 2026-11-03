@@ -21,6 +21,15 @@ FOOLAD_INS = "46348559193224090"
 
 
 @pytest.fixture(autouse=True)
+def isolated_public_source_state(tmp_path, monkeypatch):
+    """Offline/fake provider requests must never alter production source-health state."""
+    from data_collector import source_cooldown
+    root = tmp_path/'public-source-state'
+    monkeypatch.setattr(source_cooldown, 'STATE_DIR', root)
+    return root
+
+
+@pytest.fixture(autouse=True)
 def restore_process_entrypoint_after_test():
     """AppTest ورودی موقت می‌سازد؛ آزمون بعدی spawn باید ورودی اصلی را ببیند."""
     absent = object()
@@ -118,7 +127,8 @@ class FakeSession:
         self.headers = {}
         self.calls = []
 
-    def get(self, url, timeout=None):
+    def get(self, url, timeout=None, **options):
+        assert options.get('allow_redirects',False) is False
         self.calls.append(url)
         for pattern, payload in self.routes.items():
             if pattern in url:

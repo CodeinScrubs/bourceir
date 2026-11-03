@@ -45,6 +45,45 @@ def provider(*responses):
     return CodalProvider(session=session), session
 
 
+def test_falsey_injected_session_is_preserved_without_creating_another_session():
+    class FalseySession(Session):
+        def __bool__(self):
+            return False
+
+    session = FalseySession(Response())
+    api = CodalProvider(session=session)
+    assert api.session is session
+    assert api.get_document(URL)['status'] == 'captured'
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize('mode', ['document', 'monthly', 'financial'])
+def test_falsey_injected_provider_never_constructs_a_network_provider(mode, tmp_path, monkeypatch):
+    from ops.codal_financial_archive import capture_financial_statement
+    from ops.codal_tables import capture_codal_tables
+
+    class FalseyProvider:
+        calls = []
+
+        def __bool__(self):
+            return False
+
+        def get_document(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return {'status': 'verification_required'}
+
+    fake = FalseyProvider()
+    monkeypatch.setattr('data_collector.codal.CodalProvider', lambda: pytest.fail('unexpected network provider'))
+    if mode == 'document':
+        result = capture_codal_document(URL, provider=fake, root=tmp_path)
+    elif mode == 'monthly':
+        result = capture_codal_tables(URL, 123, provider=fake, root=tmp_path)
+    else:
+        result = capture_financial_statement(URL, 123, provider=fake, root=tmp_path)
+    assert result['status'] == 'verification_required' and len(fake.calls) == 1
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize('url', [
     'https://evil.test/Reports/Decision.aspx', 'http://codal.ir/Reports/Decision.aspx',
     'https://codal.ir.evil.test/Reports/Decision.aspx', 'https://user:pass@codal.ir/Reports/Decision.aspx',
@@ -126,6 +165,38 @@ def test_partial_http_response_is_not_archived(tmp_path):
     assert response.closed and not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize('delta', [-1, 1, 100])
+def test_identity_body_length_mismatch_is_not_archived(tmp_path, delta):
+    body = HTML.encode('utf-8')
+    response = Response(body, headers={'Content-Length': str(len(body) + delta)})
+    api, session = provider(response)
+    result = capture_codal_document(URL, provider=api, root=tmp_path)
+    assert result['status'] == 'error'
+    assert result['error_reason'] == 'content_length_mismatch'
+    assert 'content' not in result and len(session.calls) == 1 and response.closed
+    assert not list(tmp_path.iterdir())
+
+
+def test_decoded_gzip_body_does_not_compare_against_encoded_content_length(tmp_path):
+    import gzip
+
+    body = HTML.encode('utf-8')
+    # requests iter_content yields decoded bytes; Content-Length counts wire bytes.
+    response = Response(body, headers={'Content-Length': str(len(gzip.compress(body))), 'Content-Encoding': 'gzip'})
+    api, _ = provider(response)
+    result = capture_codal_document(URL, provider=api, root=tmp_path)
+    assert result['status'] == 'captured' and response.closed
+
+
+@pytest.mark.parametrize('declared', ['-1', '1.5', '100, 100', ' 1', '۱۲۳'])
+def test_malformed_content_length_is_not_accepted_as_complete(tmp_path, declared):
+    response = Response(headers={'Content-Length': declared})
+    api, _ = provider(response)
+    result = capture_codal_document(URL, provider=api, root=tmp_path)
+    assert result['status'] == 'error' and response.closed
+    assert not list(tmp_path.iterdir())
+
+
 def test_redirect_limit_is_bounded_and_all_responses_close():
     responses = [Response(status=302, headers={'Location': URL}) for _ in range(4)]
     api, session = provider(*responses)
@@ -133,7 +204,7 @@ def test_redirect_limit_is_bounded_and_all_responses_close():
     assert len(session.calls) == 4 and all(row.closed for row in responses)
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx','Assembly.aspx'])
 def test_official_new_report_redirect_can_be_archived(tmp_path,route):
     target='/Reports/'+route+'?LetterSerial=test'
     redirect=Response(status=302,headers={'Location':target});body=Response()
@@ -144,14 +215,14 @@ def test_official_new_report_redirect_can_be_archived(tmp_path,route):
     assert redirect.closed and body.closed and not result['text_extraction_complete']
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx','Assembly.aspx'])
 def test_official_new_report_root_path_is_not_assumed_public(route):
     api,session=provider()
     with pytest.raises(ValueError):api.get_document('https://codal.ir/'+route+'?LetterSerial=test')
     assert session.calls==[]
 
 
-@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx'])
+@pytest.mark.parametrize('route',['InterimStatement.aspx','MonthlyActivity.aspx','ExtraAssembly.aspx','Assembly.aspx'])
 @pytest.mark.parametrize('unsafe',['https://evil.test/Reports/','https://codal.ir/Reports/'])
 def test_official_new_report_does_not_allow_external_or_session_redirects(route,unsafe):
     target=unsafe+route+'?LetterSerial=test'+('&session=secret' if 'codal.ir' in unsafe else '')

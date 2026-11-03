@@ -21,6 +21,8 @@ import pandas as pd
 from config import settings
 from core.client_quality import validated_client_data
 from core.daily_publications import publication_request
+from core.order_book import book_bound_violations
+from core.price_quality import price_quality
 from core.text import normalize_symbol
 from core.timeutils import is_canonical_iso_date, is_market_open, now_tehran, now_tehran_iso
 from data_collector.base import DAILY_COLUMNS, BaseDataProvider
@@ -94,13 +96,21 @@ class DataCollector:
                 return None
             return sym
         meta = self.provider.search_symbol(symbol_fa)
-        if not meta:
+        if (not isinstance(meta, dict) or normalize_symbol(meta.get('symbol_fa') or '') != normalize_symbol(symbol_fa)
+                or not meta.get('ins_code')):
+            logger.warning('نتیجه جستجو با نماد درخواستی و شناسه معتبر تطبیق ندارد.')
             return None
         if not TsetmcProvider.is_in_scope(meta["symbol_fa"], meta.get("instrument_type_code")):
             logger.warning("نماد «%s» سهم عادی بورس/فرابورس نیست و خارج از دامنه پروژه است.", symbol_fa)
             return None
-        self.db.upsert_symbol(meta)
-        return self.db.get_symbol(meta["symbol_fa"])
+        saved_id = self.db.upsert_symbol(meta)
+        if saved_id is None:
+            return None
+        saved = self.db.get_symbol(meta["symbol_fa"])
+        if not saved or saved['id'] != saved_id or str(saved.get('ins_code')) != str(meta['ins_code']):
+            logger.warning('شناسه نماد ثبت‌شده با نتیجه جستجو برابر نیست.')
+            return None
+        return saved
 
     def _finish(self, collection_type: str, started_at: str, requested: int, succeeded: int,
                 failed: int, errors: List[str], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -178,6 +188,8 @@ class DataCollector:
         targets = self.target_symbols(symbols)
         started_at = now_tehran_iso()
         succeeded = failed = rows_saved = anomalies = 0
+        invalid_rows = partial_symbols = 0
+        issue_counts = Counter()
         errors: List[str] = []
 
         for i, sym in enumerate(targets, start=1):
@@ -194,6 +206,15 @@ class DataCollector:
                     errors.append(f"عدم دریافت تاریخچه «{sym}»")
                     failed += 1
                     continue
+                if df.empty:
+                    errors.append(f"تاریخچه «{sym}» خالی است؛ علت نبود داده نامعلوم است")
+                    failed += 1
+                    continue
+                _, quality = price_quality(df)
+                bad = quality.any(axis=1)
+                invalid_count = int(bad.sum())
+                invalid_rows += invalid_count
+                issue_counts.update({name: int(count) for name, count in quality.sum().items() if count})
                 rows_saved += self.db.upsert_daily_prices_df(meta["id"], df)
 
                 flags = DataValidator.quant_anomaly_flags(df)
@@ -204,14 +225,21 @@ class DataCollector:
                     "volume_anomaly_flag": int(flags.at[idx, "volume_anomaly"]),
                     "notes": "ناهنجاری کمی در تاریخچه روزانه",
                 } for idx in flagged])
-                succeeded += 1
+                if invalid_count:
+                    errors.append(f'تاریخچه «{sym}» دارای {invalid_count} ردیف با داده نامعتبر یا نامعلوم است')
+                    failed += 1
+                    partial_symbols += int(invalid_count < len(df))
+                else:
+                    succeeded += 1
             except Exception as e:
                 logger.exception("خطای پیش‌بینی‌نشده در گردآوری تاریخچه «%s»", sym)
                 errors.append(f"خطا در «{sym}»: {e}")
                 failed += 1
 
         return self._finish("history", started_at, len(targets), succeeded, failed, errors,
-                            {"rows_inserted": rows_saved, "anomalies_flagged": anomalies})
+                            {"rows_inserted": rows_saved, "anomalies_flagged": anomalies,
+                             "invalid_price_rows": invalid_rows, "partial_symbols": partial_symbols,
+                             "price_issue_counts": dict(issue_counts)})
 
     def collect_session_candles(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         """پس از ساعت ۱۳ روز معاملاتی، دریافت تاریخ‌دار برای دامنه انتخاب‌شده.
@@ -462,6 +490,7 @@ class DataCollector:
             raise ValueError('منبع مظنه شناخته‌شده نیست')
         source_records, source_errors = {}, {}
         observations, errors, rows = [], [], []
+        price_only_rows, price_only_pending = [], []
         if quote_source != 'market-watch':
             if not (wanted or instruments is not None) or not 1 <= len(known) + len(unresolved) <= MAX_INSTRUMENTS:
                 raise ValueError('منبع تاریخ‌دار به دامنه صریح حداکثر ده نماد نیاز دارد')
@@ -502,6 +531,18 @@ class DataCollector:
                 errors.append(f"{sym['symbol_fa']}: شناسه تکراری در پاسخ دیده‌بان")
                 continue
             snap = matches[0]
+            violations = book_bound_violations(snap) if quote_source == 'market-watch' else []
+            if violations:
+                # Keep the separately validated price fields, but never turn a contradictory
+                # book into zero queues or a successful book receipt. The original offending
+                # levels remain in this cycle's coverage record.
+                item['book_violations'] = violations
+                snap = dict(snap)
+                for side in ('bid', 'ask'):
+                    for level in range(1, 6):
+                        for field in ('price', 'vol', 'count'):
+                            snap[f'{side}_{field}_{level}'] = None
+                snap['buy_queue_volume'] = snap['sell_queue_volume'] = None
             is_valid, snap_errors = DataValidator.validate_snapshot(snap)
             if not is_valid:
                 item['status'] = 'rejected'
@@ -510,12 +551,22 @@ class DataCollector:
                                               quality_score=None, notes="; ".join(snap_errors))
                 continue
             item.update(provider_timestamp=snap.get('provider_timestamp'), captured_at=snap.get('captured_at'))
+            if violations:
+                item['status'] = 'rejected'
+                unchanged = self._last_fingerprints.get(ins_code) == self._fingerprint(snap)
+                item['price_only_status'] = 'unchanged' if unchanged else 'changed'
+                if not unchanged:
+                    price_only_rows.append((sym['id'], snap))
+                price_only_pending.append((item, sym['id'], snap, unchanged))
+                errors.append(f"{sym['symbol_fa']}: عمق ناسازگار قرنطینه شد؛ فقط قیمت مشاهده‌شده نگهداری می‌شود")
+                continue
             if self._last_fingerprints.get(ins_code) == self._fingerprint(snap):
                 item['status'] = 'unchanged'
                 continue
             item['status'] = 'changed'
             rows.append((sym["id"], snap))
         saved = self.db.insert_snapshots_bulk(rows)
+        price_only_saved = self.db.insert_snapshots_bulk(price_only_rows)
         # دریافت بی‌تغییر به ردیف اصلی وصل می‌شود؛ ساعت ذخیره قبلی بازنویسی نمی‌شود.
         with self.db.conn:
             self.db.conn.execute('BEGIN')
@@ -532,6 +583,17 @@ class DataCollector:
                     errors.append(f"{known[ins_code]['symbol_fa']}: تطبیق محتوای پاسخ با ردیف ذخیره‌شده نامعلوم است")
                 else:
                     # فقط ذخیره موفق و تطبیق‌یافته در حافظه می‌ماند؛ خطای نوشتن باعث حذف دریافت بعدی نمی‌شود.
+                    self._last_fingerprints[ins_code] = self._fingerprint(snap)
+                    self._last_snapshot_times[ins_code] = stored_at
+            for item, symbol_id, snap, unchanged in price_only_pending:
+                ins_code = item['ins_code']
+                stored_at = self._last_snapshot_times.get(ins_code) if unchanged else snap['captured_at']
+                item['price_only_binding'] = bind_collected_snapshot(self.db, symbol_id, snap, stored_at)
+                if item['price_only_binding'] is None:
+                    self._last_fingerprints.pop(ins_code, None)
+                    self._last_snapshot_times.pop(ins_code, None)
+                    errors.append(f"{known[ins_code]['symbol_fa']}: تطبیق قیمت بدون عمق نامعلوم است")
+                else:
                     self._last_fingerprints[ins_code] = self._fingerprint(snap)
                     self._last_snapshot_times[ins_code] = stored_at
         counts = Counter(item['status'] for item in observations)
@@ -552,7 +614,11 @@ class DataCollector:
             coverage['quote_source'] = quote_source
         return self._finish("snapshot", started_at, coverage['expected'], saved, failed or (0 if known else 1), errors,
                             {"market_rows": len(snapshots or []), "unchanged_skipped": counts['unchanged'],
-                             "valid_observations": valid, 'coverage': coverage, "snapshots": [s for _, s in rows]})
+                             "valid_observations": valid, 'coverage': coverage, "snapshots": [s for _, s in rows],
+                             'book_quarantined': sum(bool(item.get('book_violations')) for item in observations),
+                             'price_only_saved': price_only_saved,
+                             'price_only_unchanged': sum(item['price_only_status'] == 'unchanged'
+                                                         for item, _, _, _ in price_only_pending)})
 
     def collect_snapshots(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         """سازگاری با نسخه قبلی: اسنپ‌شات نمادهای مشخص (از طریق دیده‌بان کل بازار)."""

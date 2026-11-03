@@ -95,6 +95,8 @@ def operator_status(db, metrics, market_frame, *, at=None):
                 current_state = risk['state'] if intraday else state
                 reserved = risk['reserved_risk_rial'] if intraday else reserved_position_risk(state, plans)
                 data_current = current_daily_row(row.get('date'), at=at, calendar=calendar)
+                data_current &= bool(market_rules.lock_inputs_known(pd.DataFrame([row])).iloc[0])
+                data_current &= bool(market_rules.daily_vwap(pd.DataFrame([row])).notna().iloc[0])
                 for symbol in current_state['positions']:
                     data_current &= current_daily_row(raw_by_symbol.get(symbol, {}).get('date'), at=at, calendar=calendar)
                 complete = bool(profile['actual_history_complete']) and account is None

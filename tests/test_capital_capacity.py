@@ -5,7 +5,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from backtest.portfolio import PortfolioConfig, replay_portfolio
+from backtest.portfolio import PORTFOLIO_VERSION, PortfolioConfig, replay_portfolio
 from config import settings
 from core.capital_capacity import diagnose_cash_ledger, summarize_cases
 from ops import capital_capacity as study
@@ -39,7 +39,7 @@ def capacity_source(db, tmp_path, monkeypatch):
         for name, frame in dict(picks=picks, executions=result.executions, equity=result.equity, decisions=result.decisions).items():
             frame.to_parquet(folder / ('fold-00-' + mode + '-' + name + '.parquet'), index=False)
     boundary = dict(train_start='2023-01-01', train_end_exclusive='2024-01-01', test_start=dates[0], test_end_exclusive='2024-02-01')
-    source = dict(experiment_id=key, protocol=dict(version='flow-portfolio-v4', portfolio_version='portfolio-v4', filter_version='flow-filters-v4',
+    source = dict(experiment_id=key, protocol=dict(version='flow-portfolio-v4', portfolio_version=PORTFOLIO_VERSION, filter_version='flow-filters-v4',
         holdout_start='2024-02-01', source_files=study._current_code(study.ENGINE_FILES),
         inputs=dict(prices=study.sha256(folder / 'prices.parquet')), modes=list(modes), folds=[boundary]),
         results=[dict(fold=boundary, modes=modes)],
@@ -141,6 +141,30 @@ def test_failed_registration_never_runs_replay(db, capacity_source, monkeypatch)
     monkeypatch.setattr(study, 'replay_portfolio', lambda *_, **__: pytest.fail('Must register first'))
     with pytest.raises(RuntimeError, match='ثبت مطالعه'):
         study.run_capacity_study(db, capacity_source[0], multipliers=(1,))
+
+
+@pytest.mark.parametrize('name',['backtest/prepared.py','core/price_quality.py'])
+@pytest.mark.parametrize('change',['missing','changed'])
+def test_preparation_dependencies_must_match_before_capital_replay(db,capacity_source,monkeypatch,name,change):
+    key,source,*_ = capacity_source
+    if change=='missing':
+        del source['protocol']['source_files'][name]
+    else:
+        source['protocol']['source_files'][name] = '0'*64
+    study._write(settings.DATA_DIR/'research'/(key+'.json'),source)
+    monkeypatch.setattr(study,'replay_portfolio',lambda *a,**k:pytest.fail('incompatible source executed'))
+    with pytest.raises(ValueError,match='کد موتور'):
+        study.run_capacity_study(db,key,multipliers=(1,))
+    assert not list((settings.DATA_DIR/'private/capital-capacity').glob('CAPACITY-*'))
+
+
+def test_older_engine_contract_cannot_be_silently_reexecuted_with_current_semantics(db,capacity_source,monkeypatch):
+    key,source,*_ = capacity_source
+    source['protocol']['portfolio_version'] = 'portfolio-v4'
+    study._write(settings.DATA_DIR/'research'/(key+'.json'),source)
+    monkeypatch.setattr(study,'replay_portfolio',lambda *a,**k:pytest.fail('old engine executed'))
+    with pytest.raises(ValueError,match='نسخهٔ موتور'):
+        study.run_capacity_study(db,key,multipliers=(1,))
 
 
 def test_source_generation_mutation_prevents_publication(db, capacity_source, monkeypatch):

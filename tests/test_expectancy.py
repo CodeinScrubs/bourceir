@@ -142,6 +142,7 @@ def test_parquet_review_checks_sealed_dates_before_reading_numeric_values_and_us
 
 def test_pipeline_freezes_models_and_picks_then_replays_all_controls_and_reviews(db, flow_baseline, monkeypatch):
     from features.store import build_feature_store
+    from research.hunter_audit_run import run_hunter_audit
     from research.run import run_research
 
     _, base = flow_baseline
@@ -168,6 +169,9 @@ def test_pipeline_freezes_models_and_picks_then_replays_all_controls_and_reviews
         min_train_sessions=104, test_sessions=30)
     assert len(expected_modes()) == 35 and result['protocol']['primary_candidate'] == 'conditional-2d'
     assert order == [result['experiment_id']+'-PROTOCOL', result['experiment_id']]
+    assert {row['features_version'] for row in db.conn.execute(
+        'SELECT features_version FROM experiments WHERE experiment_id IN (?, ?)', order
+    )} == {source['params']['features']['version']}
     assert all(set(row['modes']) == expected_modes() for row in result['results'])
     folder = base / 'research' / result['experiment_id']
     forecasts = list(folder.glob('fold-*-forecasts.parquet'))
@@ -180,6 +184,17 @@ def test_pipeline_freezes_models_and_picks_then_replays_all_controls_and_reviews
             assert selected.groupby('date').size().to_dict() == control.groupby('date').size().to_dict()
     checked = review_expectancy(db, result['experiment_id'])
     assert checked['curve_metrics_recomputed'] and checked['model_retrained_by_review'] and checked['forecasts_and_errors_recomputed']
+    registered_before_audit = list(order)
+    snapshot_before_audit = {p: sha256(p) for p in folder.rglob('*') if p.is_file()}
+    coverage = run_hunter_audit(db, source_id=result['experiment_id'])
+    assert coverage['source_review']['execution_replayed']
+    assert coverage['source_review']['uncertainty_recomputed']
+    assert coverage['total']['selected'] > 0
+    assert coverage['total']['opportunities'] == sum(f['total']['opportunities'] for f in coverage['folds'])
+    assert sum(f['excluded_tail_opportunities'] for f in coverage['folds']) > 0
+    assert not coverage['all_market_coverage_verified'] and not coverage['selections_are_fills']
+    assert list(order) == registered_before_audit
+    assert snapshot_before_audit == {p: sha256(p) for p in folder.rglob('*') if p.is_file()}
     assert not (base / 'research' / 'holdout-unsealed.json').exists()
     report_file = base / 'research' / (result['experiment_id']+'.json')
     original_report = report_file.read_bytes()
@@ -240,6 +255,8 @@ def test_pipeline_freezes_models_and_picks_then_replays_all_controls_and_reviews
         handle.write(' ')
     with pytest.raises(ValueError, match='گزارش جانبی'):
         review_expectancy(db, result['experiment_id'])
+    with pytest.raises(ValueError, match='گزارش جانبی'):
+        run_hunter_audit(db, source_id=result['experiment_id'])
 
 
 def test_market_export_reads_no_account_tables_and_exports_only_allowlisted_files(db, flow_baseline):

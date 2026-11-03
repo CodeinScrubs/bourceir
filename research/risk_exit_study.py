@@ -174,7 +174,7 @@ def run_risk_exit_study(db, *, parent_folder, parent_db, root):
         fold = TimeFold(**raw_fold)
         prices, days = _fold_inputs(inputs['prices'], calendar, fold)
         chosen = fold_picks(panel, days, p['config']['max_positions'], index)
-        baseline, _, _ = _past_baseline(inputs, panel, days, fold, p['source_horizons'], p['config']['max_positions'])
+        baseline, _, _ = _past_baseline(inputs, panel, days, fold, p['source_horizons'], p['config']['max_positions'], calendar)
         jobs = _jobs(chosen, PortfolioConfig(**p['config']), baseline)
         for mode, (picked, _) in jobs.items():
             original = _read_frame(clone, payload['artifacts_sha256'], f'fold-{index:02d}-{mode}-picks.parquet', p['holdout_start'])
@@ -257,7 +257,7 @@ def review_risk_exit_study(db, folder):
         fold = TimeFold(**raw_fold)
         prices, days = _fold_inputs(inputs['prices'], calendar, fold)
         chosen = fold_picks(panel, days, pp['config']['max_positions'], index)
-        baseline, _, _ = _past_baseline(inputs, panel, days, fold, pp['source_horizons'], pp['config']['max_positions'])
+        baseline, _, _ = _past_baseline(inputs, panel, days, fold, pp['source_horizons'], pp['config']['max_positions'], calendar)
         jobs = _jobs(chosen, PortfolioConfig(**p['config']), baseline)
         record = dict(fold=raw_fold, modes=dict(parent['results'][index]['modes']))
         for mode, (picked, configuration) in jobs.items():

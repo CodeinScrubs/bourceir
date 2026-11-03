@@ -135,14 +135,17 @@ def test_doctor_report_cannot_overwrite_database_before_checks(tmp_path, monkeyp
 
 def test_stale_schema_receipt_blocks_readiness_without_migrating(db, monkeypatch):
     store(db)
+    original_version = db.schema_version()
     with db.conn:
         db.conn.execute('DELETE FROM schema_migrations WHERE version=14')
     monkeypatch.setattr('ops.trader_readiness.inspect_environment', lambda *_: dict(ready=True))
     before = db.conn.total_changes
+    original_receipts = [tuple(row) for row in db.conn.execute('SELECT * FROM schema_migrations ORDER BY version')]
     report = collect_readiness(db)
     assert not report['schema_current'] and report['status'] == 'blocked'
     assert 'database_schema_not_current' in report['blockers']
-    assert db.conn.total_changes == before and db.schema_version() == 15
+    assert db.conn.total_changes == before and db.schema_version() == original_version
+    assert [tuple(row) for row in db.conn.execute('SELECT * FROM schema_migrations ORDER BY version')] == original_receipts
 
 
 def test_intraday_report_cannot_overwrite_database_before_checks(tmp_path, monkeypatch):

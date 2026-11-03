@@ -18,6 +18,7 @@ import logging
 import math
 from typing import Any, Callable, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from backtest.fractions import SyntheticFractionBook
@@ -43,6 +44,9 @@ class BacktestEngine:
         default_slippage_bps: Optional[float] = None,
         periods_per_year: Optional[float] = None,
     ):
+        if any(isinstance(value, (bool, np.bool_)) for value in
+               (initial_capital, max_volume_participation_pct, default_slippage_bps, periods_per_year)):
+            raise ValueError("پارامترهای مالی موتور باید عدد باشند، نه مقدار بولی")
         cfg = settings.BACKTEST_CONFIG
         self.initial_capital = float(initial_capital if initial_capital is not None else cfg["initial_capital"])
         self.cash = self.initial_capital
@@ -88,7 +92,7 @@ class BacktestEngine:
 
     @staticmethod
     def _valid_number(value, integer=False) -> bool:
-        if isinstance(value, (bool, str)):
+        if isinstance(value, (bool, np.bool_, str)):
             return False
         try:
             return math.isfinite(float(value)) and value > 0 and (not integer or float(value).is_integer())
@@ -417,6 +421,9 @@ class BacktestEngine:
         raw_mode = any(col.endswith('_raw') for col in prices_df.columns)
         df["_mark"] = market_rules.official_close(df) if raw_mode else df['close_raw']
         has_range = {"high_raw", "low_raw"}.issubset(df.columns)
+        # A false lock flag is not evidence that the order could execute when
+        # the underlying reference, range or traded volume is unknown.
+        df["_lock_inputs_known"] = market_rules.lock_inputs_known(df) if raw_mode else False
         if has_range and {"value", "volume"}.issubset(df.columns):
             df["_fill"] = market_rules.daily_vwap(df)
         else:
@@ -440,11 +447,12 @@ class BacktestEngine:
         strategy_signal_fn(row, engine) باید 'BUY'، 'SELL' یا None برگرداند. ستون‌های تعدیل‌شده رو به عقب
         (adj_close و adjustment_factor) به استراتژی داده نمی‌شوند چون از آینده خبر دارند (قانون ۱۰).
         """
-        if not 0 < allocation_pct <= 1:
+        if not self._valid_number(allocation_pct) or allocation_pct > 1:
             raise ValueError("سهم تخصیص سرمایه باید بین صفر و یک باشد")
         df = self._prepare(prices_df)
         hidden = [c for c in df.columns if c.startswith("_") or c in ("adj_close", "adjustment_factor")]
         has_volume_column = prices_df.get("volume") is not None
+        raw_mode = any(c.endswith('_raw') for c in prices_df.columns)
         pending: Optional[str] = None
         prev_volume: Optional[float] = None
 
@@ -458,10 +466,27 @@ class BacktestEngine:
             low = row["low_raw"] if "low_raw" in row and pd.notna(row["low_raw"]) else None
             high = row["high_raw"] if "high_raw" in row and pd.notna(row["high_raw"]) else None
 
+            if raw_mode and pending in ("BUY", "SELL"):
+                volume, turnover = row.get("volume"), row.get("value")
+                def known_zero(value):
+                    if isinstance(value, (bool, np.bool_, str)):
+                        return False
+                    try:
+                        return math.isfinite(float(value)) and float(value) == 0
+                    except (TypeError, ValueError, OverflowError):
+                        return False
+                if known_zero(volume):
+                    if not known_zero(turnover):
+                        raise ValueError(f"مرجع یا ورودی صف در {date_str} نامعلوم است؛ اجرای سفارش قابل محاسبه نیست")
+                    fill_price = None  # The coherent zero-activity session had no execution.
+                elif (not self._valid_number(volume, integer=True) or fill_price is None
+                      or not bool(row["_lock_inputs_known"])):
+                    raise ValueError(f"مرجع یا ورودی صف در {date_str} نامعلوم است؛ اجرای سفارش قابل محاسبه نیست")
+
             # ۰. اقدام شرکتی روی پوزیشن باز (قیمت مرجع امروز ≠ قیمت پایانی دیروز)
             pos = self.positions.get(symbol_fa)
             exposed = (pos is not None and pos.quantity > 0) or symbol_fa in self._fractions.exposures
-            if exposed and any(c.endswith('_raw') for c in prices_df.columns) and not self._valid_number(row.get('ref_price_raw')):
+            if exposed and raw_mode and not self._valid_number(row.get('ref_price_raw')):
                 raise ValueError(f"قیمت مرجع پوزیشن باز در {date_str} نامعلوم/نامعتبر است؛ بازده قابل محاسبه نیست")
             if exposed and not self._valid_number(row['_mark']):
                 raise ValueError(f"قیمت ارزش‌گذاری پوزیشن باز در {date_str} نامعلوم است؛ بازده قابل محاسبه نیست")

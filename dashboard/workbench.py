@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from decimal import Decimal, InvalidOperation, localcontext
 
 import pandas as pd
 import streamlit as st
@@ -10,6 +11,7 @@ from config import settings
 from core import market_rules
 from core.account_risk import intraday_account_state, reserved_position_risk
 from core.journal import summarize_executions
+from core.price_quality import numeric_prices
 from core.risk import RiskProfile, plan_trade
 from core.screening import current_daily_row, descriptive_screen
 from core.timeutils import now_tehran, now_tehran_iso, to_jalali
@@ -22,6 +24,26 @@ HORIZONS = {"همان روز": "intraday", "۲ تا ۳ روز": "swing", "چند
 
 def _toman(value):
     return "نامعلوم" if value is None else f"{value / 10:,.0f} تومان"
+
+
+def _price_toman(value):
+    """Display per-share prices without losing a rial to whole-toman rounding."""
+    if value is None or isinstance(value, bool):
+        return "نامعلوم"
+    try:
+        rial = Decimal(str(value))
+        if not rial.is_finite() or rial <= 0 or rial > Decimal('1e24'):
+            return "نامعلوم"
+        with localcontext() as context:
+            context.prec = 50
+            toman = rial / Decimal(10)
+            shown = toman.quantize(Decimal('0.0001'))
+    except (InvalidOperation, TypeError, ValueError):
+        return "نامعلوم"
+    text = format(shown, ',f').rstrip('0').rstrip('.')
+    if shown == 0:
+        text = '0'
+    return ('≈ ' if shown != toman else '') + text + ' تومان'
 
 
 def _account_metric_style():
@@ -129,6 +151,7 @@ def page_workbench():
             data_current = current_daily_row(source["date"], at, calendar=calendar)
             locks = market_rules.lock_flags(pd.DataFrame([source])).iloc[0]
             data_current &= bool(market_rules.daily_vwap(pd.DataFrame([source])).notna().iloc[0])
+            data_current &= bool(market_rules.lock_inputs_known(pd.DataFrame([source])).iloc[0])
             intraday = HORIZONS[horizon_label] == 'intraday'
             snapshot = None
             sizing_state, sizing_reserved = state, risk_reserved
@@ -170,7 +193,7 @@ def page_workbench():
                              f"سرمایه لازم: {_toman(calculation['entry_cost_rial'])}")
                     st.write(f"زیان سناریوی خروج: {_toman(calculation['stop_loss_scenario_rial'])} | "
                              f"سود خالص در هدف خودت: {_toman(calculation['target_net_scenario_rial'])}")
-                    st.caption(f"قیمت سربه‌سر با هزینه و لغزش: {_toman(calculation['breakeven_exit_rial'])} برای هر سهم")
+                    st.caption(f"قیمت سربه‌سر با هزینه و لغزش: {_price_toman(calculation['breakeven_exit_rial'])} برای هر سهم")
                     st.warning("حد زیان قیمت فروش تضمینی نیست؛ صف فروش و توقف می‌تواند زیان بیشتری بسازد. این محاسبه سیگنال خرید نیست.")
                     if st.button("ثبت برنامه دستی", disabled=not rationale.strip()):
                         calculation["price_source_date"] = source["date"]
@@ -248,7 +271,7 @@ def page_shortlist():
     table = screened.loc[screened["liquid"]] if show_old else eligible
     table = table.copy()
     table["روز داده"] = table["date"].map(to_jalali)
-    table["ارزش معاملات (میلیارد تومان)"] = table["value"] / 1e10
+    table["ارزش معاملات (میلیارد تومان)"] = numeric_prices(table, ('value',))['value'] / 1e10
     st.dataframe(table[["symbol_fa", "روز داده", "ارزش معاملات (میلیارد تومان)", "change_pct", "locked_up", "locked_down", "current"]].rename(
         columns={"symbol_fa": "نماد", "change_pct": "تغییر پایانی (٪)", "locked_up": "صف خرید قفل",
                  "locked_down": "صف فروش قفل", "current": "روز مورد انتظار"}), hide_index=True)

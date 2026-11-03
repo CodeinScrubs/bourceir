@@ -1,6 +1,7 @@
 """داده تمام نمونه‌ها مصنوعی است و فقط در پوشه/دیتابیس موقت آزمون می‌ماند."""
 
 import copy
+from decimal import localcontext
 
 import pytest
 
@@ -36,6 +37,28 @@ def test_thresholds_are_exact_not_relaxed(changes):
     assert row['event_possible'] is False and row['event_confirmed'] is False
 
 
+def test_daily_threshold_is_independent_of_callers_decimal_precision():
+    # 2% below 101 is 98.98; a low-precision rounded 99 must not count.
+    row = bar(ref_price_raw=101, low_raw=99, high_raw=104, open_raw=101, close_raw=103)
+    with localcontext() as context:
+        context.prec = 2
+        result = daily_evidence(row)
+    assert result['dip_level_rial'] == '98.98'
+    assert result['event_possible'] is False
+
+
+def test_tick_reconciliation_does_not_accept_a_rounded_daily_total():
+    source = trades((111, 112))
+    day = bar(open_raw=111, low_raw=111, high_raw=112, close_raw=112,
+              ref_price_raw=111, volume=2, value=223, trade_count=2)
+    with localcontext() as context:
+        context.prec = 2
+        good = trade_evidence(source, day)
+        bad = trade_evidence(source, day | {'value': 220})
+    assert good['complete'] is True
+    assert bad['complete'] is False and bad['contradictory'] is True
+
+
 def test_candle_proofs_are_sound_for_every_short_path():
     from itertools import product
     for path in product((97,98,100,102,103),repeat=5):
@@ -53,6 +76,10 @@ def test_noninteger_percentile_boundaries_select_by_position_from_smallest():
     scored=rank_caps(meta,quotes)
     assert (scored['slice_first_rank'],scored['slice_last_rank'])==(369,552)
     assert scored['membership_counts']['inside']==184
+    with localcontext() as context:
+        context.prec = 2
+        low_precision = rank_caps(meta, quotes)
+    assert (low_precision['slice_first_rank'], low_precision['slice_last_rank']) == (369, 552)
 
 
 @pytest.mark.parametrize('changes',[{'ref_price_raw':None},{'volume':0},{'high_raw':99},{'close_raw':200},

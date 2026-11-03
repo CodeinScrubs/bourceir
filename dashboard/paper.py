@@ -8,7 +8,7 @@ import streamlit as st
 
 from core.paper import aware, canonical, quote_fill
 from core.timeutils import now_tehran, to_jalali
-from dashboard.workbench import HORIZONS, _account_metric_style, _toman
+from dashboard.workbench import HORIZONS, _account_metric_style, _price_toman, _toman
 from database.broker import BrokerRepository
 from database.db import DatabaseManager
 from database.paper import PaperRepository
@@ -118,7 +118,7 @@ def _trade_panel(portfolio_id, report):
         st.caption('زمان ثبت: ' + to_jalali(idea['created_at'], with_time=True))
     observation = report['observations'][key]
     if observation['mark_rial'] is not None:
-        st.caption(f"قیمت آخرین ارزش‌گذاری: {_toman(observation['mark_rial'])} برای هر سهم؛ تاریخ {to_jalali(observation['mark_date'])}")
+        st.caption(f"قیمت آخرین ارزش‌گذاری: {_price_toman(observation['mark_rial'])} برای هر سهم؛ تاریخ {to_jalali(observation['mark_date'])}")
     snapshot = observation['snapshot']
     display_key = f'paper-displayed-quote-{portfolio_id}-{key}'
     displayed_snapshot_id = st.session_state.get(display_key)
@@ -129,8 +129,8 @@ def _trade_panel(portfolio_id, report):
             st.rerun()
         if snapshot:
             c1, c2 = st.columns(2)
-            c1.metric('بهترین عرضه مشاهده‌شده برای خرید', _toman(snapshot.get('ask_price_1')))
-            c2.metric('بهترین تقاضای مشاهده‌شده برای فروش', _toman(snapshot.get('bid_price_1')))
+            c1.metric('بهترین عرضه مشاهده‌شده برای خرید', _price_toman(snapshot.get('ask_price_1')))
+            c2.metric('بهترین تقاضای مشاهده‌شده برای فروش', _price_toman(snapshot.get('bid_price_1')))
             st.caption('زمان گزارش‌شده: ' + to_jalali(snapshot['provider_timestamp'], with_time=True)
                        + ' | زمان دریافت: ' + to_jalali(snapshot['captured_at'], with_time=True))
             preview = []
@@ -139,7 +139,7 @@ def _trade_panel(portfolio_id, report):
                 try:
                     estimate = quote_fill(snapshot, side=direction, quantity=1, at=now_tehran(),
                         decision_at=idea['created_at'], protocol=report['protocol'], calendar=report['calendar_exceptions'])
-                    preview.append(label + ': ' + _toman(estimate['price_rial']) + ' برای هر سهم، پیش از کارمزد')
+                    preview.append(label + ': ' + _price_toman(estimate['price_rial']) + ' برای هر سهم، پیش از کارمزد')
                 except ValueError as exc:
                     preview.append(label + ': ' + str(exc))
             st.caption(' | '.join(preview))
@@ -171,6 +171,13 @@ def _trade_panel(portfolio_id, report):
                 st.error(str(exc))
 
 
+def _display_mark_issue(issue, idea, events):
+    if (issue == 'قیمت پس از معامله هنوز موجود نیست' and idea.get('origin') == 'broker_opening'
+            and not any(event['kind'] == 'trade' and event['idea_id'] == idea['id'] for event in events)):
+        return 'قیمت معتبر پس از شروع کپی سبد موجود نیست'
+    return issue
+
+
 def _scorecard(portfolio_id, report):
     protocol, ledger = report['protocol'], report['ledger']
     st.info('این کارنامه نتیجه سناریوی قیمت دلخواه است؛ اجرای آن قیمت تأیید نشده.' if protocol['mode'] == 'manual'
@@ -194,8 +201,16 @@ def _scorecard(portfolio_id, report):
     c2.metric('کارمزد پرداخت‌شده مجازی', _toman(ledger['fees_rial']))
     if report['loss_limit_reached']:
         st.error('ارزش برآوردی به کف زیان رسیده؛ خرید تازه متوقف است. فروش برای ثبت نتیجه همچنان مجاز است؛ سقف زیان، تضمین حداکثر ضرر نیست.')
+    if report['equity_rial'] is None:
+        st.warning('ارزش کل پورتفوی مجازی نامعلوم است؛ ثبت خرید مجازی تازه تا مشخص‌شدن ارزش سبد متوقف است.')
     if issues:
-        st.warning('سود اقتصادی نامعلوم: ' + '؛ '.join(issues) + '. هیچ سود نقدی، حق‌تقدم یا تعداد سهم فرضی به دفتر اضافه نشده است.')
+        st.warning('سود اقتصادی نامعلوم است؛ جزئیات هر دارایی در جدول زیر آمده است. هیچ سود نقدی، حق‌تقدم یا تعداد سهم فرضی به دفتر اضافه نشده است.')
+        affected = [{'نماد': report['ideas'][key]['symbol_fa'],
+                     'علت نامعلومی ارزش‌گذاری': '؛ '.join(_display_mark_issue(issue, report['ideas'][key], report['events'])
+                                                         for issue in problems)}
+                    for key, problems in report['integrity'].items() if problems]
+        with st.expander(f'دارایی‌ها و تحلیل‌های دارای ابهام ({len(affected)})', expanded=len(affected) <= 5):
+            st.dataframe(pd.DataFrame(affected), hide_index=True, width='stretch')
     if report['passive_unknown']:
         st.warning('ارزش دارایی‌های فقط‌نمایشی نامعلوم است: ' + '، '.join(report['passive_unknown']))
     if not report['runtime_matches']:
@@ -203,10 +218,14 @@ def _scorecard(portfolio_id, report):
     holdings = []
     for key, position in ledger['positions'].items():
         idea, observation = report['ideas'][key], report['observations'][key]
+        mark_issues = [_display_mark_issue(issue, idea, report['events']) for issue in observation['issues']]
+        if not report['runtime_matches']:
+            mark_issues.append('کد محاسبه از زمان افتتاح تغییر کرده است')
         holdings.append({'نماد': idea['symbol_fa'], 'تحلیل': idea['label'], 'تعداد': position['quantity'],
                          'بهای تمام‌شده (تومان)': position['cost_rial'] / 10,
                          'قیمت نشان‌گذاری (تومان)': None if observation['mark_rial'] is None else observation['mark_rial'] / 10,
                          'تاریخ قیمت': to_jalali(observation['mark_date']),
+                         'علت نامعلومی ارزش‌گذاری': '؛ '.join(mark_issues),
                          'سود/زیان باز خالص (تومان)': None if observation['issues'] or not report['runtime_matches']
                          else None if position.get('unrealized_net_rial') is None else position['unrealized_net_rial'] / 10})
     if holdings:
@@ -295,7 +314,7 @@ def page_paper():
     preferred = st.session_state.pop('paper_selected', None)
     if preferred in choices:
         st.session_state['paper-picker'] = preferred
-    selected = st.selectbox('پورتفوی فعال', choices,
+    selected = st.selectbox('پورتفوی فعال', choices, index=len(choices) - 1,
                             format_func=lambda k: f"{by_id[k]['name']} | {k[-6:]}", key='paper-picker')
     try:
         with DatabaseManager(read_only=True) as db:

@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from config import settings
+from core.price_quality import numeric_prices
 
 BUY_FEE = settings.FEES["buy"]
 SELL_FEE = settings.FEES["sell"]
@@ -48,19 +49,14 @@ def breakeven_move(buy_fee: float = BUY_FEE, sell_fee: float = SELL_FEE) -> floa
 
 def official_close(df: pd.DataFrame) -> pd.Series:
     """قیمت پایانی رسمی؛ آخرین معامله جایگزین داده رسمی نامعلوم نمی‌شود."""
-    if "close_final_raw" not in df.columns:
-        return pd.Series(np.nan, index=df.index, dtype=float)
-    close = pd.to_numeric(df['close_final_raw'], errors='coerce')
-    return close.where(np.isfinite(close) & (close > 0))
+    close = numeric_prices(df, ('close_final_raw',))['close_final_raw']
+    return close.where(close > 0)
 
 
 def reference_price(df: pd.DataFrame) -> pd.Series:
     """مرجعِ ارائه‌شده اگر خراب/نامعلوم باشد همان NaN می‌ماند؛ از نماد دیگر حدس زده نمی‌شود."""
-    if "ref_price_raw" in df.columns:
-        ref = df["ref_price_raw"]
-        return ref.where(np.isfinite(ref) & (ref > 0))
-    close = official_close(df)
-    return close.groupby(df["symbol"]).shift(1) if "symbol" in df else close.shift(1)
+    ref = numeric_prices(df, ('ref_price_raw',))['ref_price_raw']
+    return ref.where(ref > 0)
 
 
 def daily_vwap(df: pd.DataFrame) -> pd.Series:
@@ -68,9 +64,10 @@ def daily_vwap(df: pd.DataFrame) -> pd.Series:
     میانگین موزون قیمت روز = ارزش معاملات ÷ حجم (قیمت واقع‌بینانه برای کسی که در طول روز معامله می‌کند).
     داده خراب به قیمت دیگری تبدیل نمی‌شود؛ VWAP نامعتبر یا خارج بازه = NaN.
     """
-    volume = df["volume"].astype(float)
-    vwap = (df["value"].astype(float) / volume).where(volume > 0)
-    low, high = df["low_raw"], df["high_raw"]
+    numeric = numeric_prices(df, ('value', 'volume', 'low_raw', 'high_raw'))
+    volume = numeric['volume']
+    vwap = (numeric['value'] / volume).where(volume > 0)
+    low, high = numeric['low_raw'], numeric['high_raw']
     valid = np.isfinite(vwap) & np.isfinite(volume) & (volume > 0) & (volume % 1 == 0)
     valid &= np.isfinite(low) & np.isfinite(high) & (low > 0) & (high >= low)
     tolerance = 1e-6 * high.abs()
@@ -81,6 +78,16 @@ def daily_vwap(df: pd.DataFrame) -> pd.Series:
 # ═══════════════════════════════════════════════
 # صف قفل (Limit Lock)
 # ═══════════════════════════════════════════════
+
+def lock_inputs_known(df: pd.DataFrame) -> pd.Series:
+    """Whether the daily one-price lock proxy has usable source inputs.
+
+    This is data completeness only, not evidence of an actual order queue.
+    """
+    raw = numeric_prices(df, ('low_raw', 'high_raw', 'ref_price_raw', 'volume'))
+    return (raw.ref_price_raw.gt(0) & raw.low_raw.gt(0) & raw.high_raw.ge(raw.low_raw)
+            & raw.volume.gt(0) & raw.volume.eq(np.floor(raw.volume)))
+
 
 def lock_flags(df: pd.DataFrame, min_move: Optional[float] = None) -> pd.DataFrame:
     """
@@ -97,9 +104,10 @@ def lock_flags(df: pd.DataFrame, min_move: Optional[float] = None) -> pd.DataFra
     از کمترین دامنه مشاهده‌شده بسیار کمتر است و فقط معامله تک‌قیمتی نزدیک قیمت مرجع را کنار می‌گذارد.
     """
     min_move = settings.BACKTEST_CONFIG["lock_min_move_pct"] if min_move is None else min_move
-    ref = reference_price(df)
-    single_price = (df["high_raw"] == df["low_raw"]) & (df["volume"].fillna(0) > 0)
-    traded_move = df["high_raw"] / ref - 1.0
+    numeric = numeric_prices(df, ('low_raw', 'high_raw', 'ref_price_raw', 'volume'))
+    ref = numeric['ref_price_raw'].where(numeric['ref_price_raw'] > 0)
+    single_price = (numeric['high_raw'] == numeric['low_raw']) & (numeric['volume'] > 0)
+    traded_move = numeric['high_raw'] / ref - 1.0
     return pd.DataFrame({
         "locked_up": (single_price & (traded_move >= min_move)).fillna(False),
         "locked_down": (single_price & (traded_move <= -min_move)).fillna(False),
@@ -123,7 +131,7 @@ def corporate_action_factors(df: pd.DataFrame, tolerance: float = 1e-6) -> pd.Se
     close = official_close(df)
     prev_close = close.groupby(df["symbol"]).shift(1) if "symbol" in df else close.shift(1)
     first = df.groupby("symbol").cumcount() == 0 if "symbol" in df else pd.Series(np.arange(len(df)) == 0, index=df.index)
-    ref = df["ref_price_raw"] if "ref_price_raw" in df.columns else prev_close
+    ref = reference_price(df)
     factor = (ref / prev_close).where(np.isfinite(ref) & np.isfinite(prev_close) & (ref > 0) & (prev_close > 0))
     # Only the first archive row has no preceding holding interval. Later unknowns stay unknown.
     factor = factor.mask(first, 1.0)

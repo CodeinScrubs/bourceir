@@ -9,6 +9,7 @@ def summarize_daily_market(frame, *, expected_count):
     active = volume > 0
     returns = market_rules.pit_daily_returns(frame).where(active)
     flags = market_rules.lock_flags(frame)
+    lock_known = market_rules.lock_inputs_known(frame)
     value_known = market_rules.daily_vwap(frame).notna()
     values = finite_number(frame, 'value').where(value_known)
     net = (coherent_side(frame, frame, 'buy')[2] - coherent_side(frame, frame, 'sell')[2]).where(value_known)
@@ -17,7 +18,9 @@ def summarize_daily_market(frame, *, expected_count):
                 up=int((returns > 0).sum()), down=int((returns < 0).sum()),
                 flat=int((returns == 0).sum()), return_coverage=int(returns.notna().sum()),
                 return_unknown_count=int(returns.isna().sum()),
-                locked_up=int(flags['locked_up'].sum()), locked_down=int(flags['locked_down'].sum()),
+                locked_up=int((flags['locked_up'] & lock_known).sum()),
+                locked_down=int((flags['locked_down'] & lock_known).sum()),
+                lock_coverage=int(lock_known.sum()), lock_unknown_count=int((~lock_known).sum()),
                 lock_classification='one_price_proxy_not_verified_order_queue',
                 value=float(values.sum(min_count=1)) if values.notna().any() else None,
                 value_coverage=int(values.notna().sum()),

@@ -1,7 +1,9 @@
-"""برنامه مستقل بازیابی قیمت گمشده از ریزمعاملات؛ اعمال صریح با پشتیبان و رسید."""
+"""بررسی نامزد قیمت گمشده از ریزمعاملات؛ اعمال فقط با شاهد کندل تاریخ‌دار."""
 
 import argparse
+import ast
 import hashlib
+import inspect
 import json
 import re
 import sqlite3
@@ -18,7 +20,19 @@ from database.price_recovery import apply_recoveries
 from ops.price_recheck import SOURCE_FILES, _archived_preflight, _local_rows_unchanged
 from ops.report_files import private_report_path, read_private_report, write_private_report
 
-VERSION = 'price-recovery-run-v2'
+VERSION = 'price-recovery-run-v3'
+LEGACY_VERSION = 'price-recovery-run-v2'
+# Only the immediately preceding implementation is supported for read-only
+# replay, and only when every other source fingerprint is still identical.
+LEGACY_OPS_SHA256 = '074df297cea4fb99a7f19a2c053902c10c5c3ba8518e3a283c7850b085738e36'
+LEGACY_REPLAY_AST = {
+    'sha': 'b93f3d05db22b499cee4b3449924e7d8278d56fe81e2a8bc50bc68552e226a40',
+    'code_identity': '1e5cbf8dfaba0c8d7c87b9504febbd96da22340aa39d53d4b4df35825e6dfd87',
+    '_compatible_code': 'fb3ecd703903eaf15588156c19449ccc90b1d5ae2ac88f5217c025d9dbbdbf0b',
+    '_validate_selection_options': '69b832dda912e5616d8253220eadfe733dc947f282350ba709a6fe21d246e3cc',
+    '_selection': '0c1f34a1ba46c25a9c39478c27c61484c342e8e6277122b3d5a37f2ef88823e2',
+    'verified_recovery': '37b3f86e3049f78eb622c4ab69af358a09d65ab3987636ec6e2931fa1c828607',
+}
 CODE_FILES = tuple(dict.fromkeys((*SOURCE_FILES, 'ops/price_recovery.py', 'core/price_recovery.py',
     'core/query_screener.py', 'data_collector/trade_archive.py', 'database/price_recovery.py',
     'database/migrator.py', *(path.relative_to(settings.BASE_DIR).as_posix() for _, _, path in discover_migrations()))))
@@ -42,6 +56,25 @@ def code_identity(target=None):
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
     return hashes
+
+
+def _compatible_code(version, recorded):
+    current = code_identity()
+    if version == VERSION:
+        return recorded == current
+    if (version != LEGACY_VERSION or not isinstance(recorded, dict) or set(recorded) != set(current)
+            or recorded.get('ops/price_recovery.py') != LEGACY_OPS_SHA256):
+        return False
+    if not all(recorded[name] == current[name] for name in current if name != 'ops/price_recovery.py'):
+        return False
+    # Legacy bytes are never executed. A recognized producer, unchanged
+    # dependencies, and unchanged current replay logic are all required.
+    try:
+        return all(hashlib.sha256(ast.dump(ast.parse(inspect.getsource(globals()[name])),
+            include_attributes=False).encode()).hexdigest() == expected
+            for name, expected in LEGACY_REPLAY_AST.items()) and bool(LEGACY_REPLAY_AST)
+    except (KeyError, OSError, TypeError, SyntaxError):
+        return False
 
 
 def _validate_selection_options(max_rows, offset, include_warmup):
@@ -92,7 +125,9 @@ def collect_recovery(db, *, from_preflight, provider=None, max_rows=5, offset=0,
                 selection='missing open/last in fixed preflight frame; descending date,symbol,ins_code; explicit offset; no returns used',
                 network_requested=provider is not None, current_global_quality_verified=False,
                 automatic_apply=False, accepted_for_signals=False,
-                limitations=['Decoded provider JSON is preserved, not original HTTP bytes.',
+                limitations=['Trade-only candidates are observational and cannot be applied by this workflow.',
+                             'Use the native daily candle and complete trade-path revision workflow for application.',
+                             'Decoded provider JSON is preserved, not original HTTP bytes.',
                              'Surviving-trade endpoints may differ from a canceled original opening/last trade.',
                              'Full same-source reconciliation is not independent correctness or historical availability.',
                              'Reference, corporate entitlements and other fields are not inferred.'])
@@ -129,8 +164,9 @@ def verified_recovery(folder):
     if not re.fullmatch(r'RECOVER-[a-f0-9]{32}', folder.name):
         raise ValueError('شناسه پوشه بازیابی معتبر نیست')
     plan, result = read_private_report(folder / 'plan.json'), read_private_report(folder / 'result.json')
-    if (plan.get('version') != VERSION or result.get('version') != VERSION or plan.get('run_id') != folder.name
-            or result.get('run_id') != folder.name or plan.get('code') != code_identity()
+    if (plan.get('version') not in (VERSION, LEGACY_VERSION) or result.get('version') != plan.get('version')
+            or plan.get('run_id') != folder.name or result.get('run_id') != folder.name
+            or not _compatible_code(plan.get('version'), plan.get('code'))
             or plan.get('cutoff') > settings.RESEARCH_CONFIG['holdout_start']):
         raise ValueError('قرارداد، کد یا مرز بازیابی با وضعیت فعلی سازگار نیست')
     observations = result['observations']
@@ -176,6 +212,11 @@ def apply_recovery_run(db, folder, *, review_note):
     plan, result, candidates, folder = verified_recovery(folder)
     if db.conn.in_transaction:
         raise ValueError('پیش از پشتیبان‌گیری تراکنش باز مجاز نیست')
+    if candidates:
+        if not all(_local_rows_unchanged(db, [issue for issue, _ in candidates])):
+            raise ValueError('داده یا هویت ردیف پس از تهیه شاهد تغییر کرده است')
+        raise ValueError('نامزد صرفاً ریزمعامله قابل اعمال نیست؛ کندل تاریخ‌دار و مسیر کامل معامله را با '
+                         'native-price-revision جداگانه بررسی کن')
     already = db.conn.execute('SELECT count(*) FROM price_recoveries WHERE run_id=?', (plan['run_id'],)).fetchone()[0]
     backup = backup_database(db.conn, db.db_path) if len(candidates) > already else None
     evidence = dict(plan_sha256=sha(folder / 'plan.json'), result_sha256=sha(folder / 'result.json'),
@@ -194,22 +235,35 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--from-preflight')
+    mode.add_argument('--review-run')
     mode.add_argument('--apply-run')
     parser.add_argument('--fetch', action='store_true')
-    parser.add_argument('--max-rows', type=int, default=5)
+    parser.add_argument('--max-rows', type=int, default=None)
     parser.add_argument('--offset', type=int, default=0)
     parser.add_argument('--include-warmup', action='store_true')
     parser.add_argument('--review-note', default=None)
     args = parser.parse_args(argv)
     from database.db import DatabaseManager
     try:
-        if args.apply_run:
-            if args.fetch or args.offset or args.include_warmup:
+        if args.apply_run or args.review_run:
+            if args.fetch or args.offset or args.include_warmup or args.max_rows is not None:
                 raise ValueError('اعمال شاهد محفوظ دریافت یا انتخاب دسته تازه ندارد')
+            if args.review_run:
+                if args.review_note is not None:
+                    raise ValueError('توضیح اعمال در بازبینی فقط‌خواندنی استفاده نمی‌شود')
+                plan, result, candidates, folder = verified_recovery(args.review_run)
+                print(json.dumps(dict(path=str(folder / 'result.json'), archive_version=plan['version'],
+                    statuses=result['statuses'], trade_path_candidates=len(candidates),
+                    applicable_without_native_candle=0, accepted_for_signals=False), ensure_ascii=False))
+                return 0
             verified_recovery(args.apply_run)
+            if not settings.DB_PATH.is_file():
+                raise ValueError('دیتابیس موجود برای اعمال لازم است')
             with DatabaseManager() as db:
                 report, path = apply_recovery_run(db, args.apply_run, review_note=args.review_note)
         else:
+            if args.review_note is not None:
+                raise ValueError('توضیح اعمال برای ثبت برنامه جمع‌آوری استفاده نمی‌شود')
             provider = None
             try:
                 if args.fetch:
@@ -217,7 +271,7 @@ def main(argv=None):
                     provider = TsetmcProvider()
                 with DatabaseManager(read_only=True) as db:
                     report, path = collect_recovery(db, from_preflight=args.from_preflight,
-                                                    provider=provider, max_rows=args.max_rows,
+                                                    provider=provider, max_rows=args.max_rows if args.max_rows is not None else 5,
                                                     offset=args.offset, include_warmup=args.include_warmup)
             finally:
                 if provider is not None:

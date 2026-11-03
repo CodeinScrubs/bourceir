@@ -1,11 +1,19 @@
 """نمای اولیه میز، محاسبه سنگین فرضیه‌ها را به کاربر نسبت نمی‌دهد."""
 
 import pandas as pd
+import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from config import settings
 from database.db import DatabaseManager
+from ops import jobs
+
+
+@pytest.fixture(autouse=True)
+def isolate_monitor_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path/'data')
+    monkeypatch.setattr(jobs, 'JOBS_DIR', tmp_path/'jobs')
 
 
 def test_operator_initial_view_does_not_evaluate_market_hypotheses(tmp_path, monkeypatch):
@@ -44,6 +52,34 @@ def test_v4_cache_identity_uses_all_rows_and_effective_lock_setting(monkeypatch)
     assert changed != original
     monkeypatch.setitem(settings.BACKTEST_CONFIG, 'lock_min_move_pct', .006)
     assert _v4_input_digest(prices, clients) != changed
+
+
+def test_home_warns_when_a_paper_portfolio_uses_an_older_runtime(tmp_path, monkeypatch):
+    from database.paper import PaperRepository
+
+    path = tmp_path/'paper-warning.db'
+    with DatabaseManager(db_path=path) as db:
+        PaperRepository(db).create(name='دفتر موقت', capital_rial=100_000,
+                                   rationale='سناریوی آزمون', mode='manual')
+    monkeypatch.setattr(settings, 'DB_PATH', path)
+    monkeypatch.setitem(settings.TRADING_HOURS, 'end', '13:30')
+    st.cache_data.clear()
+    try:
+        app = AppTest.from_string('from dashboard.operator_status import operator_panel\noperator_panel()').run()
+        assert not app.exception
+        assert any('ثبت معامله تازه' in item.value and 'متوقف' in item.value for item in app.warning)
+    finally:
+        st.cache_data.clear()
+
+
+def test_broker_capture_age_rejects_future_and_invalid_timestamps():
+    from dashboard.operator_status import _broker_capture_current
+
+    now = '2026-11-02T10:00:00+03:30'
+    assert _broker_capture_current('2026-11-02T09:45:00+03:30', now)
+    assert not _broker_capture_current('2026-11-02T09:44:59+03:30', now)
+    assert not _broker_capture_current('2026-11-02T10:00:01+03:30', now)
+    assert not _broker_capture_current('2026-11-02T10:00:00', now)
 
 
 def test_operator_displays_only_five_for_attention_and_keeps_all_matches(tmp_path, monkeypatch):

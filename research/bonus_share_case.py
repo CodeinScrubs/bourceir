@@ -3,11 +3,13 @@
 import argparse
 import hashlib
 import json
+import math
 import re
 import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from backtest.bonus_shares import BonusCapitalization, replay_bonus_share_portfolio
@@ -37,6 +39,46 @@ PROTOCOL_KEYS = {'version','experiment_id','registered_at','cutoff','modes','con
 
 def _canonical(value):
     return json.dumps(_json_safe(value),ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
+
+
+def _same_replay_values(left, right):
+    """Parquet may promote nested integers to floats when a later row is null.
+
+    Compare numeric values exactly while keeping booleans, nulls, structures,
+    keys and sequence order distinct. Protocol/config checks remain canonical.
+    """
+    def equal(a, b):
+        if isinstance(a, np.generic):
+            a = a.item()
+        if isinstance(b, np.generic):
+            b = b.item()
+        if a is pd.NA:
+            a = None
+        if b is pd.NA:
+            b = None
+        if isinstance(a, float):
+            if math.isinf(a):
+                return False
+            if math.isnan(a):
+                a = None
+        if isinstance(b, float):
+            if math.isinf(b):
+                return False
+            if math.isnan(b):
+                b = None
+        if isinstance(a, bool) or isinstance(b, bool):
+            return type(a) is bool and type(b) is bool and a == b
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return a == b
+        if type(a) is not type(b):
+            return False
+        if isinstance(a, dict):
+            return a.keys() == b.keys() and all(equal(a[key], b[key]) for key in a)
+        if isinstance(a, list):
+            return len(a) == len(b) and all(equal(x, y) for x, y in zip(a, b, strict=True))
+        return a == b
+
+    return equal(left, right)
 
 
 def _source_names():
@@ -286,7 +328,7 @@ def review_bonus_share_case(folder):
             expected=_load_prices(folder/f'{mode}-{label}.parquet',protocol['cutoff'],allow_empty=True)
             actual=getattr(replay,label)
             if (list(actual.columns)!=list(expected.columns) or
-                    _canonical(actual.to_dict('records'))!=_canonical(expected.to_dict('records'))):
+                    not _same_replay_values(actual.to_dict('records'), expected.to_dict('records'))):
                 raise ValueError('جدول اجرا یا منحنی با بازپخش برابر نیست')
     if manifest['files']!=_all_files(folder):
         raise ValueError('فایل‌ها در حین بازبینی تغییر کردند')

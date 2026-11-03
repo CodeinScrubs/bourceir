@@ -124,7 +124,7 @@ def test_fast_json_path_caps_io_and_rejects_partial_or_redirect_even_from_inject
         calls.append(kwargs)
         return SimpleNamespace(status_code=status, raise_for_status=lambda: None, json=lambda: {'test': 1})
     fast = TsetmcProvider(session=SimpleNamespace(get=get), realtime=True)
-    result = fast._get_json('https://cdn.tsetmc.com/test-only-no-network', timeout=120)
+    result = fast._get_json('https://cdn.tsetmc.com/api/test-only-no-network', timeout=120)
     assert (result is not None) == (status == 200)
     assert calls == [dict(timeout=5, allow_redirects=False)]
     assert fast.request_profile == 'external-session-unknown'
@@ -157,7 +157,7 @@ def test_fast_failure_is_none_and_not_a_retried_or_synthetic_quote():
         calls.append(url)
         raise requests.Timeout('test only')
     source = TsetmcProvider(session=SimpleNamespace(get=fail), realtime=True)
-    assert source._get_json('https://cdn.tsetmc.com/test-only-no-network') is None
+    assert source._get_json('https://cdn.tsetmc.com/api/test-only-no-network') is None
     assert len(calls) == 1
 
 

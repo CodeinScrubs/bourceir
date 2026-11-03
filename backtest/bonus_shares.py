@@ -195,7 +195,7 @@ class BonusShareBook:
             raise ValueError('روز قبلی دفتر پایان نیافته است')
         self.last_begin = day
         for symbol, row in session.items():
-            if row['valid']:
+            if row.get('mark_valid',row.get('valid',False)):
                 self.last_marks[symbol] = (row['mark'], day)
         for event in self.events:
             if event.ex_date != day:
@@ -232,6 +232,10 @@ class BonusShareBook:
     @property
     def pending_units(self):
         return sum((self._pending(c) for c in self.claims.values()), Fraction(0))
+
+    @property
+    def has_unvalued_claims(self):
+        return self.pending_units > 0
 
     @property
     def pending_symbols(self):

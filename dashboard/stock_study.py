@@ -28,11 +28,18 @@ def page_stock_study():
         cap=case.get('market_cap') or {}
         rows.append({'نماد':case['symbol'],'صنعت فعلی':case.get('sector_name'),'شروع':to_jalali(case['start']),
                      'پایان':to_jalali(case['end']),'نسبت آخرین قیمت خام':number(window.get('last_price_multiple')),
-                     'نسبت شاخص مصنوعی':number(window.get('synthetic_multiple')),
+                     'نسبت کامل شاخص مصنوعی':number(window.get('synthetic_multiple') if window.get('observation_calendar_verified') else None),
+                     'شاخص فقط مشاهدات موجود':number(window.get('observed_only_synthetic_multiple', window.get('synthetic_multiple'))),
                      'ارزش بازار مشاهده؛ همت':number(cap.get('market_cap_rial')/1e13 if cap.get('market_cap_rial') is not None else None)})
     st.dataframe(pd.DataFrame(rows),hide_index=True)
-    st.warning('تعداد سهام و صنعت امروز به گذشته منتقل نشده‌اند. رتبه تاریخی، بازده اقتصادی و امکان اجرا هنوز تأیید نشده‌اند. '
+    st.warning('شاخص مشاهدات موجود ممکن است جلسه‌های معامله‌شده را جا انداخته باشد؛ تقویم کامل تأیید نشده است. '
+               'تعداد سهام و صنعت امروز به گذشته منتقل نشده‌اند. رتبه تاریخی، بازده اقتصادی و امکان اجرا هنوز تأیید نشده‌اند. '
                'خروجی قدیمی پژوهش با تغییر اعتبارسنجی معتبر نمی‌شود؛ نتیجه جدید نیازمند اجرای مستقل و پذیرش جدا است.')
+    if result['version']=='stock-study-v1':
+        st.warning('این گزارش قدیمی است؛ شاخص فایل HTML آن پوشش کامل جلسات را ثابت نمی‌کند. برای محاسبه با قرارداد تازه، مطالعه را دوباره اجرا کنید.')
+    if result['version'] in ('stock-study-v1', 'stock-study-v2'):
+        st.warning('شمار الگوی تک‌قیمتی در این نسخهٔ قدیمی ممکن است ورودی نامعلوم را بدون تفکیک شمرده باشد؛ '
+                   'این فایل تاریخی بازنویسی نشده است. برای گزارش پوشش معتبر، مطالعه جدید با v3 لازم است.')
     st.download_button('دریافت گزارش کامل آفلاین با نمودار و کدال',(folder/'report.html').read_bytes(),
                        file_name='brs-stock-study.html',mime='text/html')
     st.download_button('دریافت شواهد عددی مطالعه',(folder/'study.json').read_bytes(),

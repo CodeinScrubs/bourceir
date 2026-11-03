@@ -82,7 +82,10 @@ def _panel():
             rows.append({"date": d, "symbol": f"s{i}", "value": 1e10 + i, "score": float(i),
                          "net_ret_1d": rng.normal(0, 0.01), "net_ret_1d_worst": -0.03})
     panel = pd.DataFrame(rows)
-    panel.loc[(panel["symbol"] == "s7") & (panel["date"] == CAL[0]), "net_ret_1d"] = np.nan   # غیرقابل خرید
+    panel['label_status_1d'] = 'complete'
+    blocked = (panel["symbol"] == "s7") & (panel["date"] == CAL[0])
+    panel.loc[blocked, "net_ret_1d"] = np.nan
+    panel.loc[blocked, 'label_status_1d'] = 'entry_blocked'
     return panel
 
 

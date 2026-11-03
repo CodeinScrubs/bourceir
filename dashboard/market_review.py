@@ -9,6 +9,7 @@ from config import settings
 from core.market_review import STATUS_LABELS_FA
 from core.text import to_fa_digits
 from core.timeutils import now_tehran, to_jalali
+from ops.market_return_coverage import load_sensitivity
 from ops.market_review import load_market_review, render_html
 from ops.report_files import read_private_report
 
@@ -65,7 +66,7 @@ def page_market_review(job_panel):
     if report['session_date'] != now_tehran().date().isoformat():
         st.warning('این گزارش مربوط به امروز نیست؛ دریافت تازه به‌صورت خودکار انجام نمی‌شود.')
     if report['status'] != 'observed':
-        st.warning('پوشش ناقص است؛ نماد نامعلوم یا نامعتبر در مخرج پوشش باقی می‌ماند و بازده برایش ساخته نمی‌شود.')
+        st.warning('پوشش ناقص است؛ نماد نامعلوم یا نامعتبر در مخرج پوشش باقی می‌ماند و وارد آمار اصلی نمی‌شود.')
     summary = report['summary']
     cols = st.columns(3)
     cols[0].metric('کندل معتبر', to_fa_digits(summary['traded_count']))
@@ -77,6 +78,26 @@ def page_market_review(job_panel):
     st.caption('قرینه معاملات تک‌قیمت، صف تأییدشده نیست. خالص ارزش حقیقی تاریخ‌دار و زمان مستقل مظنه‌ها هنوز معلوم نیست.')
     st.dataframe(pd.DataFrame([{'وضعیت داده': STATUS_LABELS_FA.get(key, 'وضعیت نامعلوم'), 'شمار': value}
                                for key, value in summary['status_counts'].items()]), hide_index=True, width='stretch')
+    if summary['status_counts'].get('invalid_candle', 0):
+        try:
+            sensitivity = load_sensitivity(root / chosen, report)
+            if sensitivity['partial_returns']:
+                with st.expander('تحلیل حساسیت: بازده پایانی با گشایش نامعلوم'):
+                    st.caption('در این نمادها منبع گشایش را صفر گزارش کرده است؛ قیمت گشایش حدس زده نمی‌شود. '
+                               'بازده پایانی و سایر اجزای لازم جداگانه کنترل شده‌اند؛ این جدول سیگنال یا تأیید صف نیست.')
+                    fraction = sensitivity['sensitivity_positive_fraction']
+                    st.write(to_fa_digits(
+                        f"در آمار اصلی، {sensitivity['baseline_positive']} از {sensitivity['baseline_known']} بازده مثبت است؛ "
+                        f"با افزودن جداگانه {sensitivity['partial_returns']} بازده ناقص، "
+                        f"{sensitivity['sensitivity_positive']} از {sensitivity['sensitivity_known']} "
+                        f"({fraction:.1%}) مثبت می‌شود. سایر موارد نامعلوم همچنان کنار گذاشته شده‌اند."))
+                    st.dataframe(pd.DataFrame([{'نماد': row['symbol'], 'بازده پایانی (%)': row['closing_return'] * 100,
+                                               'نحوه انتساب شناسه': 'فقط نشانی درخواست' if row['identity_attestation'] == 'request_url_only'
+                                               else 'شناسه متن پاسخ منطبق'} for row in sensitivity['rows']]),
+                                 hide_index=True, width='stretch')
+                    st.caption('این مقایسه فقط حساسیتِ همین نمونه است؛ دریافت نمادها هم‌زمان نیست و صحت مستقل منبع تأیید نشده است.')
+        except (ValueError, OSError, KeyError, TypeError, OverflowError):
+            st.warning('تحلیل حساسیت گشایش نامعلوم قابل بازخوانی نیست؛ آمار اصلی تغییر نکرد.')
     st.subheader('صنایع — میانه شرکت‌های پوشش‌داده‌شده')
     frame = pd.DataFrame([{'صنعت': row['name'] or row['code'] or 'نامعلوم', 'دامنه': row['scope_count'],
                           'کندل معتبر': row['traded_count'], 'مثبت': row['positive'], 'منفی': row['negative'],
@@ -85,5 +106,6 @@ def page_market_review(job_panel):
                           for row in report['sectors']])
     st.dataframe(frame, hide_index=True, width='stretch')
     st.caption('این میانه، شاخص رسمی صنعت نیست؛ رتبه‌ها فقط بین نمادهای معتبر پوشش‌داده‌شده‌اند.')
+    st.caption('گزارش HTML شامل آمار اصلی است؛ تحلیل حساسیت جداگانه در همین صفحه محاسبه می‌شود.')
     st.download_button('دریافت گزارش کامل HTML', render_html(report).encode('utf-8'),
                        file_name='BRS-market-' + report['session_date'] + '.html', mime='text/html')

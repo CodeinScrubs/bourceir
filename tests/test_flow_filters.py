@@ -20,6 +20,17 @@ def history(n=85):
     return p, c
 
 
+def test_v4_lock_proxy_remains_unknown_without_valid_trade_volume():
+    from core.flow_filters import flow_metrics_v4
+
+    p, c = history(70)
+    for invalid in (0, 1.5, None):
+        broken = p.copy()
+        broken.loc[broken.index[-1], 'volume'] = invalid
+        result = flow_metrics_v4(broken, c)
+        assert pd.isna(result.iloc[-1]['not_locked_up'])
+
+
 def test_exact_daily_mean_is_not_pooled_and_does_not_round_before_comparison():
     p, c = history()
     c.loc[c.index[-3:], ['buy_i_value', 'buy_i_count', 'buy_i_volume']] = [[100_100., 1., 100.], [200_200., 2., 200.], [900_900., 3., 900.]]

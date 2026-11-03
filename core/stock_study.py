@@ -6,9 +6,10 @@ import numpy as np
 import pandas as pd
 
 from core import market_rules
+from core.price_quality import numeric_prices
 from core.text import normalize_symbol
 
-STOCK_STUDY_VERSION = 'stock-study-v1'
+STOCK_STUDY_VERSION = 'stock-study-v3'
 
 
 def finite(value):
@@ -49,7 +50,8 @@ def describe_window(prices, start, end):
                   first_observed=str(w.date.iloc[0]) if len(w) else None,
                   last_observed=str(w.date.iloc[-1]) if len(w) else None,
                   last_price_multiple=None, official_price_multiple=None, synthetic_multiple=None,
-                  synthetic_close_drawdown=None, reference_gaps=[], unknown_returns=0,
+                  synthetic_close_drawdown=None, observed_only_synthetic_multiple=None,
+                  observed_only_synthetic_close_drawdown=None, reference_gaps=[], unknown_returns=0,
                   economic_return=None, executable_return=None, causality_proven=False)
     if w.empty:
         return result
@@ -67,8 +69,12 @@ def describe_window(prices, start, end):
             result[name] = last / first
     if returns.notna().all():
         path = pd.Series([1., *(1+returns).cumprod().tolist()])
-        result['synthetic_multiple'] = finite(path.iloc[-1])
-        result['synthetic_close_drawdown'] = finite((path/path.cummax()-1).min())
+        # Exact endpoints do not prove that the intervening traded/closed
+        # sessions were captured. Retain the calculation as observed-only;
+        # do not present it as the complete interval or include it in peer
+        # averages until a separate, source-backed continuity contract exists.
+        result['observed_only_synthetic_multiple'] = finite(path.iloc[-1])
+        result['observed_only_synthetic_close_drawdown'] = finite((path/path.cummax()-1).min())
     return result
 
 
@@ -80,32 +86,51 @@ def describe_pre_window(prices, before, sessions):
     result = dict(sessions_requested=sessions, observed_rows=len(p), end=str(p.date.iloc[-1]) if len(p) else None,
                   calendar_days_since_last_observation=(pd.Timestamp(before)-pd.Timestamp(p.date.iloc[-1])).days if len(p) else None,
                   observation_calendar_verified=False,
-                  synthetic_return=None, mean_value_rial=None, zero_volume_rows=0, locked_up_rows=0, locked_down_rows=0)
+                  synthetic_return=None, mean_value_rial=None, zero_volume_rows=None,
+                  locked_up_rows=None, locked_down_rows=None,
+                  lock_coverage=0, lock_unknown_rows=0,
+                  observed_locked_up_rows=0, observed_locked_down_rows=0)
+    lock_known = market_rules.lock_inputs_known(p)
+    locks = market_rules.lock_flags(p)
+    result['lock_coverage'] = int(lock_known.sum())
+    result['lock_unknown_rows'] = int((~lock_known).sum())
+    result['observed_locked_up_rows'] = int((locks.locked_up & lock_known).sum())
+    result['observed_locked_down_rows'] = int((locks.locked_down & lock_known).sum())
     if len(p) != sessions:
         return result
     ret = market_rules.pit_daily_returns(p)
     if ret.notna().all():
         result['synthetic_return'] = finite((1+ret).prod()-1)
-    values = pd.to_numeric(p.value, errors='coerce')
+    values = numeric_prices(p, ('value',))['value']
     if np.isfinite(values).all() and values.ge(0).all():
         result['mean_value_rial'] = float(values.mean())
-    result['zero_volume_rows'] = int(p.volume.eq(0).sum())
-    locks = market_rules.lock_flags(p)
-    result['locked_up_rows'], result['locked_down_rows'] = (int(locks[key].sum()) for key in ('locked_up', 'locked_down'))
+    volume = numeric_prices(p, ('volume',))['volume']
+    volume_known = volume.ge(0) & volume.eq(np.floor(volume))
+    if volume_known.all():
+        result['zero_volume_rows'] = int(volume.eq(0).sum())
+    if lock_known.all():
+        result['locked_up_rows'] = result['observed_locked_up_rows']
+        result['locked_down_rows'] = result['observed_locked_down_rows']
     return result
 
 
 def peer_summary(records):
     """زیرمجموعه معلوم آشکار است؛ میانگین کامل با یک نتیجه نامعلوم عدد نمی‌گیرد."""
-    values = [row['synthetic_multiple'] for row in records if row['synthetic_multiple'] is not None]
+    values = [row['synthetic_multiple'] for row in records
+              if row.get('observation_calendar_verified') is True and row.get('synthetic_multiple') is not None]
+    observed = [row['observed_only_synthetic_multiple'] for row in records
+                if row.get('observed_only_synthetic_multiple') is not None]
     return dict(expected=len(records), known=len(values), unknown=len(records)-len(values),
                 mean_multiple=float(np.mean(values)) if values and len(values) == len(records) else None,
                 known_subset_mean_multiple=float(np.mean(values)) if values else None,
                 known_subset_median_multiple=float(np.median(values)) if values else None,
                 known_subset_doubled=sum(value >= 2 for value in values),
                 known_subset_negative=sum(value < 1 for value in values),
+                observed_only_known=len(observed),
+                observed_only_mean_multiple=float(np.mean(observed)) if observed else None,
+                observed_only_median_multiple=float(np.median(observed)) if observed else None,
                 official_index=False, historical_membership_verified=False,
-                model='equal weight endpoint synthetic multiples of current-metadata peers; no fees, no fills')
+                model='complete results require verified continuity; observed-only values are descriptive, no fees or fills')
 
 
 def compare_peers(panel, metadata, symbol, start, end, *, _window_cache=None):

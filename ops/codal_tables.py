@@ -72,7 +72,7 @@ def capture_codal_tables(url, expected_tracing_no, *, provider=None, root=None):
     if isinstance(expected_tracing_no, bool) or not isinstance(expected_tracing_no, int) or expected_tracing_no <= 0:
         raise ValueError('شماره پیگیری مثبت و صریح گزارش لازم است')
     sources = {name: (settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n') for name in SOURCE_FILES}
-    result = (provider or CodalProvider()).get_document(url, structured_tables=True)
+    result = (CodalProvider() if provider is None else provider).get_document(url, structured_tables=True)
     if result['status'] != 'captured':
         return result
     if (result.get('format') != 'text' or not isinstance(result.get('table_data'), dict)

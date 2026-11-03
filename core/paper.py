@@ -6,6 +6,7 @@ import math
 from datetime import datetime
 
 from core.journal import summarize_executions
+from core.order_book import book_bound_violations
 from core.risk import RiskProfile, finite_number
 from core.screening import current_snapshot
 from core.timeutils import is_market_open
@@ -54,6 +55,8 @@ def quote_fill(snapshot, *, side, quantity, at, decision_at, protocol, consumed_
     """فرض اجرای نامساعد با مظنه پس از تصمیم و ظرفیت مشترک؛ جایگاه صف معلوم نیست."""
     if side not in ('buy', 'sell') or not snapshot or snapshot.get('source') != 'tsetmc':
         raise ValueError('مظنه معتبر بازار برای این سمت موجود نیست')
+    if book_bound_violations(snapshot):
+        raise ValueError('سطحی از عمق با دامنه مشاهده‌شده ناسازگار است')
     quantity = integer(quantity)
     if not is_market_open(at, calendar=calendar):
         raise ValueError('شبیه‌سازی با مظنه فقط در ساعت بازار انجام می‌شود')

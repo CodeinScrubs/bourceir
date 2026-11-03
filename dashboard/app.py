@@ -27,6 +27,7 @@ from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
 from dashboard.market_review import page_market_review  # noqa: E402
 from dashboard.operator_status import operator_panel  # noqa: E402
+from dashboard.opportunity_radar import page_opportunity_radar  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
 from dashboard.probability import page_probability  # noqa: E402
 from dashboard.query_screener import page_query_screener  # noqa: E402
@@ -49,6 +50,7 @@ st.markdown(
         font-family: 'Vazirmatn', Tahoma, sans-serif !important;
     }
     .stApp, [data-testid="stSidebar"] { direction: rtl; }
+    [data-testid="stSidebar"][aria-expanded="false"] { display: none !important; }
     .stApp p, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp label, .stApp .stMarkdown { text-align: right; }
     [data-testid="stMetricValue"] { direction: rtl; }
     [data-testid="stDataFrame"], .vega-embed { direction: ltr; }
@@ -59,9 +61,6 @@ st.markdown(
             position: fixed !important; right: 0 !important; left: auto !important;
             width: 18rem !important; min-width: 18rem !important; max-width: 18rem !important;
             height: 100dvh !important; z-index: 1000002; flex-shrink: 0 !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="false"] {
-            display: none !important;
         }
         [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; }
     }
@@ -151,6 +150,7 @@ def symbol_daily(symbol: str) -> pd.DataFrame:
         df = df.merge(ct, on="date", how="left", validate="one_to_one")
     df["change_pct"] = market_rules.pit_daily_returns(df) * 100
     df = pd.concat([df, market_rules.lock_flags(df)], axis=1)
+    df['lock_known'] = market_rules.lock_inputs_known(df)
     if "buy_i_value" in df.columns:
         df["real_flow"] = clean["buy_i_value"] - clean["sell_i_value"]
         buy = (clean["buy_i_value"] / clean["buy_i_count"]).where(clean["buy_i_count"] > 0)
@@ -177,9 +177,15 @@ def latest_snapshots() -> pd.DataFrame:
     # بازه روی captured_at تا ایندکس استفاده شود ("~" بعد از همه ارقام و حرف T قرار می‌گیرد)
     return query_df(
         f"""
-        SELECT s.symbol_fa, s.name_fa, sn.*
-        FROM snapshots sn JOIN symbols s ON s.id = sn.symbol_id
-        WHERE sn.id IN (SELECT MAX(id) FROM snapshots WHERE captured_at >= ? AND captured_at < ? AND symbol_id IN ({placeholders}) GROUP BY symbol_id);
+        SELECT s.symbol_fa, s.name_fa, ranked.*
+        FROM (
+            SELECT sn.*, ROW_NUMBER() OVER (
+                PARTITION BY sn.symbol_id ORDER BY sn.captured_at DESC, sn.id DESC
+            ) AS snapshot_rank
+            FROM snapshots sn
+            WHERE sn.captured_at >= ? AND sn.captured_at < ? AND sn.symbol_id IN ({placeholders})
+        ) ranked JOIN symbols s ON s.id = ranked.symbol_id
+        WHERE ranked.snapshot_rank = 1;
         """, (day, day + "~", *ids))
 
 
@@ -226,8 +232,9 @@ def page_home() -> None:
     with ro_db() as db:
         open_now = is_market_open(now) and db.is_trading_day(now.date().isoformat())
     st.markdown(
-        f"<div class='brs-card'>🕐 امروز {to_jalali(now, with_time=True)} — بازار "
-        f"<b>{'باز است 🟢' if open_now else 'بسته است 🔴'}</b> (شنبه تا چهارشنبه، ۹:۰۰ تا ۱۲:۳۰)</div>",
+        f"<div class='brs-card'>🕐 امروز {to_jalali(now, with_time=True)} — طبق تقویم محلی: "
+        f"<b>{'در بازه معمول معامله 🟢' if open_now else 'خارج از بازه معمول معامله'}</b> "
+        '(شنبه تا چهارشنبه، ۹:۰۰ تا ۱۲:۳۰). وضعیت رسمی بازار یا هر نماد جداگانه بررسی شود.</div>',
         unsafe_allow_html=True,
     )
 
@@ -246,6 +253,9 @@ def page_home() -> None:
         row1[0].metric("📈 مثبت / 📉 منفی", f"\u2066{fa_num(pulse['up'])} / {fa_num(pulse['down'])}\u2069")
         row1[1].metric("معاملات تک‌قیمت صعودی / نزولی", f"\u2066{fa_num(pulse['locked_up'])} / {fa_num(pulse['locked_down'])}\u2069",
                        help="قرینه کندلی است؛ بدون مظنه و دامنه معتبر، وجود صف یا امکان اجرای سفارش را اثبات نمی‌کند")
+        if pulse['lock_unknown_count']:
+            st.caption(f"وضعیت الگوی تک‌قیمتی برای {fa_num(pulse['lock_unknown_count'])} ردیف نامعلوم است؛ "
+                       f"پوشش {fa_num(pulse['lock_coverage'])} از {fa_num(pulse['count'])} ردیف موجود است.")
         row2 = st.columns(2)
         row2[0].metric("💵 ارزش معاملات", fa_num(billion_toman(pulse["value"])))
         if pulse['value_coverage'] < pulse['count']:
@@ -323,7 +333,8 @@ def page_symbol() -> None:
 
     st.caption(f"آخرین روز معاملاتی: {to_jalali(last['date'])} — مبالغ به میلیارد تومان")
     m = st.columns(2)
-    m[0].metric("قیمت پایانی (ریال)", fa_num(last["close_final_raw"]), f"{last['change_pct']:+.2f}%")
+    change = None if pd.isna(last['change_pct']) else f"{last['change_pct']:+.2f}%"
+    m[0].metric("قیمت پایانی (ریال)", fa_num(last["close_final_raw"]), change)
     m[1].metric("ارزش معاملات", fa_num(billion_toman(last["value"]), 1))
     m = st.columns(2)
     if "real_flow" in view.columns and pd.notna(last.get("real_flow")):
@@ -334,7 +345,9 @@ def page_symbol() -> None:
     elif 'client_buy_value_quality' in view.columns:
         st.caption('قدرت خریدار نامعلوم است: داده موجود نیست، تقسیم تعریف نشده یا آمار با حجم، ارزش '
                    'و بازه قیمت روز سازگار نیست. داده خام حفظ شده است.')
-    if last["locked_up"]:
+    if not last['lock_known']:
+        st.info('الگوی تک‌قیمتی روز آخر نامعلوم است؛ مرجع، بازه یا حجم معتبر در دسترس نیست.')
+    elif last["locked_up"]:
         st.info("آخرین روز: الگوی تک‌قیمتی صعودی — تقریب روزانه صف خرید")
     elif last["locked_down"]:
         st.info("آخرین روز: الگوی تک‌قیمتی نزولی — تقریب روزانه صف فروش")
@@ -373,7 +386,7 @@ def page_symbol() -> None:
         "کمترین": table["low_raw"],
         "بیشترین": table["high_raw"],
         "حجم": table["volume"],
-        "الگوی روزانه": table.apply(lambda r: "تک‌قیمتی صعودی؛ تقریب صف" if r["locked_up"] else (
+        "الگوی روزانه": table.apply(lambda r: "نامعلوم" if not r['lock_known'] else "تک‌قیمتی صعودی؛ تقریب صف" if r["locked_up"] else (
             "تک‌قیمتی نزولی؛ تقریب صف" if r["locked_down"] else ""), axis=1),
     })
     if "real_flow" in table.columns:
@@ -411,15 +424,30 @@ def feature_panel(symbol: str) -> None:
 
 def page_live() -> None:
     st.title("📡 دیده‌بان زنده")
+    from datetime import datetime
+
+    from core.risk import live_snapshot_blockers
+    from core.timeutils import now_tehran
     from dashboard.board_alerts import board_alert_panel
+    from dashboard.live_scope import requested_live_scope, requested_scope_label
 
     board_alert_panel()
-    status = jobs.job_status("live")
-    if not status["running"]:
-        st.info("پایش زنده خاموش است. از صفحه «خانه» آن را روشن کنید. (جدول زیر آخرین وضعیت ثبت‌شده را نشان می‌دهد)")
 
-    @st.fragment(run_every=30 if status["running"] else None)
+    @st.fragment(run_every=30)
     def live_table() -> None:
+        scope = requested_live_scope(jobs.job_status("live"))
+        if scope['state'] == 'stopped':
+            st.warning("پایش زنده خاموش است. جدول زیر فقط آخرین وضعیت ثبت‌شده را نشان می‌دهد.")
+        elif scope['state'] == 'unknown':
+            st.warning('وضعیت فرایند یا دامنه درخواست آن از وضعیت وظیفه قابل تشخیص نیست.')
+        elif scope['state'] == 'explicit':
+            st.info(f"فرایند پایش برای {to_fa_digits(len(scope['symbols']))} نام درخواست شده است: "
+                    + '، '.join(scope['symbols']) + f". منبع: {scope['source']}.")
+        else:
+            st.info('فرایند پایش با دامنه پیش‌فرض شروع شده است؛ دامنه ثبت‌شده را در صفحه سلامت بررسی کنید.')
+        st.caption('این وضعیت از تنظیمات درخواست فرایند است و دریافت موفق، تازگی هر نماد یا ارسال هشدار را ثابت نمی‌کند. '
+                   'جدول می‌تواند رکوردهای محفوظ خارج از درخواست جاری را نیز نشان دهد؛ '
+                   'پایش عمومی و هشدار مستقل فارابی دو فرایند جدا هستند.')
         snaps = latest_snapshots()
         if snaps.empty:
             st.warning("هنوز اسنپ‌شاتی ثبت نشده است.")
@@ -427,7 +455,14 @@ def page_live() -> None:
         snaps = snaps.copy()
         snaps["change_pct"] = (snaps["last_price"] / snaps["ref_price"].where(snaps["ref_price"] > 0) - 1) * 100
         monitor = DataFreshnessMonitor()
-        health = [monitor.inspect_snapshot(row["symbol_fa"], row) for row in snaps.to_dict("records")]
+        rows = snaps.to_dict('records')
+        checked_at = now_tehran()
+        health = [monitor.inspect_snapshot(row["symbol_fa"], row, now=checked_at) for row in rows]
+        # Older records predate quarantine; source, unit, both clocks, and
+        # bound contradictions must pass before displaying a derived queue.
+        queue_unknown = pd.Series([bool(live_snapshot_blockers(row, checked_at)) or not h['is_healthy']
+                                   for row, h in zip(rows, health)], index=snaps.index)
+        snaps.loc[queue_unknown, ["buy_queue_volume", "sell_queue_volume"]] = float('nan')
         snaps["buyer_power"] = pd.to_numeric(pd.Series([h['buyer_power'] for h in health], index=snaps.index), errors='coerce')
         snaps["real_flow_bt"] = pd.to_numeric(pd.Series([h['real_flow_estimate_rial'] for h in health], index=snaps.index), errors='coerce') / 1e10
         snaps["client_volume_quality"] = [h['buy_volume_quality_label'] + ' / ' + h['sell_volume_quality_label'] for h in health]
@@ -441,12 +476,22 @@ def page_live() -> None:
         elif view_filter == "قدرت خریدار > ۲":
             snaps = snaps[snaps["buyer_power"] > 2]
         if snaps.empty:
-            st.info("هیچ نمادی با این فیلتر وجود ندارد.")
+            st.info("در داده‌های ذخیره‌شده نمادی با این فیلتر پیدا نشد؛ داده ناموجود یا کهنه نبود صف را اثبات نمی‌کند.")
             return
         snaps = snaps.sort_values("value", ascending=False)
-        st.caption(f"آخرین ثبت: {to_jalali(snaps['captured_at'].max(), with_time=True)} — {to_fa_digits(len(snaps))} نماد")
+        received = []
+        for value in snaps['captured_at']:
+            try:
+                stamp = datetime.fromisoformat(value) if isinstance(value, str) else value
+                if isinstance(stamp, datetime) and stamp.tzinfo is not None and stamp.utcoffset() is not None:
+                    received.append(stamp)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        latest = to_jalali(max(received), with_time=True) if received else 'نامعلوم'
+        st.caption(f"آخرین ثبت: {latest} — {to_fa_digits(len(snaps))} نماد")
         st.dataframe(pd.DataFrame({
             "نماد": snaps["symbol_fa"],
+            "نام در درخواست پایش": [requested_scope_label(scope, symbol) for symbol in snaps["symbol_fa"]],
             "تازگی منبع": snaps["freshness"],
             "تأخیر منبع (ثانیه)": snaps["source_delay"],
             "آخرین": snaps["last_price"],
@@ -461,7 +506,9 @@ def page_live() -> None:
         }), hide_index=True, width="stretch", height=600)
         st.caption('قدرت خریدار این جدول حجمی است. برآورد پول حقیقی از تفاضل حجم حقیقی × آخرین قیمت است؛ '
                    'ارزش واقعی معاملات حقیقی را فقط با آمار ارزشی روزانه می‌توان تطبیق داد. '
-                   'هم‌زمانی مستقل آمار حقیقی/حقوقی با عمق سفارش‌ها تأیید نشده است.')
+                   'هم‌زمانی مستقل آمار حقیقی/حقوقی با عمق سفارش‌ها تأیید نشده است. '
+                   'صف با ساعت قیمت نامعلوم/کهنه یا عمق ناسازگار، نامعلوم نمایش داده می‌شود. '
+                   'ساعت مستقل عمق و وضعیت کنونی صف تأیید نشده‌اند.')
         interval_panel(snaps['symbol_fa'].tolist())
 
     live_table()
@@ -746,6 +793,7 @@ ensure_database()
 PAGES = {
     "🏠 خانه": page_home,
     '🌐 بررسی بازار امروز': lambda: page_market_review(job_panel),
+    '📡 رادار فرصت‌های پژوهشی': page_opportunity_radar,
     "🔎 فهرست بررسی": page_shortlist,
     '🧪 آزمایشگاه فیلترها': page_flow_lab,
     "🛡️ برنامه و دفتر معاملات": page_workbench,

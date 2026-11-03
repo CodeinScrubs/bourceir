@@ -55,10 +55,12 @@ def test_protocol_precedes_all_four_financial_replays_and_review_reads_no_databa
     result=case.run_bonus_share_case(db,**bonus_case_inputs)
     assert logs==['bonus-share-accounting-protocol','bonus-share-accounting-case']
     assert list(result['modes'])==list(case.MODES)
-    for mode in ('uncredited_bonus_normal','uncredited_bonus_stress'):
+    # The fixture deliberately omits sessions after purchase. The earlier
+    # assumption of a delayed sale was not evidence that an exit failed.
+    for mode in case.MODES:
         model=result['modes'][mode]
-        assert model['sold_shares']==model['bought_shares'] and model['metrics']['total_return'] is None
-    assert result['modes']['legacy_normal']['sold_shares']>result['modes']['uncredited_bonus_normal']['sold_shares']
+        assert model['bought_shares']>0 and model['sold_shares']==0
+        assert model['metrics']['status']=='invalid_data' and model['metrics']['total_return'] is None
     protocol=json.loads((Path(result['folder'])/'protocol.json').read_bytes())
     assert all(protocol[k] is False for k in case.FALSE_FLAGS) and protocol['releases']==[]
     monkeypatch.setattr(case,'_compare',compare)
@@ -67,6 +69,22 @@ def test_protocol_precedes_all_four_financial_replays_and_review_reads_no_databa
     report=case.review_bonus_share_case(result['folder'])
     assert report['replay_verified'] and not report['independent_registration_verified']
     assert report['modes']==result['modes'] and not report['accepted_for_signals']
+
+
+@pytest.mark.parametrize('left,right,equal', [
+    ({'numerator': 0, 'denominator': 1}, {'numerator': 0.0, 'denominator': 1.0}, True),
+    ({'numerator': 2}, {'numerator': 2.5}, False),
+    ({'value': 9007199254740993}, {'value': float(9007199254740993)}, False),
+    ({'numerator': True}, {'numerator': 1}, False),
+    ({'numerator': None}, {'numerator': 0}, False),
+    ({'value': float('nan')}, {'value': None}, True),
+    ({'value': float('inf')}, {'value': None}, False),
+    ({'value': float('inf')}, {'value': float('inf')}, False),
+    ({'a': [1, None]}, {'a': [1.0, None]}, True),
+    ({'a': [1, 2]}, {'a': [1, 2, 3]}, False),
+])
+def test_replay_value_comparison_accepts_parquet_number_promotion_but_not_changes(left, right, equal):
+    assert case._same_replay_values(left, right) is equal
 
 
 def test_failed_formal_registration_cannot_evaluate_or_publish_a_result(db,bonus_case_inputs,monkeypatch):

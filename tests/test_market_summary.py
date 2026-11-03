@@ -14,7 +14,18 @@ def test_home_retains_missing_symbols_and_unknown_returns():
     assert result['count'] == 2 and result['missing_count'] == 3
     assert result['return_unknown_count'] == 1
     assert result['return_coverage'] == 1
+    assert result['lock_coverage'] == 1 and result['lock_unknown_count'] == 1
     assert result['lock_classification'] == 'one_price_proxy_not_verified_order_queue'
+
+
+def test_home_lock_counts_do_not_include_fractional_or_missing_volume():
+    prices, clients = coherent_history()
+    frame = prices.head(2).merge(clients, on='date')
+    frame.loc[0, ['high_raw', 'low_raw', 'ref_price_raw', 'volume']] = [105, 105, 100, 1.5]
+    frame.loc[1, 'volume'] = np.nan
+    result = summarize_daily_market(frame, expected_count=2)
+    assert result['locked_up'] == 0 and result['locked_down'] == 0
+    assert result['lock_coverage'] == 0 and result['lock_unknown_count'] == 2
 
 
 def test_home_unknown_or_inconsistent_value_is_not_zero_or_valid_flow():

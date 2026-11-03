@@ -20,7 +20,7 @@ jobs:
         os: [ ubuntu-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
     # Windows also verifies fresh Node/Chromium installation after the research suite.
-    timeout-minutes: 40
+    timeout-minutes: 90
     env:
       TZ: UTC
       PYTHONUTF8: "1"
@@ -53,7 +53,7 @@ jobs:
         node-version: '22'
 
     - name: Check read-only capture validation
-      run: node --test tests/farabi_capture.test.mjs tests/board_alerts.test.mjs
+      run: node --test tests/farabi_capture.test.mjs tests/board_alerts.test.mjs tests/board_pressure_alerts.test.mjs tests/board_inbrowser_loader.test.mjs tests/farabi_timing.test.mjs tests/farabi_timing_probe.test.mjs tests/farabi_timing_collector.test.mjs tests/farabi_preflight_audit.test.mjs tests/clock_compare_cua.test.mjs tests/clock_display_probe.test.mjs
 
     - name: Run Pytest test suite (offline)
       run: python -m pytest tests/ -m "not network" -v
@@ -97,6 +97,8 @@ jobs:
         node tests/farabi_capture.browser.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         node tests/board_watch.browser.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        node tests/board_inbrowser.browser.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         # مسیر fixture فقط نصف محیط سفارشی است؛ آزمون launcher باید از نصب پیش‌فرض کامل استفاده کند.
         Remove-Item Env:BRS_PLAYWRIGHT_MODULE

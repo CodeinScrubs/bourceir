@@ -18,6 +18,7 @@ from core.research_review import mode_summary, paired_comparison
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
 from ops.research_review import _checked_mode, _load_json, _verify_inventory, read_development_parquet
 from research.baselines import STRATEGIES
+from research.context_expectancy import CONTEXT_PREDICTORS, recipe
 from research.expectancy import (
     MIN_ROWS,
     MIN_SESSIONS,
@@ -32,16 +33,35 @@ from research.expectancy_diagnostics import checked_workers, compare_jobs
 from research.flow_run import _summary
 from research.flow_v4_run import observed_market_curve
 from research.labels import market_calendar
-from research.portfolio_run import _picks, select_from_past, verified_baseline_inputs
+from research.portfolio_run import BASELINE_SELECTION_VERSION, _picks, select_from_past, verified_baseline_inputs
 from research.probability import opportunity_features
 from research.probability_run import _dump, _outcomes_for
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
-from research.walkforward import TimeFold, time_folds
+from research.walkforward import TimeFold, preceding_price_observations, time_folds
 
 VERSION = 'expectancy-portfolio-v3'
+CONTEXT_RUN_VERSION = 'context-expectancy-portfolio-v1'
+MODEL_FAMILIES = ('linear-v1', 'context-v1')
 CANDIDATES = ('conditional-2d', 'conditional-1d', 'relative-trend-2d', 'orderly-pullback-2d')
 SEEDS = (41, 97, 173)
 PATTERN = r'EXP-\d{4}-\d{2}-\d{2}-EXPECTANCY-[a-f0-9]{32}'
+
+
+def registered_model_family(protocol):
+    """Never reinterpret an unknown or downgraded archived model family."""
+    family = protocol.get('model_family', 'linear-v1')
+    if family not in MODEL_FAMILIES:
+        raise ValueError('خانواده ثبت‌شده مدل بازده شرطی نامعتبر است')
+    context = family == 'context-v1'
+    if ((context and (protocol.get('interaction_recipe') != recipe()
+                     or protocol.get('fixed_hypotheses') != 'docs/research/context-expectancy-protocol-fa.md'))
+            or (not context and ('model_family' in protocol or 'interaction_recipe' in protocol))):
+        raise ValueError('دستور مدل با خانواده ثبت‌شده برابر نیست')
+    version = CONTEXT_RUN_VERSION if context else VERSION
+    predictors = CONTEXT_PREDICTORS if context else PREDICTORS
+    if protocol.get('version') != version or protocol.get('predictors') != list(predictors):
+        raise ValueError('نسخه یا ورودی‌های خانواده ثبت‌شده ناسازگار است')
+    return family, version, predictors
 
 
 def expected_modes():
@@ -51,6 +71,22 @@ def expected_modes():
         for seed in SEEDS:
             modes.update((f'{candidate}-random{seed}', f'{candidate}-random{seed}-stress'))
     return modes
+
+
+def candidate_comparisons(checked_results, candidate):
+    """Same-execution descriptive controls; fold differences imply no statistical significance."""
+    if candidate not in CANDIDATES:
+        raise ValueError('نامزد مقایسه در خانواده ثابت نیست')
+    pairs = {'stress': (candidate, candidate + '-stress'),
+             'past_baseline': (candidate, 'past_baseline'),
+             'idle_cash': (candidate, 'idle_cash'),
+             'stressed_past_baseline': (candidate + '-stress', 'past_baseline_stress'),
+             'stressed_idle_cash': (candidate + '-stress', 'idle_cash')}
+    for seed in SEEDS:
+        pairs[f'random_{seed}'] = (candidate, f'{candidate}-random{seed}')
+        pairs[f'stressed_random_{seed}'] = (candidate + '-stress', f'{candidate}-random{seed}-stress')
+    return {name: paired_comparison(checked_results, left, right)
+            for name, (left, right) in pairs.items()}
 
 
 def _fold_uncertainties(curves, controls, days, index, config, parameters, workers):
@@ -96,7 +132,7 @@ def _fold_jobs(train, test, forecast, training_labels, decision_prices, calendar
         'orderly-pullback-2d': _rank(test, test.value, masks['orderly_pullback'] & test.date.lt(selection_end), config.max_positions)}
     pool = test.loc[test.date.lt(selection_end)]
     panel = train.merge(training_labels.drop(columns=['value']), on=['date', 'symbol'], validate='one_to_one')
-    chosen, training = select_from_past(panel, fold, (1, 2), config.max_positions)
+    chosen, training = select_from_past(panel, fold, (1, 2), config.max_positions, calendar=calendar)
     baseline = _picks(pool, chosen['strategy'], config.max_positions) if chosen else pd.DataFrame(columns=['date', 'symbol', 'rank'])
     jobs = dict(idle_cash=(pd.DataFrame(columns=['date', 'symbol', 'rank']), config),
         past_baseline=(baseline, replace(config, horizon=chosen['horizon'] if chosen else 2)),
@@ -114,7 +150,10 @@ def _fold_jobs(train, test, forecast, training_labels, decision_prices, calendar
 
 
 def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=20000,
-                   min_train_sessions=504, test_sessions=252, diagnostic_workers=1):
+                   min_train_sessions=504, test_sessions=252, diagnostic_workers=1,
+                   model_family='linear-v1'):
+    if model_family not in MODEL_FAMILIES:
+        raise ValueError('خانواده مدل بازده شرطی نامعتبر است')
     checked_workers(diagnostic_workers)
     if source_id is None:
         raise ValueError('منبع BASELINES صریح لازم است')
@@ -126,6 +165,10 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
     if _sha256(source_file) != source_sha:
         raise ValueError('گزارش منبع هنگام خواندن تغییر کرد')
     params = source['params']
+    feature_version = params['features']['version']
+    if (not isinstance(feature_version, str) or not feature_version.strip()
+            or params['research_provenance']['feature_manifest']['version'] != feature_version):
+        raise ValueError('نسخه فیچر منبع پژوهش پایه نامعلوم یا ناسازگار است')
     minimum_trials = len(expected_modes()) + len(params['strategies']) * len(params['horizons'])
     if type(trials_attempted) is not int or trials_attempted < minimum_trials:
         raise ValueError(f'تعداد صریح کل تلاش‌ها لازم است؛ حداقل دامنه این اجرا {minimum_trials} حالت است')
@@ -168,10 +211,13 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
         if _sha256(target) != digest:
             raise ValueError('تصویر ورودی هنگام کپی تغییر کرد')
         _deduplicate_input(target, root / 'objects')
-    protocol = dict(version=VERSION, source_id=source_id, source_report_sha256=source_sha, inputs=digests,
+    run_version = CONTEXT_RUN_VERSION if model_family == 'context-v1' else VERSION
+    predictor_names = CONTEXT_PREDICTORS if model_family == 'context-v1' else PREDICTORS
+    protocol = dict(version=run_version, source_id=source_id, source_report_sha256=source_sha, inputs=digests,
+        baseline_selection_version=BASELINE_SELECTION_VERSION,
         observed_nontrading_feature_rows=nontrading,
         development_start=start, min_daily_value_rial=params['min_daily_value_rial'],
-        portfolio_version=PORTFOLIO_VERSION, config=asdict(config), predictors=list(PREDICTORS), penalty=RIDGE_PENALTY,
+        portfolio_version=PORTFOLIO_VERSION, config=asdict(config), predictors=list(predictor_names), penalty=RIDGE_PENALTY,
         min_model_sessions=MIN_SESSIONS, min_model_rows=MIN_ROWS, primary_candidate='conditional-2d',
         candidate_modes=list(CANDIDATES), modes=sorted(expected_modes()), random_seeds=list(SEEDS),
         model_target='normal and stress net returns at horizon2; equal total training weight per decision date',
@@ -189,9 +235,12 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
                          family_comparisons=family, historical_total_trials_verified=False),
         modes_in_this_run=len(expected_modes()), minimum_disclosed_trials=minimum_trials,
         accepted_for_signals=False, holdout_eligible=False, code_sha256=code, source_files=archive_research_code(folder / 'code'))
+    if model_family == 'context-v1':
+        protocol.update(model_family=model_family, interaction_recipe=recipe(),
+            fixed_hypotheses='docs/research/context-expectancy-protocol-fa.md')
     encoded = json.dumps(_json_safe(protocol), ensure_ascii=False, allow_nan=False)
     if db.log_experiment(experiment + '-PROTOCOL', 'expectancy-protocol', 'universe', encoded, '{}',
-        start_date=start, end_date=cutoff, dataset_version=source_id, features_version='daily-v7', model_version=VERSION) is None:
+        start_date=start, end_date=cutoff, dataset_version=source_id, features_version=feature_version, model_version=run_version) is None:
         raise RuntimeError('ثبت پروتکل قبل از برازش ناموفق بود')
     _dump(folder / 'protocol.json', protocol)
     accumulated, results, uncertainties, errors = {}, [], [], []
@@ -199,7 +248,8 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
         train = features.loc[features.date.ge(fold.train_start) & features.date.lt(fold.train_end_exclusive)]
         test = features.loc[features.date.ge(fold.test_start) & features.date.lt(fold.test_end_exclusive)]
         training_outcomes = _outcomes_for(train, inputs['labels'], 2, fold.train_end_exclusive)
-        model = fit_expectancy(train, training_outcomes, train_end_exclusive=fold.train_end_exclusive)
+        model = fit_expectancy(train, training_outcomes, train_end_exclusive=fold.train_end_exclusive,
+                               model_family=model_family)
         forecast = forecast_expectancy(test, model)
         _dump(folder / f'fold-{index:02d}-model.json', model)
         forecast_path = folder / f'fold-{index:02d}-forecasts.parquet'
@@ -217,8 +267,10 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
         testing_outcomes = _outcomes_for(test, inputs['labels'], 2, fold.test_end_exclusive)
         errors.append(dict(fold=index, scores=forecast_errors(forecast, testing_outcomes, model)))
         testing_outcomes.to_parquet(folder / f'fold-{index:02d}-outcomes.parquet', index=False, compression='zstd')
-        prior = inputs['prices'].loc[inputs['prices'].date < fold.test_start].groupby('symbol', sort=False).tail(1)
-        prices = pd.concat([prior, inputs['prices'].loc[inputs['prices'].date.isin(days)]], ignore_index=True)
+        prior = preceding_price_observations(inputs['prices'], fold.test_start)
+        current = inputs['prices'].loc[inputs['prices'].date.ge(fold.test_start)
+                                      & inputs['prices'].date.lt(fold.test_end_exclusive)]
+        prices = pd.concat([prior, current], ignore_index=True)
         record, curves = dict(fold=asdict(fold), chosen_past_baseline=chosen, training=training, modes={}), {}
         for name, (selected, cfg) in jobs.items():
             replay = replay_portfolio(prices, selected, calendar, cfg, start=fold.test_start, end=fold.test_end_exclusive)
@@ -254,9 +306,9 @@ def run_expectancy(db, *, source_id, trials_attempted, root=None, replications=2
         models_sha256={p.name: _sha256(p) for p in folder.glob('fold-*-model.json')},
         checkpoints_sha256={p.name: _sha256(p) for p in folder.glob('fold-*-checkpoint.json')},
         artifacts_sha256={p.name: _sha256(p) for p in folder.glob('*.parquet')})
-    if db.log_experiment(experiment, 'conditional-expectancy', 'universe', encoded,
+    if db.log_experiment(experiment, 'context-expectancy' if model_family == 'context-v1' else 'conditional-expectancy', 'universe', encoded,
         json.dumps(_json_safe(summaries), ensure_ascii=False, allow_nan=False), start_date=start, end_date=cutoff,
-        dataset_version=source_id, features_version='daily-v7', model_version=VERSION) is None:
+        dataset_version=source_id, features_version=feature_version, model_version=run_version) is None:
         raise RuntimeError('ثبت نتیجه ناموفق بود')
     _dump(root / (experiment + '.json'), payload)
     review = review_expectancy(db, experiment, root=root)
@@ -298,11 +350,13 @@ def review_expectancy(db, experiment_id, *, root=None):
     path, folder = root / (experiment_id + '.json'), root / experiment_id
     digest, payload = _sha256(path), _load_json(path)
     p = payload['protocol']
+    model_family, expected_version, predictor_names = registered_model_family(p)
+    context = model_family == 'context-v1'
     checked_workers(p.get('diagnostic_workers'))
-    if (p['version'] != VERSION or p['holdout_start'] > settings.RESEARCH_CONFIG['holdout_start']
+    if (p['version'] != expected_version or p['holdout_start'] > settings.RESEARCH_CONFIG['holdout_start']
             or p['modes'] != sorted(expected_modes()) or p['candidate_modes'] != list(CANDIDATES)
             or p['random_seeds'] != list(SEEDS) or p['primary_candidate'] != 'conditional-2d'
-            or p['predictors'] != list(PREDICTORS) or p['penalty'] != RIDGE_PENALTY
+            or p['predictors'] != list(predictor_names) or p['penalty'] != RIDGE_PENALTY
             or p['min_model_sessions'] != MIN_SESSIONS or p['min_model_rows'] != MIN_ROWS
             or p.get('archive_review') != 'rebuild all picks and configurations, replay all execution curves, rerun uncertainty'
             or p.get('diagnostics_scheduling') != 'spawn; ordered independent comparisons; unchanged per-comparison seed'
@@ -364,7 +418,7 @@ def review_expectancy(db, experiment_id, *, root=None):
         train = features.loc[features.date.ge(fold['train_start']) & features.date.lt(fold['train_end_exclusive'])]
         test = features.loc[features.date.ge(fold['test_start']) & features.date.lt(fold['test_end_exclusive'])]
         expected_model = fit_expectancy(train, _outcomes_for(train, frozen['labels'], 2, fold['train_end_exclusive']),
-                                       train_end_exclusive=fold['train_end_exclusive'])
+                                       train_end_exclusive=fold['train_end_exclusive'], model_family=model_family)
         arrays = {'coefficients', 'center', 'scale', 'minimum', 'maximum', 'unconditioned_mean'}
         if set(model) != set(expected_model):
             raise ValueError('مدل با قرارداد برازش گذشته سازگار نیست')
@@ -399,8 +453,10 @@ def review_expectancy(db, experiment_id, *, root=None):
                                                  calendar, temporal_fold, config, index)
         if not _same_json(result['chosen_past_baseline'], _json_safe(chosen)) or not _same_json(result['training'], _json_safe(training)):
             raise ValueError('انتخاب پایه با نتیجه آموزش پیش از مرز سازگار نیست')
-        prior = frozen['prices'].loc[frozen['prices'].date.lt(fold['test_start'])].groupby('symbol', sort=False).tail(1)
-        replay_prices = pd.concat([prior, frozen['prices'].loc[frozen['prices'].date.isin(days)]], ignore_index=True)
+        prior = preceding_price_observations(frozen['prices'], fold['test_start'])
+        current = frozen['prices'].loc[frozen['prices'].date.ge(fold['test_start'])
+                                      & frozen['prices'].date.lt(fold['test_end_exclusive'])]
+        replay_prices = pd.concat([prior, current], ignore_index=True)
         curves = {}
         for name, (picks, configuration) in jobs.items():
             file = folder / f'fold-{index:02d}-{name}-picks.parquet'
@@ -459,15 +515,15 @@ def review_expectancy(db, experiment_id, *, root=None):
             or research_code_fingerprint() != review_code):
         raise ValueError('گزارش هنگام بررسی تغییر کرد')
     return dict(experiment_id=experiment_id, summaries=summaries,
-        comparisons={c: {key: paired_comparison(checked, c, other) for key, other in
-            [('stress', c+'-stress'), ('past_baseline', 'past_baseline'), ('idle_cash', 'idle_cash')]}
-                     for c in CANDIDATES}, accepted_for_signals=False, holdout_eligible=False,
+        comparisons={c: candidate_comparisons(checked, c) for c in CANDIDATES},
+        accepted_for_signals=False, holdout_eligible=False,
         curve_metrics_recomputed=True, archived_hashes_verified=True, model_retrained_by_review=True,
         forecasts_and_errors_recomputed=True,
         selections_and_random_controls_recomputed=True, execution_replayed=True, uncertainty_recomputed=True,
         current_review_code_sha256=review_code,
         blockers=['unverified_historical_universe_fees_and_economic_entitlements', 'unknown_or_synthetic_execution',
-                  'historical_trial_ledger_and_independent_future_not_established', 'bootstrap_is_diagnostic_not_acceptance'])
+                  'historical_trial_ledger_and_independent_future_not_established', 'bootstrap_is_diagnostic_not_acceptance'],
+        **(dict(model_family=model_family, predictors=list(predictor_names)) if context else {}))
 
 
 def format_expectancy(review):
@@ -480,6 +536,8 @@ def format_expectancy(review):
         lines.append(f"| {name} | {a['known_folds']}/{a['folds']} | {percent(a['all_fold_mean'])} | {percent(b['all_fold_mean'])} | {a['corporate_action_events']}/{b['corporate_action_events']} |")
     lines += ['', 'میانگین حساب‌های مستقل، CAGR یا احتمال سود نیست؛ مجهول‌ها و عدم اجرا در JSON حفظ شده‌اند.',
               'مدل، پیش‌بینی و کنترل‌ها محفوظ‌اند؛ روش پذیرفته نشده و holdout باز نشده است.']
+    if review.get('model_family') == 'context-v1':
+        lines[3:3] = ['', 'خانوادهٔ پژوهشی context-v1؛ چهار تعامل ثابت، بدون پذیرش سیگنال.', '']
     return '\n'.join(lines) + '\n'
 
 
@@ -492,8 +550,10 @@ def main(argv=None):
     parser.add_argument('--trials-attempted', type=int)
     parser.add_argument('--replications', type=int, default=20000)
     parser.add_argument('--workers', type=int, default=4, help='1 to 4 independent bootstrap processes; same numerical results')
+    parser.add_argument('--model-family', choices=MODEL_FAMILIES, default=None,
+                        help='registered research family; default linear-v1; neither is an accepted signal')
     args = parser.parse_args(argv)
-    if args.review and (args.source is not None or args.trials_attempted is not None):
+    if args.review and (args.source is not None or args.trials_attempted is not None or args.model_family is not None):
         raise ValueError('بازبینی و اجرای منبع تازه دو کار جدا هستند')
     if not args.review and (args.source is None or args.trials_attempted is None):
         raise ValueError('منبع BASELINES و تعداد صریح کل تلاش ها لازم است')
@@ -504,7 +564,8 @@ def main(argv=None):
             print(json.dumps(review_expectancy(db, args.review), ensure_ascii=False, indent=2, allow_nan=False))
         else:
             result = run_expectancy(db, source_id=args.source, trials_attempted=args.trials_attempted,
-                                    replications=args.replications, diagnostic_workers=args.workers)
+                                    replications=args.replications, diagnostic_workers=args.workers,
+                                    model_family=args.model_family or 'linear-v1')
             print(result['report_path'])
     return 0
 

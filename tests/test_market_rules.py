@@ -14,6 +14,49 @@ def _frame(rows):
     return pd.DataFrame(rows, columns=cols)
 
 
+def test_missing_reference_column_never_becomes_previous_close_or_no_action():
+    frame = _frame([
+        ('2024-01-01', 100, 100, 100, 100, 100, 10, 1000),
+        ('2024-01-02', 54, 56, 55, 55, 55, 10, 550),
+    ]).drop(columns=['ref_price_raw'])
+    assert market_rules.reference_price(frame).isna().all()
+    assert market_rules.pit_daily_returns(frame).isna().all()
+    factors = market_rules.corporate_action_factors(frame)
+    assert factors.iloc[0] == 1.0 and pd.isna(factors.iloc[1])
+    assert pd.isna(market_rules.backward_adjusted_close(frame).iloc[0])
+
+
+def test_boolean_reference_and_official_close_are_unknown_not_one_rial():
+    frame = _frame([
+        ('2024-01-01', 100, 100, 100, 100, 100, 10, 1000),
+        ('2024-01-02', 100, 100, 100, True, True, 10, 1000),
+    ])
+    assert pd.isna(market_rules.official_close(frame).iloc[1])
+    assert pd.isna(market_rules.reference_price(frame).iloc[1])
+    assert pd.isna(market_rules.pit_daily_returns(frame).iloc[1])
+    assert pd.isna(market_rules.corporate_action_factors(frame).iloc[1])
+
+
+def test_lock_proxy_requires_observed_coherent_inputs():
+    frame = _frame([
+        ('2024-01-01', 100, 100, 100, 100, 100, 10, 1000),
+        ('2024-01-02', 100, 100, 100, 100, None, 10, 1000),
+        ('2024-01-03', 100, 100, 100, 100, True, 10, 1000),
+        ('2024-01-04', 101, 100, 100, 100, 100, 10, 1000),
+        ('2024-01-05', 100, 100, 100, 100, 100, 0, 0),
+        ('2024-01-06', 100, 100, 100, 100, 100, 1.5, 150),
+    ])
+    assert market_rules.lock_inputs_known(frame).tolist() == [True, False, False, False, False, False]
+
+
+@pytest.mark.parametrize('field', ['value', 'volume', 'low_raw', 'high_raw'])
+@pytest.mark.parametrize('invalid', [True, 'bad'])
+def test_vwap_cannot_be_calculated_from_boolean_or_nonnumeric_data(field, invalid):
+    frame = _frame([('2024-01-01', 100, 100, 100, 100, 100, 10, 1000)])
+    frame[field] = invalid
+    assert pd.isna(market_rules.daily_vwap(frame).iloc[0])
+
+
 def test_breakeven_and_net_return_with_official_fees():
     # (1 + 0.003712) / (1 - 0.0088) - 1 ≈ 1.2622٪
     assert market_rules.breakeven_move() == pytest.approx(0.012622, abs=1e-5)

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from config import settings
+from core.recovery_lineage import inspect_recovery_lineage
 from core.timeutils import now_tehran_iso
 from database.db import DatabaseManager
 from database.migrator import discover_migrations
@@ -16,14 +17,15 @@ from ops.environment import inspect_environment
 from ops.report_files import private_report_path, write_private_report
 from ops.research_preflight import research_preflight
 
-VERSION = 'trader-readiness-v1'
+VERSION = 'trader-readiness-v2'
 CODE_FILES = ('brs.py', 'ops/trader_readiness.py', 'ops/research_preflight.py', 'ops/environment.py', 'ops/report_files.py',
-              'core/price_quality.py', 'core/client_quality.py', 'features/provenance.py', 'database/db.py',
+              'core/price_quality.py', 'core/client_quality.py', 'core/recovery_lineage.py', 'core/timeutils.py',
+              'features/provenance.py', 'database/db.py',
               'database/migrator.py',
               'config/settings.py', 'config/default.yaml', 'config/production.yaml', 'requirements.lock.txt')
 NOT_ASSESSED = ['historical_membership', 'economic_corporate_entitlements', 'historical_fee_schedule',
                 'live_source_access', 'full_intraday_session_coverage', 'execution_calibration',
-                'independent_future_performance', 'private_owner_profile']
+                'independent_future_performance', 'trade_only_recovery_source_conflicts', 'private_owner_profile']
 
 
 def code_identity():
@@ -39,6 +41,8 @@ def collect_readiness(db):
         db.conn.execute('BEGIN')
     try:
         preflight = research_preflight(db, detail_limit=0)
+        lineage = inspect_recovery_lineage(db, cutoff=preflight['end_exclusive'],
+                                           development_start=preflight['development_start'])
         integrity = 'ok' if db.integrity_check() == 'ok' else 'failed'
         foreign_keys = len(db.conn.execute('PRAGMA foreign_key_check').fetchall())
         ids = [s['id'] for s in db.get_universe_symbols(include_inactive=True) if s['instrument_type_code'] in (300, 303)]
@@ -58,6 +62,10 @@ def collect_readiness(db):
     engineering_passed = bool(environment['ready'] and preflight['input_contract_passed']
                               and integrity == 'ok' and foreign_keys == 0 and schema_current)
     blockers = list(preflight['blockers'])
+    if lineage['retained_all_rows'] or lineage['retained_partial_rows']:
+        blockers.append('legacy_trade_only_recovery_retained')
+    if lineage['unrecognized_receipts'] or lineage['malformed_receipts']:
+        blockers.append('recovery_lineage_ambiguous')
     if not environment['ready']:
         blockers.append('runtime_environment_not_ready')
     if integrity != 'ok' or foreign_keys:
@@ -86,15 +94,17 @@ def collect_readiness(db):
         raise ValueError('کد در میانه بررسی تغییر کرده است؛ گزارش تازه بسازید')
     return dict(version=VERSION, generated_at=now_tehran_iso(), project_version=settings.VERSION,
         git_revision=revision, git_code_tree_clean=code_tree_clean, code=sources,
-        status='research_only' if engineering_passed else 'blocked',
+        status='research_only' if engineering_passed and lineage['review_clear'] else 'blocked',
         engineering_and_input_contract_passed=engineering_passed,
         environment=environment, database_integrity=integrity, foreign_key_violations=foreign_keys, schema_current=schema_current,
-        development=development, public_market_snapshot_counts=snapshots, blockers=blockers, not_assessed=NOT_ASSESSED,
+        development=development, recovery_lineage=lineage, public_market_snapshot_counts=snapshots,
+        blockers=blockers, not_assessed=NOT_ASSESSED,
         owner_inputs_needed=[], private_owner_profile_read=False, accepted_for_signals=False, profitability_proven=False,
         network_checked=False, full_session_coverage_verified=False, execution_proven=False,
         privacy_scope='public-market metadata, aggregate quality and code identity; no account content or absolute paths',
         limitations=['عبور قرارداد ورودی فقط اجازه ادامه بررسی مهندسی است؛ اعتبار روش معاملاتی نیست.',
                      'شمار مظنه‌ها، تازگی، پوشش کامل جلسه یا پرشدن سفارش را ثابت نمی‌کند.',
+                     'منشأ مبتنی بر ریزمعامله، غلط‌بودن قیمت یا تعداد تعارض‌ها را به‌تنهایی ثابت نمی‌کند.',
                      'پاسخ‌های قبلی مالک در پروفایل خصوصی‌اند و این گزارش آن‌ها را ارزیابی نمی‌کند.',
                      'تعداد نقض رابطه گزارش می‌شود؛ نام جدول و شناسه ردیف خصوصی صادر نمی‌شوند.'])
 
@@ -119,7 +129,7 @@ def main(argv=None):
         parser.exit(2, str(exc) + '\n')
     print(json.dumps({key: report[key] for key in ('status', 'engineering_and_input_contract_passed',
                                                    'accepted_for_signals', 'profitability_proven')}))
-    return 0 if report['engineering_and_input_contract_passed'] else 2
+    return 0 if report['status'] == 'research_only' else 2
 
 
 if __name__ == '__main__':

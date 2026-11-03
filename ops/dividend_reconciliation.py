@@ -13,7 +13,7 @@ from core.codal_documents import public_document_url
 from core.dividend_reconciliation import VERSION, primary_annual_dividend, reconcile_dividend
 from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
-from ops.codal_documents import load_codal_document
+from ops.codal_documents import load_codal_document, read_codal_document_file
 from ops.dividend_evidence import load_dividend_evidence
 from ops.report_files import private_report_path, read_private_report, write_private_report
 
@@ -25,7 +25,16 @@ NOTICE_FIELDS = ('tracing_no', 'symbol_fa', 'company_name', 'title', 'published_
 
 
 def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    path = Path(path)
+    if path.is_file():
+        body = path.read_bytes()
+    else:
+        root = (settings.DATA_DIR/'private/codal-documents').resolve()
+        relative = path.resolve().relative_to(root)
+        if len(relative.parts) < 2:
+            raise ValueError('فایل آرشیو کدال مشخص نیست')
+        body = read_codal_document_file(root/relative.parts[0], '/'.join(relative.parts[1:]))
+    return hashlib.sha256(body).hexdigest()
 
 
 def _sources(notice, document, study):
@@ -36,8 +45,7 @@ def _sources(notice, document, study):
     source = load_dividend_evidence(study)
     if manifest['format'] != 'text' or manifest['source_url'] != public_document_url(notice['url']):
         raise ValueError('متن همان پیوند رسمی اطلاعیه لازم است')
-    body_path = document / manifest['content_file']
-    body = body_path.read_bytes()
+    body = read_codal_document_file(document, manifest['content_file'])
     if hashlib.sha256(body).hexdigest() != manifest['content_sha256']:
         raise ValueError('متن پس از کنترل آرشیو تغییر کرد')
     selected = [case for case in source['cases'] if normalize_symbol(case['request']['symbol'])

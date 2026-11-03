@@ -10,10 +10,12 @@ import numpy as np
 import pandas as pd
 
 from config import settings
+from core.text import normalize_symbol
 from database.db import CLIENT_TYPE_COLUMNS
 from database.price_recovery import recovery_partitions
 
 INPUT_VERSION = 'raw-inputs-v2'
+REGISTRY_VERSION = 'feature-registry-v1'
 PRICE_COLUMNS = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw',
                  'ref_price_raw', 'volume', 'value', 'trade_count']
 COMPUTATION_PACKAGES = ('numpy', 'pandas', 'pyarrow')
@@ -60,7 +62,7 @@ def feature_logic_fingerprint():
     """Feature computation dependencies, excluding unrelated account/UI/research code."""
     digest = hashlib.sha256()
     files = ('features/daily.py', 'features/market.py', 'features/store.py', 'features/provenance.py',
-             'core/market_rules.py', 'core/client_quality.py', 'core/text.py', 'core/timeutils.py',
+             'core/market_rules.py', 'core/client_quality.py', 'core/price_quality.py', 'core/text.py', 'core/timeutils.py',
              'database/db.py', 'database/price_recovery.py', 'config/settings.py')
     for name in files:
         digest.update(name.encode())
@@ -111,6 +113,38 @@ def raw_input_snapshot(db, *, symbols=None, end_exclusive=None):
     return dict(version=INPUT_VERSION, tables=tables)
 
 
+def registry_snapshot(db):
+    """Record the current research registry identity, not historical membership."""
+    universe = db.get_universe_symbols(include_inactive=True)
+    fields = ('symbol_fa', 'tse_code', 'ins_code', 'instrument_type_code', 'flow')
+    members = []
+    seen = set()
+    for row in universe:
+        symbol = row.get('symbol_fa')
+        if not isinstance(symbol, str) or not symbol or symbol != normalize_symbol(symbol) or symbol in seen:
+            raise ValueError('نام یا هویت نمادهای جامعه پژوهش نامعتبر یا تکراری است')
+        seen.add(symbol)
+        member = {field: row.get(field) for field in fields}
+        if (any(member[key] is not None and not isinstance(member[key], str) for key in ('tse_code', 'ins_code'))
+                or type(member['instrument_type_code']) is not int
+                or member['flow'] is not None and type(member['flow']) is not int):
+            raise ValueError('شناسه یا نوع بازار نماد در جامعه پژوهش نامعتبر است')
+        members.append(member)
+    members.sort(key=lambda member: member['symbol_fa'])
+    encoded = json.dumps(members, ensure_ascii=False, sort_keys=True, allow_nan=False,
+                         separators=(',', ':')).encode('utf-8')
+    return dict(version=REGISTRY_VERSION, members=members, sha256=hashlib.sha256(encoded).hexdigest(),
+                historical_membership_verified=False)
+
+
+def _registry_bytes(value):
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False,
+                          separators=(',', ':')).encode('utf-8')
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('ساختار جامعه و هویت نمادهای فیچر نامعتبر است') from exc
+
+
 def assert_compatible_inputs(db, manifest, *, end_exclusive=None):
     """Reject stale raw values, changed membership or changed feature logic before research."""
     provenance = manifest.get('provenance') or {}
@@ -118,13 +152,26 @@ def assert_compatible_inputs(db, manifest, *, end_exclusive=None):
     expected = provenance.get('raw_inputs')
     if not expected or expected.get('version') != INPUT_VERSION:
         raise ValueError('منشأ داده خام انبار فیچر موجود نیست؛ ابتدا ساخت فیچر را دوباره اجرا کنید')
-    if provenance.get('feature_logic_sha256') != feature_logic_fingerprint():
+    logic = feature_logic_fingerprint()
+    if provenance.get('feature_logic_sha256') != logic:
         raise ValueError('منشأ منطق فیچر تغییر کرده است؛ ابتدا ساخت فیچر را دوباره اجرا کنید')
     expected_tables = {
         table: {day: value for day, value in partitions.items() if not end_exclusive or day < end_exclusive}
         for table, partitions in expected['tables'].items()
     }
-    actual = raw_input_snapshot(db, end_exclusive=end_exclusive)
-    if actual['tables'] != expected_tables:
-        raise ValueError('داده خام با منشأ فیچر یکسان نیست؛ ابتدا ساخت فیچر را دوباره اجرا کنید')
+    own_snapshot = not db.conn.in_transaction
+    if own_snapshot:
+        db.conn.execute('BEGIN')
+    try:
+        if _registry_bytes(provenance.get('registry_snapshot')) != _registry_bytes(registry_snapshot(db)):
+            raise ValueError('جامعه یا هویت نمادها با منشأ فیچر یکسان نیست؛ ابتدا ساخت فیچر را دوباره اجرا کنید')
+        actual = raw_input_snapshot(db, end_exclusive=end_exclusive)
+        if actual['tables'] != expected_tables:
+            raise ValueError('داده خام با منشأ فیچر یکسان نیست؛ ابتدا ساخت فیچر را دوباره اجرا کنید')
+        if feature_logic_fingerprint() != logic:
+            raise ValueError('منطق فیچر هنگام بررسی تغییر کرد؛ بررسی را دوباره اجرا کنید')
+        assert_compatible_environment(manifest)
+    finally:
+        if own_snapshot:
+            db.conn.rollback()
     return actual

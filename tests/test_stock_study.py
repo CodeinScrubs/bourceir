@@ -5,7 +5,14 @@ import pandas as pd
 import pytest
 
 from core.flow_filters import filter_diagnostics, flow_metrics
-from core.stock_study import compare_peers, describe_pre_window, describe_window, observed_market_caps, validate_panel
+from core.stock_study import (
+    compare_peers,
+    describe_pre_window,
+    describe_window,
+    observed_market_caps,
+    peer_summary,
+    validate_panel,
+)
 from core.symbol_review import volume_comparability
 from tests.test_flow_filters import history
 
@@ -71,12 +78,33 @@ def test_exact_dates_raw_price_and_synthetic_action_model_are_distinct():
     p.loc[2:,'ref_price_raw']/=2
     w=describe_window(p,p.date.iloc[0],p.date.iloc[-1])
     assert w['last_price_multiple']==.5
-    assert w['synthetic_multiple']==1
+    assert w['synthetic_multiple'] is None
+    assert w['observed_only_synthetic_multiple']==1
     assert len(w['reference_gaps'])==1
     assert w['economic_return'] is None and w['executable_return'] is None
-    assert describe_window(p.iloc[1:],p.date.iloc[0],p.date.iloc[-1])['synthetic_multiple'] is None
+    assert describe_window(p.iloc[1:],p.date.iloc[0],p.date.iloc[-1])['observed_only_synthetic_multiple'] is None
     p.loc[3,'ref_price_raw']=np.nan
-    assert describe_window(p,p.date.iloc[0],p.date.iloc[-1])['synthetic_multiple'] is None
+    assert describe_window(p,p.date.iloc[0],p.date.iloc[-1])['observed_only_synthetic_multiple'] is None
+
+
+def test_missing_intermediate_session_cannot_become_a_complete_return_or_peer_result():
+    p,_=history(5)
+    p.loc[2:,'close_final_raw']=1100.
+    p.loc[3:,'ref_price_raw']=1100.
+    start,end=p.date.iloc[0],p.date.iloc[-1]
+    complete=describe_window(p,start,end)
+    omitted=describe_window(p.drop(index=2),start,end)
+    assert complete['exact_endpoints'] and omitted['exact_endpoints']
+    assert complete['observed_only_synthetic_multiple']==pytest.approx(1.1)
+    assert omitted['observed_only_synthetic_multiple']==pytest.approx(1.0)
+    assert omitted['unknown_returns']==0  # Missing rows cannot be counted from the incomplete panel.
+    assert complete['synthetic_multiple'] is None and omitted['synthetic_multiple'] is None
+    assert complete['synthetic_close_drawdown'] is None and omitted['synthetic_close_drawdown'] is None
+    assert len(omitted['reference_gaps'])==1
+    summary=peer_summary([dict(synthetic_multiple=1.1, observation_calendar_verified=False,
+                               observed_only_synthetic_multiple=1.0)])
+    assert summary['known']==0 and summary['mean_multiple'] is None
+    assert summary['observed_only_mean_multiple']==1.0
 
 
 def test_pre_window_strictly_excludes_start_and_future_and_does_not_zero_missing():
@@ -92,6 +120,49 @@ def test_pre_window_strictly_excludes_start_and_future_and_does_not_zero_missing
     assert expected['calendar_days_since_last_observation']==(pd.Timestamp(before)-pd.Timestamp(p.date.iloc[59])).days
 
 
+def test_pre_window_reports_unknown_lock_coverage_without_losing_observed_matches():
+    p, _ = history(5)
+    before = p.date.iloc[3]
+    p.loc[1, ['low_raw', 'high_raw', 'ref_price_raw']] = [1050., 1050., 1000.]
+    p.loc[2, 'ref_price_raw'] = np.nan
+    result = describe_pre_window(p, before, 2)
+    assert result['lock_coverage'] == 1 and result['lock_unknown_rows'] == 1
+    assert result['observed_locked_up_rows'] == 1
+    assert result['locked_up_rows'] is None and result['locked_down_rows'] is None
+    partial = describe_pre_window(p, before, 10)
+    assert partial['observed_rows'] == 3 and partial['locked_up_rows'] is None
+
+
+def test_old_stock_study_archive_is_read_without_reinterpretation(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    from ops.stock_study import load_latest_study
+
+    folder = tmp_path / 'OLD'
+    folder.mkdir()
+    legacy = {'version': 'stock-study-v2', 'study_id': 'OLD', 'inputs': {},
+              'source_files_sha256': {}, 'created_at': '2024-01-01T12:00:00+03:30',
+              'cases': [], 'locked_up_rows': 0}
+    study = json.dumps(legacy).encode('utf-8')
+    html = b'<p>historic report</p>'
+    (folder / 'study.json').write_bytes(study)
+    (folder / 'report.html').write_bytes(html)
+    pointer = {'version': 'stock-study-v2', 'study_id': 'OLD', 'folder': 'OLD',
+               'study_sha256': hashlib.sha256(study).hexdigest(),
+               'html_sha256': hashlib.sha256(html).hexdigest()}
+    (tmp_path / 'latest.json').write_text(json.dumps(pointer), encoding='utf-8')
+    loaded, path = load_latest_study(tmp_path)
+    assert loaded == legacy and path == folder
+    assert (folder / 'study.json').read_bytes() == study
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setattr('dashboard.stock_study.load_latest_study', lambda: (loaded, path))
+    app = AppTest.from_string('from dashboard.stock_study import page_stock_study\npage_stock_study()').run()
+    assert not app.exception
+    assert any('شمار الگوی تک‌قیمتی' in warning.value and 'نسخهٔ قدیمی' in warning.value for warning in app.warning)
+
+
 def test_controls_use_prior_liquidity_and_missing_member_stays_in_denominator():
     p,_=history(70)
     peers=[p.assign(symbol='الف',value=p.value*.9),p.assign(symbol='ب',value=p.value*1.1)]
@@ -102,9 +173,11 @@ def test_controls_use_prior_liquidity_and_missing_member_stays_in_denominator():
     cache={}
     assert first==compare_peers(panel,meta,'کیان',start,end,_window_cache=cache)
     assert first==compare_peers(panel,meta,'کیان',start,end,_window_cache=cache)
-    assert first['market']['expected']==3 and first['market']['known']==2
+    assert first['market']['expected']==3 and first['market']['known']==0
     assert first['market']['mean_multiple'] is None
-    assert first['market']['known_subset_mean_multiple']==1
+    assert first['market']['known_subset_mean_multiple'] is None
+    assert first['market']['observed_only_known']==2
+    assert first['market']['observed_only_mean_multiple']==1
     panel.loc[(panel.symbol=='الف') & (panel.date==end),'close_final_raw']*=100
     second=compare_peers(panel,meta,'کیان',start,end)
     assert [r['symbol'] for r in first['matched_by_prior_liquidity']]==[r['symbol'] for r in second['matched_by_prior_liquidity']]
@@ -152,6 +225,8 @@ def test_study_registers_before_computation_and_pins_inputs_and_publication_time
     html=(folder/'report.html').read_text(encoding='utf-8')
     assert '&lt;script&gt;untrusted&lt;/script&gt;' in html
     assert 'href="javascript:' not in html
+    assert 'شاخص فقط مشاهدات موجود' in html
+    assert 'این عدد شاخص کامل بازه یا بازده اقتصادی نیست' in html
     from streamlit.testing.v1 import AppTest
     script='from dashboard.stock_study import page_stock_study\npage_stock_study()'
     at=AppTest.from_string(script,default_timeout=30).run()

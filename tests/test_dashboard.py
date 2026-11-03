@@ -13,7 +13,7 @@ from data_collector.scheduler import DataCollector
 from data_collector.tsetmc import TsetmcProvider
 from database.db import DatabaseManager
 from ops import jobs
-from tests.conftest import ROOT_DIR, FakeSession
+from tests.conftest import FOOLAD_INS, ROOT_DIR, FakeSession
 
 DASHBOARD = str(ROOT_DIR / "dashboard" / "app.py")
 ROOT_APP = str(ROOT_DIR / "app.py")
@@ -39,7 +39,9 @@ def _run_all_pages(script: str) -> AppTest:
     at = AppTest.from_file(script, default_timeout=60).run()
     assert not at.exception, at.exception
     assert any("BRS" in t.value for t in at.title)  # صفحه خانه
-    for page in PAGES:
+    options = at.sidebar.radio[0].options
+    assert set(PAGES).issubset(options)
+    for page in options:
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, (page, at.exception)
     return at
@@ -49,6 +51,35 @@ def test_dashboard_pages_on_empty_database(dashboard_db):
     at = _run_all_pages(DASHBOARD)
     at.sidebar.radio[0].set_value("🏠 خانه").run()
     assert any("هنوز داده‌ای ثبت نشده" in w.value for w in at.warning)
+
+
+def test_home_and_symbol_detail_display_unknown_daily_lock(dashboard_db):
+    with DatabaseManager(db_path=dashboard_db) as db:
+        sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+        db.insert_daily_price(sid, '2024-01-01', 1000, 1050, 950, 1000, volume=1000,
+                              value=1_000_000, close_final_raw=1000, ref_price_raw=None)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception
+    assert any('وضعیت الگوی تک‌قیمتی' in item.value and 'نامعلوم' in item.value for item in at.caption)
+    at.sidebar.radio[0].set_value('📊 بررسی نماد').run()
+    assert not at.exception
+    assert any('الگوی تک‌قیمتی روز آخر نامعلوم است' in item.value for item in at.info)
+
+
+def test_live_dashboard_uses_capture_time_not_insertion_id(dashboard_db):
+    """An older capture inserted later must not replace the newer market snapshot."""
+    with DatabaseManager(db_path=dashboard_db) as db:
+        sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+        assert db.insert_snapshot(sid, dict(captured_at='2026-10-11T10:02:00+03:30',
+                                            last_price=105, ref_price=100, source='tsetmc'))
+        assert db.insert_snapshot(sid, dict(captured_at='2026-10-11T10:01:00+03:30',
+                                            last_price=98, ref_price=100, source='tsetmc'))
+    app = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    app.sidebar.radio[0].set_value('📡 دیده‌بان زنده').run()
+    assert not app.exception
+    row = app.dataframe[0].value.set_index('نماد').loc['آزمون']
+    assert row['آخرین'] == 105
+    assert row['تغییر آخرین ٪'] == pytest.approx(5)
 
 
 def test_dashboard_pages_with_data(dashboard_db, market_watch_rows, closing_price_daily, client_type_all, monkeypatch):
@@ -173,8 +204,8 @@ def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dash
 def test_flow_lab_explains_incomplete_original_filter(dashboard_db, closing_price_daily):
     db = DatabaseManager(db_path=dashboard_db)
     provider = TsetmcProvider(session=FakeSession({'GetClosingPriceDailyList': {'closingPriceDaily': closing_price_daily}}))
-    sid = db.upsert_symbol(dict(symbol_fa='فولاد', ins_code='test', instrument_type_code=300))
-    db.upsert_daily_prices_df(sid, provider.get_symbol_history('test'))
+    sid = db.upsert_symbol(dict(symbol_fa='فولاد', ins_code=FOOLAD_INS, instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, provider.get_symbol_history(FOOLAD_INS))
     db.close()
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.sidebar.radio[0].set_value('🧪 آزمایشگاه فیلترها').run()
@@ -294,4 +325,4 @@ def test_live_filter_without_matches_does_not_format_nat(dashboard_db):
     at.sidebar.radio[0].set_value('📡 دیده‌بان زنده').run()
     at.radio[0].set_value('فقط صف خرید').run()
     assert not at.exception
-    assert any('هیچ نمادی' in i.value for i in at.info)
+    assert any('داده‌های ذخیره‌شده' in i.value and 'اثبات نمی‌کند' in i.value for i in at.info)

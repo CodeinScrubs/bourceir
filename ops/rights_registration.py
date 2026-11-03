@@ -12,13 +12,16 @@ from config import settings
 from core.rights_evidence import primary_rights_registration
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
 from ops.capital_actions import NOTICE_KEYS, _clock, _source
+from ops.codal_documents import read_codal_document_files
+from ops.codal_storage_compat import semantic_source_compatible
 from ops.report_files import private_report_path, read_private_report, write_private_report
 
 VERSION = 'rights-registration-study-v1'
 SEMANTIC_FILES = ('core/rights_evidence.py', 'core/capital_actions.py', 'core/dividend_evidence.py',
     'core/text.py', 'core/timeutils.py', 'core/codal_documents.py', 'ops/capital_actions.py',
     'ops/codal_documents.py', 'ops/rights_registration.py', 'ops/report_files.py')
-CODE_FILES = (*SEMANTIC_FILES, 'config/settings.py', 'config/default.yaml',
+STORAGE_FILES = ('ops/codal_compact.py', 'ops/codal_storage_compat.py')
+CODE_FILES = (*SEMANTIC_FILES, *STORAGE_FILES, 'config/settings.py', 'config/default.yaml',
               'config/production.yaml', 'requirements.lock.txt', 'pyproject.toml')
 FLAGS = ('database_read', 'database_writes', 'network_requested', 'account_data_read',
          'feature_eligible', 'accepted_for_signals', 'profitability_proven')
@@ -45,10 +48,11 @@ def create_rights_study(*, notice_path, document, root=None, end_exclusive=None)
     folder.mkdir(parents=True, exist_ok=False)
     copy = folder/'document'/source['snapshot_id']
     files = ['manifest.json', source['content_file'], *source['source_files_sha256']]
+    bodies = read_codal_document_files(original)
     for name in files:
         target = copy/name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((original/name).read_bytes())
+        target.write_bytes(bodies[name])
     copied, copied_text = _source(copy, notice)
     if copied != source or copied_text != text:
         raise ValueError('منبع هنگام ساخت مطالعه تغییر کرده است')
@@ -89,14 +93,19 @@ def review_rights_study(folder):
     result = read_private_report(folder/'result.json')
     if (plan.get('version') != VERSION or plan.get('study_id') != folder.name
             or not is_canonical_iso_date(plan.get('cutoff')) or plan['cutoff'] > settings.RESEARCH_CONFIG['holdout_start']
-            or any(plan.get(flag) is not False for flag in FLAGS) or set(plan['code']) != set(CODE_FILES)):
+            or any(plan.get(flag) is not False for flag in FLAGS)
+            or set(plan['code']) not in (set(CODE_FILES), set(CODE_FILES)-set(STORAGE_FILES))):
         raise ValueError('قرارداد مطالعه و مرز داده معتبر نیست')
     for name, expected in {**plan['inputs'], **{'code/'+n: v for n, v in plan['code'].items()}}.items():
         path = (folder/name).resolve()
         if not path.is_relative_to(folder) or not path.is_file() or _sha(path) != expected:
             raise ValueError('هش یا مسیر ورودی و کد ناسازگار است')
-    if any(hashlib.sha256(_code(name)).hexdigest() != plan['code'][name] for name in SEMANTIC_FILES):
+    if any(not semantic_source_compatible(name, plan['code'][name], hashlib.sha256(_code(name)).hexdigest())
+           for name in SEMANTIC_FILES):
         raise ValueError('منطق جاری با مفسر محفوظ برابر نیست؛ بازتفسیر صریح لازم است')
+    if any(name in plan['code'] and hashlib.sha256(_code(name)).hexdigest() != plan['code'][name]
+           for name in STORAGE_FILES):
+        raise ValueError('منطق آرشیو فشرده با نسخه محفوظ برابر نیست')
     notice = read_private_report(folder/'notice.json')
     if set(notice) != set(NOTICE_KEYS):
         raise ValueError('فراداده باید همان فهرست محدود عمومی باشد')
@@ -115,7 +124,9 @@ def review_rights_study(folder):
             or not _clock(source['available_at']) <= _clock(plan['registered_at'])
                 <= _clock(result['created_at']) <= _clock(now_tehran_iso())):
         raise ValueError('نتیجه یا ترتیب زمان مطالعه بازحساب نشد')
-    return dict(**result, artifacts_verified=True, semantic_code_matches_current=True,
+    exact_semantic = all(hashlib.sha256(_code(name)).hexdigest() == plan['code'][name] for name in SEMANTIC_FILES)
+    return dict(**result, artifacts_verified=True, semantic_code_matches_current=exact_semantic,
+        storage_compatibility_applied=not exact_semantic,
         capture_code_matches_current=all(hashlib.sha256(_code(name)).hexdigest() == value
                                          for name, value in plan['code'].items()))
 

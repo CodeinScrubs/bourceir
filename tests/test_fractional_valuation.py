@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from backtest.engine import BacktestEngine
-from backtest.portfolio import replay_portfolio
+from backtest.portfolio import PORTFOLIO_VERSION, replay_portfolio
 from config import settings
 from tests.test_portfolio import config, history, picks
 
@@ -37,7 +37,7 @@ def test_fraction_follows_price_and_later_action_after_whole_shares_are_sold():
     assert result.metrics['noncash_receivable_cost_rial'] == pytest.approx(20 * (1 + settings.FEES['buy']))
     assert result.metrics['corporate_action_events'] == 2
     assert not result.metrics['actual_corporate_entitlements_verified']
-    assert result.assumptions['version'] == 'portfolio-v4'
+    assert result.assumptions['version'] == PORTFOLIO_VERSION
     assert result.metrics['fractional_exposures'][0]['quantity'] == pytest.approx(4 / 3)
     assert result.metrics['final_equity_rial'] - result.metrics['initial_capital_rial'] == pytest.approx(
         result.metrics['realized_net_rial'] + result.metrics['noncash_receivable_rial']

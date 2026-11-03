@@ -14,12 +14,16 @@ from config import settings
 from core.daily_publications import MAX_BYTES, _clock, parse_publication, publication_request
 from core.text import normalize_symbol
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
+from data_collector.source_cooldown import checked_transport_evidence
 
-VERSION = 'daily-publication-archive-v1'
+VERSION = 'daily-publication-archive-v2'
+LEGACY_VERSION = 'daily-publication-archive-v1'
 CODE_FILES = ('core/daily_publications.py', 'core/price_quality.py', 'core/price_revision.py',
               'core/client_quality.py', 'core/text.py', 'core/timeutils.py', 'data_collector/base.py',
               'data_collector/tsetmc.py', 'data_collector/daily_publications.py', 'data_collector/scheduler.py',
-              'database/db.py', 'database/price_recovery.py', 'config/settings.py', 'config/default.yaml')
+              'database/db.py', 'database/price_recovery.py', 'config/settings.py', 'config/default.yaml',
+              'core/source_cooldown.py', 'data_collector/source_cooldown.py',
+              'data_collector/publication_compat.py', 'core/order_book.py')
 META = ('source', 'ins_code', 'url', 'requested_at', 'received_at', 'response_bytes',
         'body_sha256', 'price_unit', 'requested_date', 'kind')
 logger = logging.getLogger(__name__)
@@ -86,14 +90,26 @@ def _parsed(source, task, attempted_at, completed_at):
         return dict(status='rejected', error_type=type(exc).__name__, error=str(exc), row=None)
 
 
-def _tasks(tasks, at):
+def checked_transport_clock(value,attempted_at,completed_at):
+    value=checked_transport_evidence(value)
+    if value is not None:
+        for key in ('requested_at','received_at','checked_at'):
+            if key in value and not _clock(attempted_at)<=_clock(value[key])<=_clock(completed_at):
+                raise ValueError('Transport observation is outside the archived attempt clock')
+    return value
+
+
+def _tasks(tasks, at, *, version=VERSION):
+    if version not in (VERSION,LEGACY_VERSION):
+        raise ValueError('Unknown dated-publication task contract')
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= 12000:
         raise ValueError('دامنه دریافت روزانه باید یک تا دوازده‌هزار مشاهده باشد')
     seen = set()
     day = _clock(at).date().isoformat()
     for task in tasks:
         if (not isinstance(task, dict) or set(task) != {'symbol_id', 'symbol', 'ins_code', 'date', 'kind', 'instrument_type_code'}
-                or type(task['symbol_id']) is not int or task['symbol_id'] <= 0
+                or not (type(task['symbol_id']) is int and task['symbol_id'] > 0
+                        or version == VERSION and task['symbol_id'] is None)
                 or not isinstance(task['symbol'], str) or normalize_symbol(task['symbol']) != task['symbol']
                 or not task['symbol'] or task['symbol'][-1:].isdigit()
                 or type(task['instrument_type_code']) is not int or task['instrument_type_code'] not in (300, 303)
@@ -116,7 +132,9 @@ class DailyPublicationArchive:
         _tasks(tasks, at)
         self.code, self.tasks, self.workers = _code(), [dict(t) for t in tasks], workers
         self._captured = self._sealed = False
-        self.folder = Path(root).resolve()/('DAYPUB-'+uuid.uuid4().hex)
+        days,kinds = {t['date'] for t in tasks},{t['kind'] for t in tasks}
+        category = next(iter(days)) if len(days)==1 and kinds=={'price'} else 'client' if kinds=={'client'} else 'mixed'
+        self.folder = Path(root).resolve()/category/('DAYPUB-'+uuid.uuid4().hex)
         self.folder.mkdir(parents=True, exist_ok=False)
         for name, digest in self.code.items():
             body = (settings.BASE_DIR/name).read_bytes().replace(b'\r\n', b'\n')
@@ -135,29 +153,68 @@ class DailyPublicationArchive:
             raise ValueError('تلاش دریافت قبلی بازنویسی نمی‌شود؛ بایگانی تازه بسازید')
         self._captured = True
         owned, local, records = [], threading.local(), [None]*len(self.tasks)
+        batch_lock = threading.Lock()
+        batch_state = dict(stop_reason=None, consecutive_failures=0,
+                           partition_failures={}, stopped_partitions=set())
         def worker(index):
             error = None
             task = self.tasks[index]
+            partition = task['kind'], task['date']
             attempted = now_tehran_iso()
-            source, profile = None, 'unknown'
+            source, profile, transport = None, 'unknown', None
             try:
-                if provider_factory is None:
-                    current = provider
+                with batch_lock:
+                    stopped = batch_state['stop_reason']
+                    partition_stopped = partition in batch_state['stopped_partitions']
+                if stopped:
+                    error,profile = stopped,'not-dispatched-batch-stop'
+                elif partition_stopped:
+                    error, profile = 'partition_stopped_http_5xx', 'not-dispatched-partition-stop'
                 else:
-                    if not hasattr(local, 'provider'):
-                        local.provider = provider_factory()
-                        owned.append(local.provider)
-                    current = local.provider
-                profile = getattr(current, 'request_profile', 'unknown')
-                source = _encode(current.get_daily_publication_observation(task['ins_code'], task['date'], task['kind']))
+                    if provider_factory is None:
+                        current = provider
+                    else:
+                        if not hasattr(local, 'provider'):
+                            local.provider = provider_factory()
+                            owned.append(local.provider)
+                        current = local.provider
+                    profile = getattr(current, 'request_profile', 'unknown')
+                    try:
+                        source = _encode(current.get_daily_publication_observation(task['ins_code'], task['date'], task['kind']))
+                    finally:
+                        transport = checked_transport_evidence(getattr(current,'last_transport_evidence',None))
             except Exception as exc:
                 logger.exception('دریافت بومی روزانه %s ناموفق بود', task['symbol'])
                 error = type(exc).__name__
             record = dict(version=VERSION, task=task, attempted_at=attempted, completed_at=now_tehran_iso(),
-                request_profile=profile, provider_error_type=error, source=source, parsed=None)
+                request_profile=profile, provider_error_type=error, source=source, parsed=None,transport=transport)
             # Preserve the receipt before parsing; an interrupted parse is not a complete archive.
             _write(self.folder/f'observation-{index:05d}.json', record)
+            checked_transport_clock(transport,attempted,record['completed_at'])
             record['parsed'] = _parsed(source, task, attempted, record['completed_at'])
+            with batch_lock:
+                if transport is not None and (transport['status'] in ('rate_limited','source_cooldown')
+                                               or transport.get('http_status') in (429,503)):
+                    batch_state['stop_reason'] = 'batch_stopped_source_limit'
+                elif stopped is None and not partition_stopped:
+                    # A failing session can be interleaved with healthy dates, so
+                    # the global consecutive-failure guard alone is insufficient.
+                    # Only actual HTTP 5xx responses count; skipped attempts do not.
+                    status = transport.get('http_status') if transport is not None else None
+                    server_error = (transport is not None and transport['status'] == 'response_received'
+                                    and type(status) is int and 500 <= status <= 599
+                                    and record['parsed']['status'] == 'source_unavailable')
+                    if server_error:
+                        failures = batch_state['partition_failures'].get(partition, 0) + 1
+                        batch_state['partition_failures'][partition] = failures
+                        if failures >= 5:
+                            batch_state['stopped_partitions'].add(partition)
+                    else:
+                        batch_state['partition_failures'].pop(partition, None)
+                    failed = record['parsed']['status'] in ('source_unavailable','rejected')
+                    batch_state['consecutive_failures'] = batch_state['consecutive_failures']+1 if failed else 0
+                    if batch_state['consecutive_failures'] >= 5:
+                        batch_state['stop_reason'] = 'batch_stopped_consecutive_failures'
             _write(self.folder/f'observation-{index:05d}.json', record)
             return index, record
         try:
@@ -206,9 +263,12 @@ def review_archive(folder):
     """Reparse preserved bytes with matching code; application claims need DB evidence separately."""
     folder = Path(folder).resolve()
     plan, result = (json.loads((folder/name).read_text(encoding='utf-8')) for name in ('plan.json', 'result.json'))
-    if plan.get('version') != VERSION or result.get('version') != VERSION or plan.get('code') != _code():
+    from data_collector.publication_compat import archive_contract
+
+    if plan.get('version') != result.get('version'):
         raise ValueError('قرارداد یا کد بایگانی روزانه با نسخه فعلی برابر نیست')
-    _tasks(plan['tasks'], plan['registered_at'])
+    archive_contract(plan.get('version'),plan.get('code'))
+    _tasks(plan['tasks'], plan['registered_at'],version=plan['version'])
     expected = {'plan.json', *(f'observation-{i:05d}.json' for i in range(len(plan['tasks'])))}
     if set(result['artifacts_sha256']) != expected:
         raise ValueError('فهرست شاهدهای دریافت روزانه ناقص است')
@@ -221,12 +281,17 @@ def review_archive(folder):
     statuses = {}
     for index, task in enumerate(plan['tasks']):
         record = json.loads((folder/f'observation-{index:05d}.json').read_text(encoding='utf-8'))
-        if (record.get('version') != VERSION or not _clock(plan['registered_at']) <= _clock(record['attempted_at'])
+        fields={'version','task','attempted_at','completed_at','request_profile','provider_error_type','source','parsed'}
+        if plan['version']==VERSION:
+            fields.add('transport')
+        if (set(record)!=fields or record.get('version') != plan['version'] or not _clock(plan['registered_at']) <= _clock(record['attempted_at'])
                 <= _clock(record['completed_at']) <= _clock(result['completed_at'])):
             raise ValueError('ترتیب زمانی بایگانی روزانه معتبر نیست')
+        if plan['version'] == VERSION:
+            checked_transport_clock(record.get('transport'),record['attempted_at'],record['completed_at'])
         parsed = _parsed(record['source'], task, record['attempted_at'], record['completed_at'])
         if record['task'] != task or record['parsed'] != parsed:
             raise ValueError('نتیجه از بایت محفوظ دریافت روزانه بازتولید نمی‌شود')
         statuses[parsed['status']] = statuses.get(parsed['status'], 0)+1
-    return dict(version=VERSION, byte_replay_verified=True, observations=len(plan['tasks']), statuses=statuses,
+    return dict(version=plan['version'], byte_replay_verified=True, observations=len(plan['tasks']), statuses=statuses,
                 application_independently_verified=False, accepted_for_signals=False, profitability_proven=False)

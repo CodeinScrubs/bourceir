@@ -18,8 +18,9 @@ import pandas as pd
 
 from core import market_rules
 from core.client_quality import validated_client_data
+from core.price_quality import validated_feature_prices
 
-FEATURE_SET_VERSION = "daily-v7"  # دامنه، نام یکسان، پوشش بی‌داده و منبع حقیقی/حقوقی مطابق منشأ
+FEATURE_SET_VERSION = "daily-v8"  # ورودی نامعتبر و قفل نامعلوم به عدد عادی تبدیل نمی‌شوند
 
 PRICE_FEATURES = [
     "ret_1d", "ret_3d", "ret_5d", "ret_20d",
@@ -42,10 +43,11 @@ def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
 
 
 def _streak(flag: pd.Series) -> pd.Series:
-    """تعداد روزهای متوالی که flag تا امروز برقرار بوده است (۰ اگر امروز برقرار نیست)."""
-    flag = flag.fillna(False).astype(bool)
-    groups = (~flag).cumsum()
-    return flag.astype(int).groupby(groups).cumsum()
+    """Archive-relative streak; uncertainty lasts until an observed non-lock."""
+    groups = flag.eq(0).cumsum()
+    observed = flag.notna().groupby(groups).cummin()
+    count = flag.eq(1).astype(float).groupby(groups).cumsum()
+    return count.where(observed)
 
 
 def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -58,6 +60,7 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     out = pd.DataFrame({"date": df["date"]})
     if df.empty:
         return out.reindex(columns=["date"] + DAILY_FEATURES)
+    df = validated_feature_prices(df)
 
     # ─── بازده و شاخص بازده بدون جهش اقدام شرکتی ───
     ret = market_rules.pit_daily_returns(df)
@@ -73,7 +76,7 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
     ref = market_rules.reference_price(df)
     true_range = pd.concat([
         df["high_raw"] - df["low_raw"], (df["high_raw"] - ref).abs(), (df["low_raw"] - ref).abs(),
-    ], axis=1).max(axis=1)
+    ], axis=1).max(axis=1, skipna=False)
     out["atr_14d_pct"] = _safe_div(true_range, ref).rolling(14, min_periods=10).mean()
     gain, loss = ret.clip(lower=0), (-ret).clip(lower=0)
     segments = ret.isna().cumsum()
@@ -108,10 +111,11 @@ def compute_daily_features(prices: pd.DataFrame, client_types: Optional[pd.DataF
 
     # ─── صف قفل ───
     locks = market_rules.lock_flags(df)
-    out["locked_up"] = locks["locked_up"].astype(int)
-    out["locked_down"] = locks["locked_down"].astype(int)
-    out["lock_up_streak"] = _streak(locks["locked_up"])
-    out["lock_down_streak"] = _streak(locks["locked_down"])
+    lock_known = df[['high_raw', 'low_raw', 'ref_price_raw', 'volume']].notna().all(axis=1)
+    out["locked_up"] = locks["locked_up"].astype(float).where(lock_known)
+    out["locked_down"] = locks["locked_down"].astype(float).where(lock_known)
+    out["lock_up_streak"] = _streak(out["locked_up"])
+    out["lock_down_streak"] = _streak(out["locked_down"])
 
     # ─── پول هوشمند (حقیقی/حقوقی) ───
     if client_types is not None and not client_types.empty:
