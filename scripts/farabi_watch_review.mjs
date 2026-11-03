@@ -6,19 +6,32 @@ import crypto from 'node:crypto';
 import readline from 'node:readline';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
-import {BoardAlerts,version} from '../core/board_alerts.mjs';
+import {BoardAlerts as LegacyBoardAlerts,version as legacyVersion} from '../core/board_alerts.mjs';
+import {BoardAlerts,version} from '../core/board_alerts_v2.mjs';
 import {parseBoard} from '../data_collector/farabi_board.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const codeFiles=['core/board_alerts.mjs','data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html'];
+const sharedFiles=['data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html'];
+// Exact known v1 producer, including its decoder. Archive source is never executed.
+const legacyCode=Object.freeze({
+  'core/board_alerts.mjs':'c3bbbf1ffd303a17ae539aebc42bc96d9b5633a3e5717ace4a756a3c2d011ebb',
+  'data_collector/farabi_board.mjs':'4741f3c2e7db3756014c6bd5bd1a4951c0b9a3108010f56b8a90982234ad6b46',
+  'scripts/farabi_watch.mjs':'36f55f071b8243b320ade8fbf63c43dd2519b52c565cf8822b20c8ecd835d25c',
+  'dashboard/board_watch.html':'1d4cab2bdc8b806166db057095cfd35deff38e3b45ef55cf5b2c945537b0ce94',
+});
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 export async function reviewArchive(directory) {
   const base=path.resolve(directory),plan=JSON.parse(await fsp.readFile(path.join(base,'plan.json'),'utf8'));
-  if(plan.version!==version||!isDeepStrictEqual(Object.keys(plan.code).sort(),[...codeFiles].sort()))throw new Error('قرارداد یا فهرست کد شناخته‌شده نیست');
+  const legacy=plan.version===legacyVersion;
+  const codeFiles=[legacy?'core/board_alerts.mjs':'core/board_alerts_v2.mjs',...sharedFiles];
+  if((!legacy&&plan.version!==version)||!plan.code||!isDeepStrictEqual(Object.keys(plan.code).sort(),[...codeFiles].sort()))throw new Error('قرارداد یا فهرست کد شناخته‌شده نیست');
   for(const file of codeFiles){const archived=await fsp.readFile(path.join(base,'code',file));
-    if(hash(archived)!==plan.code[file]||hash(await fsp.readFile(path.join(root,file)))!==plan.code[file])
+    const expected=legacy?legacyCode[file]:hash(await fsp.readFile(path.join(root,file)));
+    const decoder=legacy&&['core/board_alerts.mjs','data_collector/farabi_board.mjs'].includes(file);
+    if(hash(archived)!==plan.code[file]||expected!==plan.code[file]||
+       (decoder&&hash(await fsp.readFile(path.join(root,file)))!==expected))
       throw new Error('کد محفوظ با نسخه بازبین برابر نیست؛ کد آرشیو اجرا نشد');}
   let seq=0,previous='0'.repeat(64),complete=false,started=false,observations=0,evaluations=0,alerts=0;
-  const sources=new Map(),engine=new BoardAlerts(plan.rule),expected=[];
+  const sources=new Map(),engine=legacy?new LegacyBoardAlerts(plan.rule):new BoardAlerts(plan.rule),expected=[];
   for(const [key,rule]of Object.entries(plan.rule_overrides||{}))engine.configureForKey(key,rule);
   const lines=readline.createInterface({input:fs.createReadStream(path.join(base,'events.jsonl')),crlfDelay:Infinity});
   for await(const line of lines){
@@ -50,7 +63,7 @@ export async function reviewArchive(directory) {
     if(sources.size>1000)sources.delete(sources.keys().next().value);
   }
   if(expected.length||!started)throw new Error('دفتر بدون شروع یا دارای هشدار ثبت‌نشده است');
-  return {version,records:seq,observations,evaluations,alerts,hash_chain_valid:true,evaluations_reproduced:true,
+  return {version:plan.version,records:seq,observations,evaluations,alerts,hash_chain_valid:true,evaluations_reproduced:true,
     complete,independent_source_or_completeness_verified:false,accepted_for_signals:false};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)

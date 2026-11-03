@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import {pathToFileURL} from 'node:url';
 import {readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
-import {defaults} from '../core/board_alerts.mjs';
+import {defaults,version} from '../core/board_alerts_v2.mjs';
 const {chromium}=await import(pathToFileURL(process.env.BRS_PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({headless:true});
 let server,unexpected=0;
@@ -62,7 +62,7 @@ try {
   await page.close();
   const html=await fs.readFile(new URL('../dashboard/board_watch.html',import.meta.url));
   let rule={...defaults},posted=null,overrides={},invalidClock=false,hangStatus=false;
-  const status=()=>({version:'visible-board-alerts-v1',running:true,updated_at:tehranNow(),pending_login_or_board:posted===null,
+  const status=()=>({version,running:true,updated_at:tehranNow(),pending_login_or_board:posted===null,
     feed_state:invalidClock?'invalid_board':posted===null?'awaiting_board':'observed',
     rule,rule_overrides:overrides,boards:posted===null?[]:[{key:'TEST00000001',symbol:'آزمون',last_price:100,volume:1000000,
       sell_queue:1000,buy_queue:null,ok:!invalidClock,error:invalidClock?'تاریخ جلسه در تابلو معلوم نیست':null,

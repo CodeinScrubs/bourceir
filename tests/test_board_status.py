@@ -33,6 +33,18 @@ def test_current_stale_future_and_stopped(tmp_path):
     assert read_board_status(root, at=at)['state'] == 'stale'
 
 
+@pytest.mark.parametrize('version,expected', [
+    ('visible-board-alerts-v1', 'current'),
+    ('visible-board-alerts-v2', 'current'),
+    ('visible-board-alerts-unknown', 'invalid'),
+])
+def test_known_board_versions_and_unknown_version(tmp_path, version, expected):
+    root, archive, at, _, status = fixture(tmp_path)
+    status['version'] = version
+    (archive / 'status.json').write_text(json.dumps(status), encoding='utf-8')
+    assert read_board_status(root, at=at)['state'] == expected
+
+
 @pytest.mark.parametrize('url', ['http://evil.test:12345', 'http://127.0.0.1:12345/?token=secret',
                                  'http://user@127.0.0.1:12345', 'https://127.0.0.1:12345'])
 def test_only_local_panel_links(tmp_path, url):

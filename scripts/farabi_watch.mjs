@@ -4,7 +4,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {BoardAlerts,defaults,validateRule,version} from '../core/board_alerts.mjs';
+import {BoardAlerts,defaults,validateRule,version} from '../core/board_alerts_v2.mjs';
 import {origin,isBoardUrl,readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -33,7 +33,9 @@ export async function main() {
     const u=new URL(previous.url);
     if(u.origin===`http://127.0.0.1:${u.port}`&&u.pathname==='/'&&!u.search&&!u.hash){
       const r=await fetch(u.origin+'/status',{signal:AbortSignal.timeout(800)}),s=await r.json();
-      if(s.version===version&&s.running&&s.pid===previous.pid&&s.started_at===previous.started_at){console.log('پایش از قبل روشن است: '+u.origin);return;}
+      if([version,'visible-board-alerts-v1'].includes(s.version)&&s.running&&s.pid===previous.pid&&s.started_at===previous.started_at){
+        console.log('پایش از قبل روشن است: '+u.origin+(s.version===version?'':'؛ برای نسخه تازه ابتدا آن را متوقف کنید.'));return;
+      }
     }
   }catch{/* نبودن یا توقف سرویس قبلی، اجازه کشتن PID قدیمی نیست. */}
   await fs.mkdir(out,{recursive:true});
@@ -49,7 +51,7 @@ export async function main() {
       if(!/^[A-Z0-9]{12}$/.test(key))throw new Error('شناسه تنظیمات محفوظ نامعتبر است');saved.overrides[key]=validateRule(value);
     }
   }catch(e){if(e.code!=='ENOENT')throw e;}
-  const codeFiles=['core/board_alerts.mjs','data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html'];
+  const codeFiles=['core/board_alerts_v2.mjs','data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html'];
   const code={};for(const file of codeFiles){const bytes=await fs.readFile(path.join(root,file));code[file]=crypto.createHash('sha256').update(bytes).digest('hex');
     const target=path.join(out,'code',file);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,bytes,{flag:'wx'});}
   const plan={version,started_at:tehranNow(),interval_ms:500,max_tabs:10,code,rule:saved.rule,rule_overrides:saved.overrides,
