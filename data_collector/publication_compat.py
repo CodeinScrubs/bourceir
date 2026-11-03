@@ -49,6 +49,16 @@ PRE_HISTORY_QUALITY_V2_CODE = dict(PRE_DATE_CIRCUIT_V2_CODE) | {
     'data_collector/daily_publications.py': '0f7747e26e126d847a136edad3e0b82bf2ee6905f511806a6dff81fa51e76283',
     'data_collector/publication_compat.py': 'cb1bb42b660b4276c542c3828c86b8fb718cbf7ab46e45eb826f865227ccb723',
 }
+# Exact producer identities from byte-verified archives before and after the
+# 0.7.50 configuration-version change. Only the configuration digest differs
+# between them; these are not wildcards for other versions or source changes.
+PRE_0750_V2_CODE = dict(PRE_HISTORY_QUALITY_V2_CODE) | {
+    'data_collector/scheduler.py': '79b2ae3cde82edccbf31ac350d594b39e85124f2b7b7e686550383c13fc3d844',
+    'data_collector/publication_compat.py': '67c75d4c81d903ae40f23c5ad3681d6130b33811c94756a77202e7416d2f48bd',
+}
+PRE_0750_COMPAT_FIX_V2_CODE = dict(PRE_0750_V2_CODE) | {
+    'config/default.yaml': 'f078cdb3e7202668756ac8935341773fdd16ed559bf51f84e000f1e59d75ee91',
+}
 # This exact replacement only adds bounded retries to local state writes;
 # checked_transport_evidence and the native archive decoder are unchanged.
 WINDOWS_RETRY_COOLDOWN_SHA256 = '163e43c2bd2f6bc2488c6242e6e489a206636ab7b0578141194c4d0df58e0bb1'
@@ -70,7 +80,8 @@ def archive_contract(version, recorded_code):
     if version == LEGACY_VERSION and recorded_code == LEGACY_CODE:
         decoder_ast, extra_files = LEGACY_AST, ()
     elif version == archive.VERSION and recorded_code in (
-            PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE, PRE_DATE_CIRCUIT_V2_CODE, PRE_HISTORY_QUALITY_V2_CODE):
+            PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE, PRE_DATE_CIRCUIT_V2_CODE,
+            PRE_HISTORY_QUALITY_V2_CODE, PRE_0750_V2_CODE, PRE_0750_COMPAT_FIX_V2_CODE):
         decoder_ast = PRE_BOOK_V2_AST
         extra_files = ('core/source_cooldown.py', 'data_collector/source_cooldown.py')
     else:

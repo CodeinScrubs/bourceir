@@ -18,6 +18,8 @@ from data_collector.publication_compat import (
     LEGACY_CODE,
     LEGACY_VERSION,
     POST_BOOK_V2_CODE,
+    PRE_0750_COMPAT_FIX_V2_CODE,
+    PRE_0750_V2_CODE,
     PRE_BOOK_V2_CODE,
     PRE_DATE_CIRCUIT_V2_CODE,
     PRE_HISTORY_QUALITY_V2_CODE,
@@ -101,6 +103,27 @@ def test_exact_pre_history_quality_bundle_is_readable_but_not_mutable():
     assert set(archive_contract(daily.VERSION, prior)) == set(prior)
     with pytest.raises(ValueError, match='incompatible'):
         archive_contract(daily.VERSION, prior | {'data_collector/scheduler.py': '0' * 64})
+
+
+@pytest.mark.parametrize('config_hash,expected', [
+    ('c840f631b01e467b2380906b559e90c0a816dd19571c820e698bc8cdb685ad9d', PRE_0750_V2_CODE),
+    ('f078cdb3e7202668756ac8935341773fdd16ed559bf51f84e000f1e59d75ee91', PRE_0750_COMPAT_FIX_V2_CODE),
+])
+def test_exact_release_producers_replay_but_unknown_versions_and_code_fail_closed(config_hash, expected):
+    recorded = dict(PRE_HISTORY_QUALITY_V2_CODE) | {
+        'data_collector/scheduler.py': '79b2ae3cde82edccbf31ac350d594b39e85124f2b7b7e686550383c13fc3d844',
+        'data_collector/publication_compat.py': '67c75d4c81d903ae40f23c5ad3681d6130b33811c94756a77202e7416d2f48bd',
+        'config/default.yaml': config_hash,
+    }
+    assert recorded == expected
+    assert set(archive_contract(daily.VERSION, recorded)) == set(recorded)
+    for modified in (recorded | {'config/default.yaml': '0' * 64},
+                     recorded | {'data_collector/scheduler.py': '0' * 64},
+                     recorded | {'unexpected.py': '0' * 64}):
+        with pytest.raises(ValueError, match='incompatible'):
+            archive_contract(daily.VERSION, modified)
+    with pytest.raises(ValueError, match='incompatible'):
+        archive_contract('unknown', recorded)
 
 
 @pytest.mark.parametrize('recorded', [PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE])
