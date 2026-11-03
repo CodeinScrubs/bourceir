@@ -83,7 +83,24 @@ jobs:
         & venv/Scripts/python.exe -m ops.environment --check
         if ($LASTEXITCODE -ne 0) { throw 'Repaired environment still disagrees with lock' }
 
-    - name: Verify first-run capture entry point installs its local runtime
+    - name: Verify capture check does not install a missing runtime
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $runtime = Join-Path $PWD 'data/runtime/farabi'
+        if (Test-Path -LiteralPath $runtime) { throw 'Expected a clean Farabi runtime before setup' }
+        $output = cmd /c "call CAPTURE_FARABI.bat --check"
+        if ($LASTEXITCODE -ne 1) { throw 'Missing runtime was not reported by the check' }
+        if (-not ($output -match 'No installation was attempted')) { throw 'Check did not explain that setup was skipped' }
+        if (Test-Path -LiteralPath $runtime) { throw 'Check unexpectedly created a runtime' }
+        $global:LASTEXITCODE = 0
+
+    - name: Install the local Farabi capture runtime
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: call SETUP_FARABI.bat --ci
+
+    - name: Verify the installed capture entry point
       if: runner.os == 'Windows'
       shell: cmd
       run: call CAPTURE_FARABI.bat --check

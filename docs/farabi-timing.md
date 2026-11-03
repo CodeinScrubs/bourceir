@@ -42,9 +42,10 @@
 ثبت مرورگر از ابزار Browser همین گفت‌وگو و فقط پس از خواندن راهنمای آن انجام می‌شود. نمونهٔ زیر برای عامل است، نه کنسول سایت یا PowerShell. `cdp` همان قابلیت مستند برگهٔ رسمی انتخاب‌شده است:
 
 ```javascript
-var kit = await import('file:///F:/1_work-on-F/bourse-prediction/scripts/farabi_timing_cua.mjs');
+var workspace = 'C:/path/to/bourceir'; // مسیر checkout خودتان را جایگزین کنید
+var kit = await import((await import('node:url')).pathToFileURL(workspace + '/scripts/farabi_timing_cua.mjs').href);
 var recorder = await kit.startTiming(cdp, {
-  workspace: 'F:/1_work-on-F/bourse-prediction',
+  workspace,
   isin: 'IRO3FSTZ0001', symbol: 'فکور'
 });
 nodeRepl.write(await recorder.pump(15));
@@ -65,7 +66,7 @@ nodeRepl.write(await recorder.finish());
 
 ```javascript
 nodeRepl.write(await kit.captureTimingWindow(cdp, {
-  workspace: 'F:/1_work-on-F/bourse-prediction',
+  workspace,
   isin: 'IRO3FSTZ0001', symbol: 'فکور', durationSeconds: 45
 }));
 ```

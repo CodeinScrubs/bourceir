@@ -1,5 +1,7 @@
 """Local operational evidence for the command desk; no network or order access."""
 
+import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +61,53 @@ def _document_source_state(private_root):
     return 'blocked'
 
 
+def feature_store_state(data_root):
+    """Check manifest metadata and file presence, without claiming data or hash validity."""
+    try:
+        from features.daily import FEATURE_SET_VERSION
+        from features.store import feature_data_path
+    except ImportError:
+        return dict(version=None, state='invalid', date_max=None,
+                    file_hash_verified=False, raw_inputs_verified=False)
+
+    root = Path(data_root) / 'features'
+    manifest_path = root / FEATURE_SET_VERSION / 'manifest.json'
+    result = dict(version=FEATURE_SET_VERSION, state='invalid', date_max=None,
+                  file_hash_verified=False, raw_inputs_verified=False)
+    def unique(pairs):
+        output = {}
+        for key, value in pairs:
+            if key in output:
+                raise ValueError('duplicate manifest key')
+            output[key] = value
+        return output
+
+    try:
+        with manifest_path.open('rb') as stream:
+            body = stream.read(10_000_001)
+        if len(body) > 10_000_000:
+            raise ValueError('feature manifest is too large')
+        manifest = json.loads(body, object_pairs_hook=unique,
+                              parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite number')))
+        if (not isinstance(manifest, dict) or manifest.get('version') != FEATURE_SET_VERSION
+                or type(manifest.get('manifest_format')) is not int or manifest['manifest_format'] != 2
+                or type(manifest.get('rows')) is not int or manifest['rows'] <= 0
+                or not is_canonical_iso_date(manifest.get('date_max'))
+                or not isinstance(manifest.get('data_file'), str) or not manifest['data_file']
+                or not isinstance(manifest.get('provenance'), dict)
+                or not isinstance(manifest['provenance'].get('parquet_sha256'), str)
+                or not re.fullmatch(r'[0-9a-f]{64}', manifest['provenance']['parquet_sha256'])):
+            raise ValueError('feature manifest metadata is invalid')
+        if not feature_data_path(manifest, version=FEATURE_SET_VERSION, root=root).is_file():
+            raise ValueError('feature file is unavailable')
+        result.update(state='present_unverified', date_max=manifest['date_max'])
+    except FileNotFoundError:
+        result['state'] = 'absent'
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError, RuntimeError):
+        pass
+    return result
+
+
 def command_health(private_root, *, radar_worker, live_worker, at=None):
     """Report process, recorded data and source stop separately; absence is not success."""
     at = at or now_tehran()
@@ -72,4 +121,5 @@ def command_health(private_root, *, radar_worker, live_worker, at=None):
                 public_live_worker=_worker_state(live_worker),
                 board_state=board['state'], board_valid_extracts=valid_boards if board['state'] == 'current' else None,
                 codal_document_source=_document_source_state(private_root),
+                feature_store=feature_store_state(private_root.parent),
                 source_freshness_verified=False, signal_accepted=False, automatic_orders=False)

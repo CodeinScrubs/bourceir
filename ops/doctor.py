@@ -239,6 +239,18 @@ def run_doctor(include_network: bool = True, *, read_only: bool = False) -> Doct
     check_python(report)
     check_packages(report)
     check_database(report, read_only=read_only)
+    from ops.command_health import feature_store_state
+
+    features = feature_store_state(settings.DATA_DIR)
+    feature_version = features['version'] or 'نامعلوم'
+    if features['state'] == 'absent':
+        report.add('انبار فیچر', WARN, f"نسخه {feature_version} موجود نیست",
+                   'پس از رفع نقص داده و دریافت اصلی، انبار فیچر را بسازید.')
+    elif features['state'] == 'invalid':
+        report.add('انبار فیچر', WARN, f"فایل مشخصات یا داده نسخه {feature_version} نامعتبر یا ناموجود است")
+    else:
+        report.add('انبار فیچر', OK, f"نسخه {feature_version} تا {features['date_max']} فایل دارد؛ "
+                   'هش فایل و تطابق داده خام در این بررسی کنترل نشده‌اند')
     if include_network:
         server_time = check_tsetmc(report)
         check_clock(report, server_time)

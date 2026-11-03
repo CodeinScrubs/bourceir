@@ -8,7 +8,7 @@ from streamlit.testing.v1 import AppTest
 
 from config import settings
 from core.timeutils import TEHRAN_TZ
-from ops.command_health import command_health
+from ops.command_health import command_health, feature_store_state
 
 
 def write(path, value):
@@ -35,6 +35,7 @@ def test_missing_and_fresh_heartbeat_are_distinct_from_verified_market_data(setu
     assert result['radar']['worker'] == 'running' and result['radar']['heartbeat'] == 'absent'
     assert result['radar']['heartbeat_fresh'] is False
     assert result['board_state'] == 'absent' and result['codal_document_source'] == 'absent'
+    assert result['feature_store']['state'] == 'absent'
     write(private/'opportunity-radar/heartbeat.json', dict(heartbeat_at=at.isoformat(), status='degraded',
           price_session_date='2026-10-27', news_coverage={'window_scan_satisfied':False}))
     result = health(private, at)
@@ -43,6 +44,60 @@ def test_missing_and_fresh_heartbeat_are_distinct_from_verified_market_data(setu
     assert result['radar']['price_session_date'] == '2026-10-27'
     assert result['radar']['news_window_complete'] is False
     assert result['source_freshness_verified'] is False and result['signal_accepted'] is False
+
+
+def test_feature_store_checks_metadata_and_containment_without_claiming_integrity(setup, monkeypatch):
+    from features.daily import FEATURE_SET_VERSION
+
+    private, _ = setup
+    data = private.parent
+    store = data/'features'/FEATURE_SET_VERSION
+    manifest = dict(version=FEATURE_SET_VERSION, manifest_format=2, rows=1, date_max='2026-11-02',
+                    data_file='snapshots/test/daily.parquet', provenance=dict(parquet_sha256='0'*64))
+    write(store/'manifest.json', manifest)
+    assert feature_store_state(data)['state'] == 'invalid'  # missing Parquet
+    target = store/'snapshots/test/daily.parquet'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b'not a verified Parquet file')
+    state = feature_store_state(data)
+    assert state['state'] == 'present_unverified' and state['date_max'] == '2026-11-02'
+    assert not state['file_hash_verified'] and not state['raw_inputs_verified']
+    for change in (dict(version='older'), dict(rows=0), dict(date_max='not-a-date'),
+                   dict(data_file='../outside'), dict(provenance=dict(parquet_sha256='bad'))):
+        write(store/'manifest.json', manifest | change)
+        assert feature_store_state(data)['state'] == 'invalid'
+    (store/'manifest.json').write_text('{"version": "a", "version": "b"}', encoding='utf-8')
+    assert feature_store_state(data)['state'] == 'invalid'
+    write(store/'manifest.json', manifest)
+    def broken_path(*args, **kwargs):
+        raise RuntimeError('unresolvable path')
+    monkeypatch.setattr('features.store.feature_data_path', broken_path)
+    assert feature_store_state(data)['state'] == 'invalid'
+
+
+def test_offline_doctor_reports_missing_feature_manifest(setup, monkeypatch):
+    from ops import doctor
+
+    monkeypatch.setattr(doctor, 'check_python', lambda report: None)
+    monkeypatch.setattr(doctor, 'check_packages', lambda report: None)
+    monkeypatch.setattr(doctor, 'check_database', lambda report, **kwargs: None)
+    report = doctor.run_doctor(include_network=False, read_only=True)
+    check = next(item for item in report.checks if item.title == 'انبار فیچر')
+    assert check.status == doctor.WARN and 'موجود نیست' in check.detail
+
+
+def test_missing_feature_dependency_does_not_crash_the_health_check(setup, monkeypatch):
+    import builtins
+
+    private, _ = setup
+    original = builtins.__import__
+    def unavailable(name, *args, **kwargs):
+        if name == 'features.daily':
+            raise ModuleNotFoundError('feature dependency unavailable')
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', unavailable)
+    result = feature_store_state(private.parent)
+    assert result['state'] == 'invalid' and result['version'] is None
 
 
 def test_stale_future_naive_and_invalid_heartbeat_are_not_current(setup):
@@ -87,6 +142,7 @@ def test_home_panel_surfaces_stopped_workers_and_blocked_documents(setup, monkey
     assert {m.label:m.value for m in app.metric} == {'فرایند رادار':'فعال بودن احراز نشد', 'پایش عمومی':'فعال بودن احراز نشد',
                                                    'پایش تابلو فارابی':'شروع نشده'}
     assert any('گردآوری اسناد کدال' in item.value for item in app.warning)
+    assert any('انبار فیچر' in item.value and 'ساخته نشده' in item.value for item in app.warning)
     assert any('تازگی قیمت و صف' in item.value for item in app.caption)
     assert any('اجراهای دستی مستقل' in item.value for item in app.caption)
     assert any('مرورگر داخلی' in item.value and 'جداگانه' in item.value for item in app.caption)

@@ -50,4 +50,14 @@ def command_center_panel():
         st.warning('گردآوری اسناد کدال برای پژوهش تاریخی متوقف است؛ نشانگر خطا نیاز به بازبینی منبع دارد.')
     elif report['codal_document_source'] == 'invalid':
         st.warning('وضعیت توقف منبع اسناد کدال نامعتبر یا ناخواناست؛ دریافت موفق تأیید نمی‌شود.')
+    features = report['feature_store']
+    feature_version = features['version'] or 'نامعلوم'
+    if features['state'] == 'absent':
+        st.warning(f"انبار فیچر {feature_version} ساخته نشده است؛ پژوهش و نمایش وابسته به آن در دسترس نیستند. "
+                   'پس از رفع نقص داده و دریافت اصلی، انبار را بساز.')
+    elif features['state'] == 'invalid':
+        st.warning(f"فایل مشخصات یا داده انبار فیچر {feature_version} نامعتبر یا در دسترس نیست؛ بررسی لازم است.")
+    else:
+        st.caption(f"انبار فیچر {feature_version} تا {to_jalali(features['date_max'])} فایل ثبت‌شده دارد؛ "
+                   'هش فایل و تطابق داده خام در این نشانگر بررسی نشده‌اند.')
     st.caption('اجرای فرایند یا تازگی ضربان، تازگی قیمت و صف، تحویل هشدار یا امکان معامله را ثابت نمی‌کند.')
