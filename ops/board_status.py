@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 
 from core.timeutils import now_tehran
 
+CURRENT_BOARD_VERSION = 'visible-board-alerts-v3'
+
 
 def read_board_status(private_root, *, at=None):
     root = Path(private_root).resolve()
@@ -32,7 +34,7 @@ def read_board_status(private_root, *, at=None):
                 or url.username or url.password or url.query or url.fragment or url.path):
             raise ValueError('نشانی پنل باید محلی باشد')
         status = read(archive / 'status.json')
-        if status.get('version') not in ('visible-board-alerts-v1', 'visible-board-alerts-v2') or type(status.get('running')) is not bool:
+        if status.get('version') not in ('visible-board-alerts-v1', 'visible-board-alerts-v2', CURRENT_BOARD_VERSION) or type(status.get('running')) is not bool:
             raise ValueError('قرارداد وضعیت پایش شناخته‌شده نیست')
         stamp = datetime.fromisoformat(status['updated_at'])
         if stamp.tzinfo is None:

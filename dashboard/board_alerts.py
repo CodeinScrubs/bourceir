@@ -4,7 +4,7 @@ import streamlit as st
 
 from config import settings
 from core.timeutils import to_jalali
-from ops.board_status import read_board_status
+from ops.board_status import CURRENT_BOARD_VERSION, read_board_status
 
 
 def board_alert_panel():
@@ -23,6 +23,12 @@ def board_alert_panel():
             st.warning('پایش سریع متوقف یا کهنه است؛ اعداد زیر زنده نیستند.')
         st.link_button('بازکردن پنل سریع، تنظیم شرایط و فعال‌کردن صدا', result['url'])
         status = result['status']
+        version = status.get('version')
+        if version is None:
+            st.warning('نسخه پایش نامعلوم است؛ وضعیت آن را تأییدشده فرض نکنید.')
+        elif version != CURRENT_BOARD_VERSION:
+            st.warning('پایش مستقل با نسخه قبلی اجرا شده است. برای استفاده از اصلاح مبنای حجم، '
+                       'آن را از پنل خودش متوقف و دوباره اجرا کنید.')
         st.caption('این هشدارها برای بررسی شخصی تابلو هستند. ساعت مستقل صف و تأخیر بورس تا فارابی نامعلوم‌اند؛ '
                    'افت صف و افزایش حجم، برگشت قیمت یا اجرای سفارش را ثابت نمی‌کنند.')
         if status['boards']:

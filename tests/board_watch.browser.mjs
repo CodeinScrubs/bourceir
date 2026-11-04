@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import {pathToFileURL} from 'node:url';
 import {readBoardDom,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
-import {defaults,version} from '../core/board_alerts_v2.mjs';
+import {defaults,version} from '../core/board_alerts_v3.mjs';
 const {chromium}=await import(pathToFileURL(process.env.BRS_PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({headless:true});
 let server,unexpected=0;
