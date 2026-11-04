@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {BoardAlerts,validateRule} from '../core/board_alerts.mjs';
+import {BoardAlerts as LegacyBoardAlerts,version as legacyVersion} from '../core/board_alerts.mjs';
+import {BoardAlerts as PreviousBoardAlerts,version as previousVersion} from '../core/board_alerts_v2.mjs';
+import {BoardAlerts,validateRule,version} from '../core/board_alerts_v3.mjs';
 import {isBoardUrl,parseBoard,tehranNow} from '../data_collector/farabi_board.mjs';
 import {reviewArchive} from '../scripts/farabi_watch_review.mjs';
 import {atomic,boardFeedState} from '../scripts/farabi_watch.mjs';
@@ -44,6 +46,60 @@ test('افت بدون معامله حجم کافی یا لغو قطعی معرف
 test('حجم پس از افت می‌تواند هشدار همراه را مستقل فعال کند',()=>{
   const a=new BoardAlerts();a.observe(quote(),0);a.observe(quote(1000000),500);
   assert(a.observe(quote(1000000,3000000),1000).events.some(e=>e.kind==='sell_queue_drop_with_volume'));
+});
+test('مبنای حجم کهنه، افت همراه با حجم یا جهش حجم تازه نمی‌سازد',()=>{
+  const a=new BoardAlerts();a.observe(quote(59000000,1000000,{trade_age_seconds:300}),0);
+  const r=a.observe(quote(1000000,5000000),500);
+  assert.deepEqual(r.events.map(e=>e.kind),['sell_queue_drop']);
+  assert.equal(r.events[0].traded_volume,null);
+  assert.equal(r.events[0].volume_condition_met,null);
+  assert.equal(r.events[0].queue_decrease_exceeding_reported_volume,null);
+  const later=a.observe(quote(1000000,7000000),1000);
+  assert(later.events.some(e=>e.kind==='sell_queue_drop_with_volume'&&e.traded_volume===2000000));
+  assert(later.events.some(e=>e.kind==='volume_burst'&&e.traded_volume===2000000));
+});
+test('مشاهده کهنه زنجیره مقایسه حجم تازه را قطع می‌کند',()=>{
+  const a=new BoardAlerts();a.observe(quote(59000000,1000000),0);
+  a.observe(quote(59000000,3000000,{trade_age_seconds:300}),500);
+  const r=a.observe(quote(1000000,5000000),1000);
+  assert.deepEqual(r.events.map(e=>e.kind),['sell_queue_drop']);
+  assert.equal(r.events[0].traded_volume,null);
+  const later=a.observe(quote(1000000,7000000),1500);
+  assert(later.events.some(e=>e.kind==='sell_queue_drop_with_volume'&&e.traded_volume===2000000));
+});
+test('افت تازه حین سکوت پس از پایان سکوت و دوام شرط اعلام می‌شود',()=>{
+  const a=new BoardAlerts({cooldown_seconds:5});
+  a.observe(quote(),0);
+  assert(a.observe(quote(1000000),1000).events.some(e=>e.kind==='sell_queue_drop'));
+  a.observe(quote(),2000);
+  assert(!a.observe(quote(1000000),3000).events.some(e=>e.kind==='sell_queue_drop'));
+  for(const sec of [4,5])assert(!a.observe(quote(1000000),sec*1000).events.some(e=>e.kind==='sell_queue_drop'));
+  assert(a.observe(quote(1000000),6000).events.some(e=>e.kind==='sell_queue_drop'));
+  assert(!a.observe(quote(1000000),7000).events.some(e=>e.kind==='sell_queue_drop'));
+});
+test('افت همراه حجم هم پس از پایان سکوت در صورت دوام شرط اعلام می‌شود',()=>{
+  const a=new BoardAlerts({cooldown_seconds:5,burst_volume:1000000000});
+  a.observe(quote(),0);
+  assert(a.observe(quote(1000000,3000000),1000).events.some(e=>e.kind==='sell_queue_drop_with_volume'));
+  a.observe(quote(59000000,3000000),2000);
+  assert(!a.observe(quote(1000000,6000000),3000).events.some(e=>e.kind==='sell_queue_drop_with_volume'));
+  a.observe(quote(1000000,6000000),4000);a.observe(quote(1000000,6000000),5000);
+  assert(a.observe(quote(1000000,6000000),6000).events.some(e=>e.kind==='sell_queue_drop_with_volume'));
+});
+test('جهش حجم سرکوب‌شده فقط با دوام شرط پس از سکوت اعلام می‌شود',()=>{
+  const a=new BoardAlerts({burst_seconds:7,burst_volume:5,max_gap_seconds:1,cooldown_seconds:10});
+  a.observe(quote(null,0),0);
+  assert(a.observe(quote(null,10),1000).events.some(e=>e.kind==='volume_burst'));
+  for(let sec=2;sec<=8;sec++)a.observe(quote(null,10),sec*1000);
+  for(const sec of [9,10])assert(!a.observe(quote(null,20),sec*1000).events.some(e=>e.kind==='volume_burst'));
+  assert(a.observe(quote(null,20),11000).events.some(e=>e.kind==='volume_burst'));
+  assert(!a.observe(quote(null,20),12000).events.some(e=>e.kind==='volume_burst'));
+});
+test('افت سرکوب‌شده که پیش از پایان سکوت برطرف می‌شود بعداً اعلام نمی‌شود',()=>{
+  const a=new BoardAlerts({cooldown_seconds:5});
+  a.observe(quote(),0);a.observe(quote(1000000),1000);a.observe(quote(),2000);
+  a.observe(quote(1000000),3000);a.observe(quote(),4000);a.observe(quote(),5000);
+  assert(!a.observe(quote(),6000).events.some(e=>e.kind==='sell_queue_drop'));
 });
 test('شکاف، روز تازه و کاهش شمارنده مبنا را از نو می‌سازند',()=>{
   for(const [q,ms,reason] of [[quote(1,2000000),4000,'sampling_gap'],[quote(1,2000000,{market_day:'2026-10-21'}),500,'new_session'],[quote(1,999),500,'counter_decreased']]){
@@ -157,19 +213,23 @@ test('حجم خلاصه‌شده دقیق فرض نمی‌شود؛ حجم روز
   assert.equal(q.volume,1000000);assert.equal(q.last_price,100);
 });
 
-async function archiveFixture({badResult=false}={}) {
+async function archiveFixture({badResult=false,legacy=false,previous=false}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'brs-board-test-'));
   const code={};const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
-  for(const name of ['core/board_alerts.mjs','data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html']){
-    const bytes=await fs.readFile(new URL('../'+name,import.meta.url));code[name]=hash(bytes);
+  const engineFile=legacy?'core/board_alerts.mjs':previous?'core/board_alerts_v2.mjs':'core/board_alerts_v3.mjs';
+  for(const name of [engineFile,'data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html']){
+    const source=name==='scripts/farabi_watch.mjs'&&legacy?'tests/fixtures/board-archives/farabi_watch_v1.txt':
+      name==='scripts/farabi_watch.mjs'&&previous?'tests/fixtures/board-archives/farabi_watch_v2.txt':name;
+    const bytes=await fs.readFile(new URL('../'+source,import.meta.url));code[name]=hash(bytes);
     await fs.mkdir(path.dirname(path.join(dir,'code',name)),{recursive:true});await fs.writeFile(path.join(dir,'code',name),bytes);
   }
-  const plan={version:'visible-board-alerts-v1',code,rule:validateRule()};
+  const plan={version:legacy?legacyVersion:previous?previousVersion:version,code,rule:validateRule()};
   await fs.writeFile(path.join(dir,'plan.json'),JSON.stringify(plan));
-  let seq=0,previous='0'.repeat(64);const records=[];
-  const add=(type,payload)=>{const record={seq:++seq,previous_sha256:previous,recorded_at:at,type,payload};
-    previous=hash(JSON.stringify(record));records.push({...record,sha256:previous});return seq;};
-  add('started',plan);const engine=new BoardAlerts();
+  let seq=0,previousHash='0'.repeat(64);const records=[];
+  const add=(type,payload)=>{const record={seq:++seq,previous_sha256:previousHash,recorded_at:at,type,payload};
+    previousHash=hash(JSON.stringify(record));records.push({...record,sha256:previousHash});return seq;};
+  add('started',plan);const Engine=legacy?LegacyBoardAlerts:previous?PreviousBoardAlerts:BoardAlerts;
+  const engine=new Engine();
   for(let i=0;i<2;i++){
     const input=raw();input.depth[0][2]=`100\n${i?1000000:59000000}`;input.volume='حجم معاملات\n'+(i?'4,000,000':'1,000,000');
     const received=tehranNow(new Date(new Date(at).getTime()+i*500));
@@ -200,6 +260,36 @@ test('دفتر آفلاین با بایت/کد محفوظ و بازاجرای ه
   const dir=await archiveFixture();try{const r=await reviewArchive(dir);assert.equal(r.alerts,3);assert.equal(r.complete,true);assert.equal(r.accepted_for_signals,false);}
   finally{await removeFixture(dir);}
 });
+test('دفتر نسخه قبل با موتور قدیمی و کد دقیق شناخته‌شده بازخوانی می‌شود',async()=>{
+  const dir=await archiveFixture({legacy:true});try{
+    const r=await reviewArchive(dir);assert.equal(r.version,legacyVersion);assert.equal(r.alerts,3);assert.equal(r.complete,true);
+  }finally{await removeFixture(dir);}
+});
+test('دفتر نسخه دوم با موتور دوم و کد دقیق شناخته‌شده بازخوانی می‌شود',async()=>{
+  const dir=await archiveFixture({previous:true});try{
+    const r=await reviewArchive(dir);assert.equal(r.version,previousVersion);assert.equal(r.alerts,3);assert.equal(r.complete,true);
+  }finally{await removeFixture(dir);}
+});
+test('کد دیده‌بان نسخه دوم ناشناخته حتی با هش دستکاری‌شده رد می‌شود',async()=>{
+  const dir=await archiveFixture({previous:true});try{
+    const file=path.join(dir,'code/scripts/farabi_watch.mjs'),planFile=path.join(dir,'plan.json');
+    await fs.appendFile(file,'\n// unknown watcher');
+    const plan=JSON.parse(await fs.readFile(planFile,'utf8'));
+    plan.code['scripts/farabi_watch.mjs']=crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    await fs.writeFile(planFile,JSON.stringify(plan));
+    await assert.rejects(reviewArchive(dir),/کد محفوظ/);
+  }finally{await removeFixture(dir);}
+});
+test('دفتر قدیمی با دیده‌بان تغییرکرده حتی با هش دستکاری‌شده رد می‌شود',async()=>{
+  const dir=await archiveFixture({legacy:true});try{
+    const file=path.join(dir,'code/scripts/farabi_watch.mjs'),planFile=path.join(dir,'plan.json');
+    await fs.appendFile(file,'\n// unknown watcher');
+    const plan=JSON.parse(await fs.readFile(planFile,'utf8'));
+    plan.code['scripts/farabi_watch.mjs']=crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    await fs.writeFile(planFile,JSON.stringify(plan));
+    await assert.rejects(reviewArchive(dir),/کد محفوظ/);
+  }finally{await removeFixture(dir);}
+});
 test('زنجیره معتبر با نتیجه حسابی غلط پذیرفته نمی‌شود',async()=>{
   const dir=await archiveFixture({badResult:true});try{await assert.rejects(reviewArchive(dir),/بازحساب/);}
   finally{await removeFixture(dir);}
@@ -208,7 +298,7 @@ test('ویرایش دفتر و کد ناشناخته بدون اجرا رد می
   const dir=await archiveFixture();try{
     const file=path.join(dir,'events.jsonl');await fs.writeFile(file,(await fs.readFile(file,'utf8')).replace('59000000','58000000'));
     await assert.rejects(reviewArchive(dir),/زنجیره/);
-    await fs.writeFile(path.join(dir,'code/core/board_alerts.mjs'),'throw Error("must never run")');
+    await fs.writeFile(path.join(dir,'code/core/board_alerts_v3.mjs'),'throw Error("must never run")');
     await assert.rejects(reviewArchive(dir),/کد محفوظ/);
   }finally{await removeFixture(dir);}
 });

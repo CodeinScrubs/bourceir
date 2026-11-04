@@ -7,7 +7,9 @@ import streamlit as st
 
 from config import settings
 from core.flow_filters import FLOW_FILTER_V4_VERSION
+from core.paper import aware
 from core.timeutils import now_tehran, to_jalali
+from dashboard.command_center import command_center_panel
 from database.db import DatabaseManager
 from database.flow_data import load_flow_inputs
 from ops.operator_status import operator_status
@@ -47,8 +49,18 @@ def latest_v4_metrics(path):
     return metrics.loc[metrics.date == date].reset_index(drop=True)
 
 
+def _broker_capture_current(captured_at, checked_at):
+    """A recent imported report is still not a live account or reconciled history."""
+    try:
+        age = (aware(checked_at) - aware(captured_at)).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return 0 <= age <= 900
+
+
 def operator_panel():
     st.subheader('میز روزانه — داده، فرضیه و دو دفتر')
+    command_center_panel()
     path = str(settings.DB_PATH)
     p, c = _market_history(path)
     date = None if p.empty else str(p.date.max())
@@ -68,6 +80,13 @@ def operator_panel():
     a.metric('نامزد روش پذیرفته‌شده', 0)
     b.metric('منطبق با فرضیه‌های پژوهشی', len(report['candidates']) if evaluated else 'بررسی نشده')
     c.metric('پورتفوی مجازی', len(report['paper_portfolios']))
+    mismatched = sum(p.get('runtime_matches') is False for p in report['paper_portfolios'])
+    if mismatched:
+        st.warning(f'{mismatched} پورتفوی مجازی با نسخه محاسبات فعلی همسان نیست؛ '
+                   'ثبت معامله تازه در آن‌ها متوقف و کارنامه نامعلوم است. صفحه پورتفوی را بررسی کن.')
+    if report['broker'] and not _broker_capture_current(report['broker']['captured_at'], report['evaluated_at']):
+        st.warning('آخرین سبد واردشده فارابی بیش از ۱۵ دقیقه قدیمی یا زمان آن نامعتبر است؛ '
+                   'ممکن است با سبد فعلی فرق داشته باشد.')
     st.caption(f"جلسه کامل مورد انتظار: {to_jalali(report['expected_session'])} | روز داده: {to_jalali(date)}")
     if date is None or date != report['expected_session']:
         st.warning('فیلترها آرشیوی‌اند؛ داده تازه برای نامزد امروز نداریم. گزارش عمومی جلسه ممکن است منبع و تاریخ دیگری داشته باشد.')

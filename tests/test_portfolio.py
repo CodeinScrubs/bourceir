@@ -91,6 +91,29 @@ def test_unknown_reference_on_open_holding_invalidates_financial_return():
     assert result.equity.iloc[-1].equity_rial != result.equity.iloc[-1].equity_rial
 
 
+@pytest.mark.parametrize('field',['ref_price_raw','close_final_raw'])
+@pytest.mark.parametrize('whole_column',[True,False])
+def test_boolean_numeric_values_never_become_prices_or_synthetic_share_multipliers(field,whole_column):
+    prices,calendar=history(5,('a',))
+    if whole_column:
+        prices[field]=True
+    else:
+        prices[field]=prices[field].astype(object)
+        prices.loc[2,field]=True
+    result=replay_portfolio(prices,picks(calendar[:1],('a',)),calendar,config(max_positions=1))
+    assert result.metrics['status']=='invalid_data'
+    assert result.metrics['total_return'] is None
+
+
+def test_unknown_selected_decision_does_not_turn_into_a_zero_return_cash_account():
+    prices,calendar=history(5,('a',))
+    prices.loc[0,'ref_price_raw']=np.nan
+    result=replay_portfolio(prices,picks(calendar[:1],('a',)),calendar,config(max_positions=1))
+    assert 'invalid_decision' in set(result.decisions.status)
+    assert result.metrics['total_return'] is None and result.metrics['status']=='invalid_data'
+    assert result.metrics['max_drawdown'] is None
+
+
 def test_unknown_entry_execution_cannot_be_credited_as_idle_cash():
     prices, calendar = history(5, ('a',))
     prices.loc[1, 'value'] = np.nan
@@ -152,27 +175,31 @@ def test_selection_uses_past_only_and_preserves_unknown_candidate_ranks(monkeypa
     from research import portfolio_run
     from research.baselines import Strategy
     dates = pd.date_range('2023-01-01', periods=160).strftime('%Y-%m-%d')
-    panel = pd.DataFrame(dict(date=dates, symbol='a', value=1000., score=1., entry_date=dates,
-        label_status_2d='complete', exit_date_2d=dates, net_ret_2d=.01))
+    clock = pd.to_datetime(dates)
+    panel = pd.DataFrame(dict(date=dates, symbol='a', value=1000., score=1.,
+        entry_date=(clock + pd.Timedelta(days=1)).strftime('%Y-%m-%d'), entry_executable=True,
+        label_status_2d='complete', exit_date_2d=(clock + pd.Timedelta(days=2)).strftime('%Y-%m-%d'), net_ret_2d=.01))
     fold = TimeFold(dates[0], dates[120], dates[125], dates[150], 5)
     monkeypatch.setattr(portfolio_run, 'STRATEGIES', [Strategy('fixed', 'fixed', lambda p: p.score)])
-    selected, _ = select_from_past(panel, fold, (2,), 1)
+    selected, _ = select_from_past(panel, fold, (2,), 1, calendar=dates)
     assert selected['strategy'] == 'fixed'
     panel.loc[panel.date >= dates[125], 'net_ret_2d'] = -100
-    assert select_from_past(panel, fold, (2,), 1)[0] == selected
+    assert select_from_past(panel, fold, (2,), 1, calendar=dates)[0] == selected
     panel.loc[:119, 'exit_date_2d'] = dates[145]  # no training label is known yet
-    assert select_from_past(panel, fold, (2,), 1)[0] is None
+    assert select_from_past(panel, fold, (2,), 1, calendar=dates)[0] is None
 
 
 def test_negative_past_returns_choose_idle_cash(monkeypatch):
     from research import portfolio_run
     from research.baselines import Strategy
     dates = pd.date_range('2023-01-01', periods=160).strftime('%Y-%m-%d')
-    panel = pd.DataFrame(dict(date=dates, symbol='a', value=1000., score=1., entry_date=dates,
-        label_status_2d='complete', exit_date_2d=dates, net_ret_2d=-.01))
+    clock = pd.to_datetime(dates)
+    panel = pd.DataFrame(dict(date=dates, symbol='a', value=1000., score=1.,
+        entry_date=(clock + pd.Timedelta(days=1)).strftime('%Y-%m-%d'), entry_executable=True,
+        label_status_2d='complete', exit_date_2d=(clock + pd.Timedelta(days=2)).strftime('%Y-%m-%d'), net_ret_2d=-.01))
     fold = TimeFold(dates[0], dates[120], dates[125], dates[150], 5)
     monkeypatch.setattr(portfolio_run, 'STRATEGIES', [Strategy('fixed', 'fixed', lambda p: p.score)])
-    assert select_from_past(panel, fold, (2,), 1)[0] is None
+    assert select_from_past(panel, fold, (2,), 1, calendar=dates)[0] is None
 
 
 def test_idle_cash_and_halted_mark_are_explicit():
@@ -184,6 +211,15 @@ def test_idle_cash_and_halted_mark_are_explicit():
     held = replay_portfolio(prices, picks(calendar[:1], ('a',)), calendar, config(horizon=3))
     assert held.metrics['stale_mark_days'] == 1
     assert held.equity.loc[held.equity.date == calendar[2], 'positions'].iloc[0] == 1
+
+
+def test_zero_observed_reference_changes_do_not_verify_real_corporate_entitlements():
+    prices, calendar = history(5, ('a',))
+    result = replay_portfolio(prices, picks(calendar[:1], ('a',)), calendar, config())
+    assert not result.executions.empty
+    assert result.metrics['corporate_action_events'] == 0
+    assert result.metrics['actual_corporate_entitlements_verified'] is False
+    assert result.assumptions['version'] == 'portfolio-v8'
 
 
 @pytest.fixture

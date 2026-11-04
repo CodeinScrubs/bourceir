@@ -30,10 +30,11 @@ def _stamp(value):
     return parsed.astimezone(TEHRAN_TZ)
 
 
-def load_codal_document(folder):
-    """خواندن همراه با کنترل هویت، مسیر و اثر انگشت محتوا و کد محفوظ."""
+def _load_codal_document_data(folder):
+    """Verify original files, with exact-byte fallback to the compact catalog."""
     folder = Path(folder).resolve()
-    manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+    manifest_bytes = (folder / 'manifest.json').read_bytes()
+    manifest = json.loads(manifest_bytes.decode('utf-8'))
     if manifest.get('version') != DOCUMENT_VERSION or manifest.get('snapshot_id') != folder.name:
         raise ValueError('هویت آرشیو سند کدال معتبر نیست')
     public_document_url(manifest['source_url'])
@@ -53,11 +54,42 @@ def load_codal_document(folder):
     expected = 'report.pdf' if manifest['format'] == 'pdf' else 'report.txt'
     if manifest['format'] not in ('pdf', 'text') or manifest['content_file'] != expected:
         raise ValueError('نوع یا مسیر محتوای سند معتبر نیست')
-    for name, digest in {expected: manifest['content_sha256'], **manifest['source_files_sha256']}.items():
+    inventory = {expected: manifest['content_sha256'], **manifest['source_files_sha256']}
+    missing = [name for name in inventory if not (folder / name).is_file()]
+    compacted = None
+    if missing:
+        from ops.codal_compact import read_compacted_snapshot
+        compacted = read_compacted_snapshot(folder.parent, folder.name)
+        if compacted.get('manifest.json') != manifest_bytes:
+            raise ValueError('نسخه فشرده با manifest اصلی ناسازگار است')
+    bodies = {'manifest.json': manifest_bytes}
+    for name, digest in inventory.items():
         path = (folder / name).resolve()
-        if not path.is_relative_to(folder) or not path.is_file() or _sha(path.read_bytes()) != digest:
+        if not path.is_relative_to(folder):
             raise ValueError('اثر انگشت محتوا یا کد محفوظ سند ناسازگار است')
-    return manifest
+        body = path.read_bytes() if path.is_file() else compacted.get(name) if compacted is not None else None
+        if body is None or _sha(body) != digest:
+            raise ValueError('اثر انگشت محتوا یا کد محفوظ سند ناسازگار است')
+        bodies[name] = body
+    return manifest, bodies
+
+
+def load_codal_document(folder):
+    """خواندن همراه با کنترل هویت، مسیر و اثر انگشت محتوا و کد محفوظ."""
+    return _load_codal_document_data(folder)[0]
+
+
+def read_codal_document_file(folder, name):
+    """Read exact verified original bytes, whether loose or in the compact catalog."""
+    _, bodies = _load_codal_document_data(folder)
+    if name not in bodies:
+        raise ValueError('فایل در فهرست سند اصلی نیست')
+    return bodies[name]
+
+
+def read_codal_document_files(folder):
+    """Read the complete verified original inventory for a self-contained study."""
+    return _load_codal_document_data(folder)[1]
 
 
 def capture_codal_document(url, *, provider=None, root=None):
@@ -66,7 +98,7 @@ def capture_codal_document(url, *, provider=None, root=None):
 
     public_document_url(url)
     sources = {name: (settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n') for name in SOURCE_FILES}
-    result = (provider or CodalProvider()).get_document(url)
+    result = (CodalProvider() if provider is None else provider).get_document(url)
     if result['status'] != 'captured':
         return result
     for name, content in sources.items():

@@ -3,6 +3,7 @@
 آزمون‌های موتور بکتست: کارمزد رسمی، صف قفل، بازه قیمت روز، اجرای روز بعد و متریک‌های دقیق
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,6 +14,31 @@ from config import settings
 def test_commissions_come_from_config():
     assert BacktestEngine.BUY_COMMISSION_RATE == settings.FEES["buy"] == 0.003712
     assert BacktestEngine.SELL_COMMISSION_RATE == settings.FEES["sell"] == 0.0088
+
+
+@pytest.mark.parametrize('field', ['initial_capital', 'max_volume_participation_pct',
+                                   'default_slippage_bps', 'periods_per_year'])
+@pytest.mark.parametrize('value', [True, False, np.bool_(True), np.bool_(False)])
+def test_engine_financial_parameters_cannot_be_boolean(field, value):
+    with pytest.raises(ValueError, match='بولی'):
+        BacktestEngine(**{field: value})
+
+
+@pytest.mark.parametrize('allocation', [True, np.bool_(True), float('nan'), '1'])
+def test_replay_allocation_must_be_a_numeric_fraction(allocation):
+    frame = pd.DataFrame([{'date': '2024-01-01', 'close': 100., 'volume': 1000}])
+    with pytest.raises(ValueError, match='سهم تخصیص'):
+        BacktestEngine().run_replay_simulation(frame, 'آزمون', lambda *_: None, allocation_pct=allocation)
+
+
+@pytest.mark.parametrize('field', ['price', 'quantity', 'daily_volume', 'daily_value', 'day_low', 'day_high'])
+def test_numpy_boolean_cannot_become_price_quantity_or_liquidity(field):
+    engine = BacktestEngine(initial_capital=100_000, default_slippage_bps=0)
+    order = dict(price=100., quantity=10, date='2024-01-01', daily_volume=1000,
+                 daily_value=100_000., day_low=90., day_high=110.)
+    order[field] = np.bool_(True)
+    assert engine.execute_buy('آزمون', **order) is None
+    assert not engine.trades and not engine.positions and engine.cash == 100_000
 
 
 def test_backtest_commission_calculation():
@@ -80,6 +106,51 @@ def test_replay_executes_on_next_day_without_lookahead():
     assert buy.price == pytest.approx(1050.0 * 1.005)
     assert sell.date == "2026-10-04" and sell.price == pytest.approx(1020.0 * 0.995)
     assert metrics.losing_trades == 1 and len(metrics.equity_curve) == 5
+
+
+@pytest.mark.parametrize('missing', ['missing_reference', 'boolean_reference', 'missing_low', 'missing_volume',
+                                    'missing_day_volume', 'missing_day_value', 'boolean_volume', 'zero_volume_positive_value'])
+def test_raw_replay_does_not_execute_or_publish_when_lock_inputs_are_unknown(missing):
+    df = pd.DataFrame([
+        dict(date='2024-01-01', open_raw=100., low_raw=90., high_raw=110., close_raw=100.,
+             close_final_raw=100., ref_price_raw=100., volume=100_000, value=10_000_000.),
+        dict(date='2024-01-02', open_raw=100., low_raw=90., high_raw=110., close_raw=100.,
+             close_final_raw=100., ref_price_raw=100., volume=100_000, value=10_000_000.),
+    ])
+    if missing == 'missing_reference':
+        df.loc[1, 'ref_price_raw'] = float('nan')
+    elif missing == 'boolean_reference':
+        df['ref_price_raw'] = df['ref_price_raw'].astype(object)
+        df.loc[1, 'ref_price_raw'] = True
+    elif missing == 'missing_low':
+        df = df.drop(columns='low_raw')
+    elif missing == 'missing_volume':
+        df = df.drop(columns='volume')
+    elif missing == 'missing_day_volume':
+        df.loc[1, 'volume'] = float('nan')
+    elif missing == 'missing_day_value':
+        df.loc[1, 'value'] = float('nan')
+    elif missing == 'boolean_volume':
+        df['volume'] = df['volume'].astype(object)
+        df.loc[1, 'volume'] = True
+    else:
+        df.loc[1, 'volume'] = 0
+    engine = BacktestEngine(initial_capital=100_000, default_slippage_bps=0)
+    with pytest.raises(ValueError, match='مرجع یا ورودی صف'):
+        engine.run_replay_simulation(df, 'آزمون', lambda row, _: 'BUY' if row['date'] == '2024-01-01' else None)
+    assert not engine.trades and not engine.positions and engine.cash == 100_000
+
+
+def test_raw_replay_keeps_observed_zero_activity_as_unfilled_not_unknown():
+    df = pd.DataFrame([
+        dict(date='2024-01-01', open_raw=100., low_raw=90., high_raw=110., close_raw=100.,
+             close_final_raw=100., ref_price_raw=100., volume=100_000, value=10_000_000.),
+        dict(date='2024-01-02', open_raw=100., low_raw=90., high_raw=110., close_raw=100.,
+             close_final_raw=100., ref_price_raw=100., volume=0, value=0.),
+    ])
+    engine = BacktestEngine(initial_capital=100_000, default_slippage_bps=0)
+    result = engine.run_replay_simulation(df, 'آزمون', lambda row, _: 'BUY' if row['date'] == '2024-01-01' else None)
+    assert not engine.trades and result.final_equity == 100_000
 
 
 def test_replay_blocks_buy_on_locked_day_and_retries_locked_sell():

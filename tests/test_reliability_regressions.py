@@ -100,7 +100,7 @@ def test_foreign_client_source_cannot_enter_default_features(db):
 
 
 def test_normalized_aliases_do_not_duplicate_features_or_lose_raw_identity(db,tmp_path):
-    from features.provenance import raw_input_snapshot
+    from features.provenance import assert_compatible_inputs, raw_input_snapshot
     from features.store import build_feature_store
     prices,clients=coherent_history()
     sid=db.upsert_symbol(dict(symbol_fa='کیان',ins_code='123',instrument_type_code=300))
@@ -111,6 +111,119 @@ def test_normalized_aliases_do_not_duplicate_features_or_lose_raw_identity(db,tm
         dict(symbol='کیان',reason='duplicate_normalized_request')]
     manifest=build_feature_store(db,symbols=['كيان'],root=tmp_path/'features')
     assert manifest['provenance']['raw_inputs']==raw_input_snapshot(db,symbols=['کیان'])
+    assert_compatible_inputs(db, manifest)
+
+
+@pytest.mark.parametrize('change', ['new_empty_member', 'instrument_identity', 'market_identity', 'type_identity'])
+def test_feature_research_rejects_registry_changes_even_without_raw_price_changes(db, tmp_path, change):
+    from features.provenance import assert_compatible_inputs, raw_input_snapshot
+    from features.store import build_feature_store
+
+    prices, clients = coherent_history()
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, prices)
+    db.upsert_client_types_df(sid, clients)
+    manifest = build_feature_store(db, root=tmp_path / 'features')
+    before = raw_input_snapshot(db)
+    if change == 'new_empty_member':
+        db.upsert_symbol(dict(symbol_fa='نمادجدید', ins_code='456', instrument_type_code=300))
+    elif change == 'instrument_identity':
+        with db.conn:
+            db.conn.execute('UPDATE symbols SET ins_code=? WHERE id=?', ('456', sid))
+    elif change == 'market_identity':
+        with db.conn:
+            db.conn.execute('UPDATE symbols SET flow=? WHERE id=?', (2, sid))
+    else:
+        with db.conn:
+            db.conn.execute('UPDATE symbols SET instrument_type_code=? WHERE id=?', (303, sid))
+    assert raw_input_snapshot(db) == before
+    with pytest.raises(ValueError, match='جامعه|هویت'):
+        assert_compatible_inputs(db, manifest)
+
+
+def test_registry_snapshot_preserves_known_empty_members_and_ignores_unrelated_metadata(db, tmp_path):
+    from features.provenance import assert_compatible_inputs, registry_snapshot
+    from features.store import build_feature_store
+
+    prices, clients = coherent_history()
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, prices)
+    db.upsert_client_types_df(sid, clients)
+    db.upsert_symbol(dict(symbol_fa='بدونسابقه', ins_code='456', instrument_type_code=300))
+    manifest = build_feature_store(db, root=tmp_path / 'features')
+    stored = manifest['provenance']['registry_snapshot']
+    assert {row['symbol_fa'] for row in stored['members']} == {'آزمون', 'بدونسابقه'}
+    assert not stored['historical_membership_verified']
+    with db.conn:
+        db.conn.execute('UPDATE symbols SET is_active=0,name_fa=? WHERE id=?', ('نام تازه', sid))
+    db.upsert_symbol(dict(symbol_fa='صندوقآزمون', ins_code='789', instrument_type_code=305))
+    assert registry_snapshot(db) == stored
+    assert not db.conn.in_transaction
+    assert_compatible_inputs(db, manifest)
+    assert not db.conn.in_transaction
+    db.conn.execute('BEGIN')
+    assert_compatible_inputs(db, manifest)
+    assert db.conn.in_transaction
+    db.conn.rollback()
+
+
+def test_missing_registry_snapshot_cannot_authorize_new_research(db, tmp_path):
+    from features.provenance import assert_compatible_inputs
+    from features.store import build_feature_store
+
+    prices, clients = coherent_history()
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, prices)
+    db.upsert_client_types_df(sid, clients)
+    manifest = build_feature_store(db, root=tmp_path / 'features')
+    manifest['provenance'].pop('registry_snapshot')
+    with pytest.raises(ValueError, match='جامعه|هویت'):
+        assert_compatible_inputs(db, manifest)
+
+
+@pytest.mark.parametrize('damage', ['numeric_false', 'boolean_flow'])
+def test_registry_snapshot_rejects_type_confusion_even_if_python_values_compare_equal(db, tmp_path, damage):
+    from features.provenance import assert_compatible_inputs
+    from features.store import build_feature_store
+
+    prices, clients = coherent_history()
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300, flow=1))
+    db.upsert_daily_prices_df(sid, prices)
+    db.upsert_client_types_df(sid, clients)
+    manifest = build_feature_store(db, root=tmp_path / 'features')
+    registry = manifest['provenance']['registry_snapshot']
+    if damage == 'numeric_false':
+        registry['historical_membership_verified'] = 0
+    else:
+        registry['members'][0]['flow'] = True
+    with pytest.raises(ValueError, match='جامعه|هویت'):
+        assert_compatible_inputs(db, manifest)
+
+
+def test_registry_snapshot_rejects_non_normalized_stored_identity(db):
+    from features.provenance import registry_snapshot
+
+    sid = db.upsert_symbol(dict(symbol_fa='کیان', ins_code='123', instrument_type_code=300))
+    with db.conn:
+        db.conn.execute('UPDATE symbols SET symbol_fa=? WHERE id=?', ('كيان', sid))
+    with pytest.raises(ValueError, match='نام|هویت'):
+        registry_snapshot(db)
+
+
+def test_feature_compatibility_fails_if_code_changes_during_verification(db, tmp_path, monkeypatch):
+    from features import provenance
+    from features.store import build_feature_store
+
+    prices, clients = coherent_history()
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    db.upsert_daily_prices_df(sid, prices)
+    db.upsert_client_types_df(sid, clients)
+    manifest = build_feature_store(db, root=tmp_path / 'features')
+    hashes = iter([manifest['provenance']['feature_logic_sha256'], 'changed'])
+    monkeypatch.setattr(provenance, 'feature_logic_fingerprint', lambda: next(hashes))
+    with pytest.raises(ValueError, match='هنگام بررسی'):
+        provenance.assert_compatible_inputs(db, manifest)
+    assert not db.conn.in_transaction
 
 
 def test_explicit_block_board_is_not_an_ordinary_feature_target(db):

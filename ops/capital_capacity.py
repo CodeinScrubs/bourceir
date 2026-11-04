@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from backtest.portfolio import PortfolioConfig, replay_portfolio
+from backtest.portfolio import PORTFOLIO_VERSION, PortfolioConfig, replay_portfolio
 from config import settings
 from core.capital_capacity import VERSION, diagnose_cash_ledger, summarize_cases
 from core.forward_observations import canonical
@@ -24,7 +24,8 @@ from ops.research_review import _load_json, _relative_file, _verify_inventory, r
 from research.labels import market_calendar
 from research.run import _json_safe, archive_research_code
 
-ENGINE_FILES = ('backtest/portfolio.py', 'backtest/fractions.py', 'core/market_rules.py', 'core/risk.py',
+ENGINE_FILES = ('backtest/portfolio.py', 'backtest/prepared.py', 'backtest/fractions.py',
+                'core/price_quality.py', 'core/market_rules.py', 'core/risk.py', 'core/order_book.py',
                 'config/settings.py', 'requirements.lock.txt')
 EXTRA_CODE = ('ops/capital_capacity.py', 'ops/research_review.py', 'ops/dip_diagnostics.py', 'brs.py')
 
@@ -77,9 +78,9 @@ def run_capacity_study(db, experiment_id, *, owner_capital=False, multipliers=(1
     source_dir = settings.DATA_DIR / 'research' / experiment_id
     source = _load_json(source_dir.with_suffix('.json'))
     protocol = source['protocol']
-    if protocol['version'] != 'flow-portfolio-v4' or protocol['portfolio_version'] != 'portfolio-v4':
-        raise ValueError('مطالعه فعلی فقط منبع صریح FLOW v4 را می‌پذیرد')
-    if _current_code(ENGINE_FILES) != {name: protocol['source_files'][name] for name in ENGINE_FILES}:
+    if protocol['version'] != 'flow-portfolio-v4' or protocol['portfolio_version'] != PORTFOLIO_VERSION:
+        raise ValueError('منبع صریح FLOW v4 با همین نسخهٔ موتور سبد لازم است')
+    if _current_code(ENGINE_FILES) != {name: protocol['source_files'].get(name) for name in ENGINE_FILES}:
         raise ValueError('کد موتور یا وابستگی‌ها با منبع تغییر کرده است؛ قیاس اندازه مجاز نیست')
     lock_rule = _source_lock_rule(source_dir)
     profile = WorkbenchRepository(db).profile() if owner_capital else None

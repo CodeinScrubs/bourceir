@@ -8,6 +8,7 @@ import pytest
 
 from core.daily_publications import publication_request
 from core.no_trade_valuation import FALSE_FLAGS, parse_no_trade_publication, parse_no_trade_receipt
+from core.source_cooldown import VERSION as TRANSPORT_VERSION
 
 CODE='12345678901234567'
 DAY='2024-01-02'
@@ -44,6 +45,35 @@ def test_flat_mark_is_source_bound_but_never_a_candle_or_executable():
     assert all(parsed[key] is False for key in FALSE_FLAGS)
     assert 'open_raw' not in parsed and 'high_raw' not in parsed and 'low_raw' not in parsed
     assert before==raw
+
+
+@pytest.mark.parametrize('transport_known',[False,True])
+def test_v2_native_receipt_keeps_identical_mark_semantics_without_database_id(transport_known):
+    original=receipt()
+    value=copy.deepcopy(original)
+    value.update(version='daily-publication-archive-v2',transport=None)
+    value['task']['symbol_id']=None
+    if transport_known:
+        value['transport']=dict(version=TRANSPORT_VERSION,status='response_received',admitted=True,
+            url=value['source']['url'],requested_at=NOW,received_at=NOW,http_status=200)
+    assert parse_no_trade_receipt(value)==parse_no_trade_receipt(original)
+
+
+@pytest.mark.parametrize('change',[{'http_status':429},{'admitted':False},{'status':'source_cooldown'},
+    {'url':'https://cdn.tsetmc.com/api/other'},{'received_at':'2099-01-01T14:00:00+03:30'}])
+def test_v2_body_cannot_be_paired_with_failed_unrelated_or_future_transport(change):
+    value=receipt()|dict(version='daily-publication-archive-v2')
+    value['transport']=dict(version=TRANSPORT_VERSION,status='response_received',admitted=True,
+        url=value['source']['url'],requested_at=NOW,received_at=NOW,http_status=200)|change
+    with pytest.raises(ValueError):parse_no_trade_receipt(value)
+
+
+def test_v2_source_failure_stays_unknown_and_missing_transport_contract_is_rejected():
+    value=receipt()|dict(version='daily-publication-archive-v2',source=None,transport=None)
+    parsed=parse_no_trade_receipt(value)
+    assert parsed['status']=='source_unavailable'and not parsed['flat_mark_eligible']and parsed.get('factor')is None
+    value.pop('transport')
+    with pytest.raises(ValueError):parse_no_trade_receipt(value)
 
 
 def test_derived_factor_uses_single_market_return_rule(monkeypatch):

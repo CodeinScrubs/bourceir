@@ -26,8 +26,9 @@ import pandas as pd
 
 from config import settings
 from core import market_rules
+from core.price_quality import numeric_prices
 
-DIP_VERSION = "dip-v4"
+DIP_VERSION = "dip-v7"
 TIME_EXIT_PRICE_BASIS = 'last_trade_raw_at_session_end_minus_slippage'
 THROUGH_MARGIN = 0.001   # حالت محافظه‌کار: کف روز باید این مقدار از قیمت سفارش پایین‌تر رفته باشد
 
@@ -60,7 +61,8 @@ class DipRule:
 def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
                     want: Optional[np.ndarray] = None) -> pd.DataFrame:
     """
-    نتیجه قاعده برای هر روز تصمیم یک نماد. df: ردیف‌های همان نماد (مرتب، فقط روزهای دارای معامله) با ستون‌های
+    نتیجه قاعده برای هر روز تصمیم یک نماد. df: ردیف‌های مرتب همان نماد؛ ردیف‌های ناسازگار یا با فعالیت
+    نامعلوم برای تشخیص نقص حفظ می‌شوند. ستون‌های مورد انتظار:
     date، open_raw، high_raw، low_raw، close_final_raw، ref_price_raw، volume، value.
     خروجی: date، dip_status (no_session/not_filled/complete/censored/invalid)، entry_kind، exit_kind، net_ret و
     days_held (تعداد جلسه بعد از روز خرید تا فروش؛ فروش همان روز = ۰).
@@ -75,12 +77,14 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
         raise ValueError("ماسک تصمیم با قیمت‌ها هم‌اندازه نیست")
     # لیست پایتون برای دسترسی تک‌عنصری در حلقه چند برابر سریع‌تر از آرایه numpy است
     dates = df["date"].astype(str).tolist()
-    opens = df["open_raw"].astype(float).tolist()
-    highs = df["high_raw"].astype(float).tolist()
-    lows = df["low_raw"].astype(float).tolist()
-    refs = df["ref_price_raw"].astype(float).tolist()
+    raw = numeric_prices(df, ('open_raw', 'high_raw', 'low_raw', 'ref_price_raw', 'close_raw'))
+    opens = raw['open_raw'].tolist()
+    highs = raw['high_raw'].tolist()
+    lows = raw['low_raw'].tolist()
+    refs = raw['ref_price_raw'].tolist()
     vwap = market_rules.daily_vwap(df).astype(float).tolist()
-    last_trades = df.get('close_raw', pd.Series(np.nan, index=df.index)).astype(float).tolist()
+    last_trades = raw['close_raw'].tolist()
+    lock_known = market_rules.lock_inputs_known(df).tolist()
     locked_down = market_rules.lock_flags(df)["locked_down"].tolist()
     factors = market_rules.corporate_action_factors(df).to_numpy(dtype=float)
     cum = np.cumsum(np.log(np.where(factors > 0, factors, 1.0))).tolist()
@@ -110,10 +114,10 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
         entry_date = calendar_list[cal_pos[i]]
         j = i + 1
         if j >= n or dates[j] != entry_date:
-            entry_filled[i] = 0
-            continue                                                  # نماد فردا معامله نداشت (توقف)
+            continue  # نبود ردیف، توقف یا عدم اجرای سفارش را اثبات نمی‌کند.
         ref, op, lo, hi = refs[j], opens[j], lows[j], highs[j]
-        if not (isfinite(ref) and ref > 0 and isfinite(op) and isfinite(lo) and isfinite(hi) and 0 < lo <= op <= hi):
+        if not (lock_known[j] and isfinite(vwap[j]) and isfinite(ref) and ref > 0
+                and isfinite(op) and isfinite(lo) and isfinite(hi) and 0 < lo <= op <= hi):
             status[i] = "invalid"
             continue
         limit = ref * (1.0 - rule.dip)
@@ -144,7 +148,11 @@ def simulate_symbol(df: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
         planned_date = calendar_list[min(planned_pos, len(calendar) - 1)]
         m = j + 1
         while exit_price is None and m < n:
-            if not (isfinite(refs[m]) and refs[m] > 0 and isfinite(factors[m])
+            expected_pos = cal_pos[i] + (m - j)
+            if expected_pos >= len(calendar_list) or dates[m] != calendar_list[expected_pos]:
+                status[i] = "invalid"  # A missing holding session is not a known failed exit.
+                break
+            if not (lock_known[m] and isfinite(vwap[m]) and isfinite(refs[m]) and refs[m] > 0 and isfinite(factors[m])
                     and isfinite(opens[m]) and isfinite(lows[m]) and isfinite(highs[m])
                     and 0 < lows[m] <= opens[m] <= highs[m]):
                 status[i] = "invalid"
@@ -203,7 +211,11 @@ def simulate(prices: pd.DataFrame, calendar: np.ndarray, rule: DipRule,
     calendar = np.asarray(calendar).astype(str)
     wanted = None if decisions is None else set(zip(decisions["date"], decisions["symbol"]))
     frames = []
-    for symbol, df in prices.loc[prices["volume"] > 0].sort_values(["symbol", "date"]).groupby("symbol", sort=False):
+    totals = numeric_prices(prices, ('volume', 'value'))
+    # Unknown or contradictory totals cannot be removed as if they proved a
+    # no-trade session; retaining them makes the model classify the path invalid.
+    known_no_trade = totals.volume.eq(0) & totals.value.eq(0)
+    for symbol, df in prices.loc[~known_no_trade].sort_values(["symbol", "date"]).groupby("symbol", sort=False):
         df = df.reset_index(drop=True)
         want = None if wanted is None else np.array([(d, symbol) in wanted for d in df["date"]])
         if want is not None and not want.any():

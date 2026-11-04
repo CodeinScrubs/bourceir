@@ -1,6 +1,7 @@
 """داده مصنوعی فقط در دیتابیس و پوشه موقت آزمون؛ شبکه در آزمون استفاده نمی‌شود."""
 
 import json
+import shutil
 
 import pandas as pd
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from brs import build_parser
 from config import settings
 from core.price_quality import price_quality
-from ops.price_recheck import compare_row, run_recheck
+from ops.price_recheck import SOURCE_FILES, code_identity, compare_row, run_recheck
 from ops.report_files import write_private_report
 from ops.research_preflight import research_preflight
 from tests.test_research_preflight import store
@@ -20,6 +21,20 @@ def damage(db):
         db.conn.execute('UPDATE daily_prices SET open_raw=NULL WHERE symbol_id=? AND date=?',
                         (sid, prices.date.iloc[0]))
     return prices, sid
+
+
+def test_recheck_fingerprints_the_history_normalizer_used_by_the_provider(tmp_path, monkeypatch):
+    names = set(SOURCE_FILES) | {'data_collector/daily_history.py'}
+    for name in names:
+        target = tmp_path/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(settings.BASE_DIR/name, target)
+    monkeypatch.setattr(settings, 'BASE_DIR', tmp_path)
+    before = code_identity()
+    assert 'data_collector/daily_history.py' in before
+    path = tmp_path/'data_collector/daily_history.py'
+    path.write_text(path.read_text(encoding='utf8')+'\n# changed normalizer\n', encoding='utf8')
+    assert code_identity()['data_collector/daily_history.py'] != before['data_collector/daily_history.py']
 
 
 def test_missing_open_has_one_precise_reason_and_no_invented_range_error(db):

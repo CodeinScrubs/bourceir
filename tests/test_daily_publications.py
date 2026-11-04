@@ -51,6 +51,7 @@ def clock(monkeypatch):
     monkeypatch.setattr('data_collector.scheduler.now_tehran', lambda: stamp)
     monkeypatch.setattr('data_collector.scheduler.now_tehran_iso', lambda: NOW)
     monkeypatch.setattr('data_collector.tsetmc.now_tehran_iso', lambda: NOW)
+    monkeypatch.setattr('data_collector.source_cooldown.now_tehran_iso', lambda: NOW)
 
 
 def test_price_mapping_and_official_close_outside_prints():

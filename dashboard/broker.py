@@ -5,12 +5,21 @@ import json
 import pandas as pd
 import streamlit as st
 
-from core.timeutils import to_jalali
+from core.timeutils import is_canonical_iso_date, to_jalali
 from dashboard.workbench import _account_metric_style, _toman
 from data_collector.farabi import import_report
 from database.broker import BrokerRepository, broker_report
 from database.db import DatabaseManager
 from ops import jobs
+
+
+def _archive_date_display(value):
+    """Missing dates stay unknown; malformed values never crash the account view."""
+    if pd.isna(value) or value == '':
+        return 'نامعلوم'
+    if not isinstance(value, str) or not is_canonical_iso_date(value):
+        return 'نامعتبر'
+    return to_jalali(value)
 
 
 def page_broker():
@@ -73,7 +82,7 @@ def page_broker():
     view = pd.DataFrame({
         'نماد': positions['symbol_fa'], 'تعداد': positions['quantity'], 'وزن سبد (٪)': positions['weight_pct'],
         'قیمت آخر فارابی (ریال)': positions['last_price_rial'], 'قیمت آخر آرشیو (ریال)': positions['archive_last_rial'],
-        'تاریخ آرشیو': positions['archive_date'].map(to_jalali),
+        'تاریخ آرشیو': positions['archive_date'].map(_archive_date_display),
         'داخل دامنه سهام عادی پژوهش': positions['research_scope_eligible'].map({True: 'بله', False: 'خیر'}).fillna('نامعلوم'),
         'ارزش فارابی (تومان)': positions['value_rial'] / 10,
         'جمع خرید فارابی (تومان)': positions['buy_total_rial'] / 10,
@@ -100,7 +109,7 @@ def page_broker():
     if not old.empty:
         st.warning('قیمت عمومی بعضی دارایی‌ها مربوط به جلسه مورد انتظار نیست؛ ارزش گزارش‌شده، امکان فروش امروز را اثبات نمی‌کند.')
         old = old.copy()
-        old['archive_date'] = old['archive_date'].map(to_jalali)
+        old['archive_date'] = old['archive_date'].map(_archive_date_display)
         st.dataframe(old.rename(columns={'symbol_fa': 'نماد', 'archive_date': 'آخرین روز آرشیو'}), hide_index=True)
     if report.get('turnover'):
         ledger = report['turnover']
@@ -142,7 +151,7 @@ def page_broker():
             st.caption('مبلغ ضمنی خروجی سفارش‌ها = تعداد × قیمت، به‌علاوه کارمزد خرید یا منهای کارمزد فروش. برابری جمع، تطبیق تک‌اجرای بورس را ثابت نمی‌کند. اختلاف‌ها اصلاح یا حذف نشده‌اند.')
             groups = pd.DataFrame(comparison['groups'])
             if not groups.empty:
-                groups['date'] = groups['date'].map(to_jalali)
+                groups['date'] = groups['date'].map(_archive_date_display)
                 groups['side'] = groups['side'].map({'buy': 'خرید', 'sell': 'فروش'})
                 groups['status'] = groups['status'].map({'only_ledger': 'فقط گردش حساب',
                     'only_order_export': 'فقط خروجی سفارشات', 'amount_difference': 'اختلاف مبلغ',

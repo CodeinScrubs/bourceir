@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-import {capturePortfolio, numeric, optionalPercent, parseAccountTotals, performance, portfolioHeaders, verifySnapshot} from '../scripts/farabi_capture.mjs';
+import {capturePortfolio, captureReports, numeric, optionalPercent, parseAccountTotals, performance, portfolioHeaders, verifySnapshot, writeCaptureStatus} from '../scripts/farabi_capture.mjs';
 
 // Synthetic fixtures remain under tests and never enter the market/account databases.
 function snapshot() {
@@ -93,4 +96,53 @@ test('account rounding tolerance is consistent during loading and final validati
 test('stuck rewinds and changes between captures fail without returning a snapshot', async () => {
   await assert.rejects(capturePortfolio(simulatedTab({stuck:true})), /rewind/);
   await assert.rejects(capturePortfolio(simulatedTab({changed:true})), /changed during capture/);
+});
+
+test('a failed first report preserves a safe diagnostic and does not prevent the second report', async () => {
+  let route = '';
+  const visits = [], progress = [], downloads = [];
+  const tab = {goto:async url => {route = new URL(url).pathname; visits.push(route);},
+    playwright:{getByRole:() => ({waitFor:async () => {
+      if (route === '/account-turnover') {
+        const error = new Error('private token or account text must never be copied');
+        error.name = 'TimeoutError';
+        throw error;
+      }
+    }})}};
+  const result = await captureReports(tab, async (_, filename) => {downloads.push(filename); return filename;},
+    async event => progress.push(event));
+  assert.deepEqual(visits, ['/account-turnover', '/orders-history']);
+  assert.deepEqual(downloads, ['orders-history.xlsx']);
+  assert.deepEqual(result.reports.account_turnover, {status:'failed', phase:'table', error_type:'timeout'});
+  assert.deepEqual(result.reports.orders_history, {status:'saved', phase:'complete', error_type:null});
+  assert.doesNotMatch(JSON.stringify(progress), /private|token|account text/);
+});
+
+test('a diagnostic persistence failure aborts rather than silently proceeding', async () => {
+  let visited = false;
+  const tab = {goto:async () => {visited = true;}};
+  await assert.rejects(captureReports(tab, async () => {}, async () => {throw new Error('disk full');}));
+  assert.equal(visited, false);
+});
+
+test('a later diagnostic persistence failure also aborts without opening another report', async () => {
+  const visits = [];
+  const tab = {goto:async url => visits.push(new URL(url).pathname)};
+  let updates = 0;
+  await assert.rejects(captureReports(tab, async () => {}, async () => {
+    if (++updates === 2) throw new Error('disk full');
+  }));
+  assert.deepEqual(visits, ['/account-turnover']);
+});
+
+test('status is replaceable on Windows without leaving a temporary file', async t => {
+  const parent = path.resolve(os.tmpdir());
+  const directory = await fs.mkdtemp(path.join(parent, 'brs-capture-status-'));
+  assert.equal(path.dirname(directory), parent);
+  t.after(async () => fs.rm(directory, {recursive:true, force:true}));
+  await writeCaptureStatus(directory, {status:'running'});
+  await writeCaptureStatus(directory, {status:'failed', phase:'table', error_type:'timeout'});
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, 'capture-status.json'), 'utf8')),
+    {status:'failed', phase:'table', error_type:'timeout'});
+  await assert.rejects(fs.access(path.join(directory, 'capture-status.json.tmp')));
 });

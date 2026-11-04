@@ -9,6 +9,7 @@ import numpy as np
 
 from config import settings
 from core.market_rules import breakeven_move
+from core.order_book import book_bound_violations
 from core.screening import current_snapshot
 from core.timeutils import is_market_open, now_tehran
 
@@ -32,6 +33,8 @@ def live_snapshot_blockers(snapshot, at):
     blockers = []
     if snapshot.get('source') != 'tsetmc' or snapshot.get('price_unit') != 'Rial':
         blockers.append('منبع TSETMC و واحد ریال مظنه تأیید نشده است')
+    if book_bound_violations(snapshot):
+        blockers.append('سطحی از عمق با دامنه مشاهده‌شده ناسازگار است')
     for key in ('provider_timestamp', 'captured_at'):
         try:
             stamp = datetime.fromisoformat(snapshot.get(key))

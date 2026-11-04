@@ -3,6 +3,8 @@
 آزمون‌های یکپارچه گردآورنده داده (DataCollector) با منبع داده ساختگیِ آزمونی و دیتابیس موقت
 """
 
+from types import SimpleNamespace
+
 import pandas as pd
 
 from data_collector.scheduler import DataCollector
@@ -28,9 +30,55 @@ def test_universe_sync_and_history_collection(db, market_watch_rows, closing_pri
     assert {s["symbol_fa"] for s in db.get_universe_symbols()} == {"فولاد", "خزامیا"}
 
     report = collector.collect_history(symbols=["فولاد"])
-    assert report["status"] == "success" and report["rows_inserted"] == len(closing_price_daily) - 1
+    # One retained source row has an invalid last trade; the refresh is partial.
+    assert report["status"] == "partial" and report["rows_inserted"] == len(closing_price_daily) - 1
     assert db.get_last_daily_date(db.get_symbol_id("فولاد")) == "2026-10-10"
-    assert db.conn.execute("SELECT status FROM collection_log ORDER BY id DESC LIMIT 1;").fetchone()[0] == "success"
+    assert db.conn.execute("SELECT status FROM collection_log ORDER BY id DESC LIMIT 1;").fetchone()[0] == "partial"
+
+
+def test_history_with_missing_raw_field_is_partial_and_keeps_the_unknown_value(db):
+    sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    row = dict(date='2024-01-01', open_raw=100., high_raw=101., low_raw=99., close_raw=100.,
+               close_final_raw=100., ref_price_raw=100., volume=10, value=1000., trade_count=1)
+    frame = pd.DataFrame([row, dict(row, date='2024-01-02', open_raw=None)])
+    collector = DataCollector(db=db, provider=SimpleNamespace(get_symbol_history=lambda *a, **k: frame), codal=_NoCodal())
+    report = collector.collect_history(['آزمون'])
+    assert report['status'] == 'partial' and report['symbols_failed'] == 1
+    assert report['partial_symbols'] == 1 and report['invalid_price_rows'] == 1
+    assert report['rows_inserted'] == 2
+    assert db.get_last_daily_date(sid) == '2024-01-02'
+    assert pd.isna(db.get_daily_prices_df('آزمون').iloc[-1]['open_raw'])
+
+
+def test_empty_history_is_unknown_and_not_reported_as_success(db):
+    db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    collector = DataCollector(db=db, provider=SimpleNamespace(get_symbol_history=lambda *a, **k: pd.DataFrame()), codal=_NoCodal())
+    report = collector.collect_history(['آزمون'])
+    assert report['status'] == 'failed' and report['symbols_failed'] == 1
+    assert report['rows_inserted'] == 0
+
+
+def test_partial_history_blocks_automatic_feature_publication(monkeypatch):
+    import brs
+    from data_collector import scheduler
+
+    calls = []
+    reports = {key:dict(status='success') for key in ('universe', 'history', 'client_types', 'codal')}
+    reports['history'] = dict(status='partial')
+    reports['session_candles'] = dict(status='success', native_date_and_identity_required=True)
+    collector = SimpleNamespace(db=SimpleNamespace(close=lambda: calls.append('close')), update_all=lambda **_: reports)
+    monkeypatch.setattr(scheduler, 'DataCollector', lambda **_: collector)
+    monkeypatch.setattr(brs, '_build_features', lambda _: calls.append('features'))
+    assert brs.cmd_update(SimpleNamespace(symbols='', full=False, no_features=False)) == 1
+    assert calls == ['close']
+
+
+def test_mismatched_native_history_never_reaches_another_symbol(db, closing_price_daily):
+    db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))
+    collector = _collector(db, {'GetClosingPriceDailyList': {'closingPriceDaily': closing_price_daily}})
+    report = collector.collect_history(['آزمون'])
+    assert report['status'] == 'failed' and report['rows_inserted'] == 0
+    assert db.get_daily_prices_df('آزمون').empty
 
 
 def test_out_of_scope_symbol_is_rejected(db):
@@ -127,11 +175,11 @@ def test_incremental_client_types_refresh_recent_sessions_without_ancient_holes(
 
 def test_one_failing_client_type_day_does_not_drop_the_others():
     class Flaky(FakeSession):
-        def get(self, url, timeout=None):
+        def get(self, url, timeout=None, **options):
             if url.endswith("/20091122"):
                 self.calls.append(url)
                 raise ConnectionError("500")
-            return super().get(url, timeout=timeout)
+            return super().get(url, timeout=timeout, **options)
 
     payload = {"clientType": {"recDate": 20261010, "buy_I_Volume": 1.0}}
     provider = TsetmcProvider(session=Flaky({"GetClientTypeHistory": payload}))

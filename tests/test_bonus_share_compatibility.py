@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backtest.cash_dividends import CashDividend, DividendPayment, replay_cash_dividend_portfolio
-from backtest.portfolio import PortfolioConfig, replay_portfolio
+from backtest.portfolio import PORTFOLIO_VERSION, PortfolioConfig, replay_portfolio
 from research.dip import DipRule
 from research.run import _json_safe
 
@@ -29,4 +29,13 @@ def test_default_synthetic_dip_and_cash_paths_equal_the_frozen_prechange_results
             dip_rule=None if case['dip_rule'] is None else DipRule(**case['dip_rule']))
     actual = dict(equity=result.equity.to_dict('records'), executions=result.executions.to_dict('records'),
         decisions=result.decisions.to_dict('records'), metrics=result.metrics, assumptions=result.assumptions)
+    # The immutable fixture remains v4. All financial observations and metrics
+    # must be identical; only the explicitly versioned valuation contract changed.
+    assert actual['assumptions'].pop('engine_version') == PORTFOLIO_VERSION
+    assert actual['assumptions'].pop('valuation_price_basis') == 'observed official close and reference; independent of execution VWAP'
+    assert actual['assumptions'].pop('missing_entry_bar_policy') == 'unknown_entry_execution_and_no_total_return'
+    assert actual['assumptions'].pop('missing_exit_bar_policy') == 'unknown_exit_execution_and_no_total_return'
+    if actual['assumptions']['version'] == PORTFOLIO_VERSION:
+        assert case['expected']['assumptions']['version'] == 'portfolio-v4'
+        actual['assumptions']['version'] = 'portfolio-v4'
     assert _json_safe(actual) == case['expected']

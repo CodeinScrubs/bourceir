@@ -37,20 +37,29 @@ class Provider:
         return trades()
 
 
-def test_register_fetch_verify_backup_apply_replay_and_keep_all_old_evidence(db, source, tmp_path):
+def test_trade_only_candidate_cannot_be_applied_without_dated_candle_evidence(db, source, tmp_path):
+    result, folder=collect_recovery(db,from_preflight=source,provider=Provider(db,tmp_path))
+    assert result['statuses']=={'verified_same_source_candidate':1}
+    assert verified_recovery(folder)[2]
+    with pytest.raises(ValueError,match='کندل تاریخ'):
+        apply_recovery_run(db,folder,review_note='Trade-only evidence must not silently override a conflicting candle')
+    assert db.conn.execute('SELECT count(*) FROM price_recoveries').fetchone()[0]==0
+    assert db.get_daily_prices_df('آزمون').open_raw.isna().all()
+    assert not (db.db_path.parent/'backups').exists()
+
+
+def test_register_fetch_and_replay_candidate_without_changing_database(db, source, tmp_path, capsys):
     before = db.conn.total_changes
     result, folder = collect_recovery(db, from_preflight=source, provider=Provider(db, tmp_path))
     assert db.conn.total_changes == before
     assert result['statuses'] == {'verified_same_source_candidate': 1} and result['requests_made'] == 1
     assert not result['applied'] and not result['accepted_for_signals']
     assert verified_recovery(folder)[2][0][1]['after']['open_raw'] == 100
-    note = 'تطبیق کامل شاهد مصنوعی در دیتابیس موقت آزمون'
-    applied, path = apply_recovery_run(db, folder, review_note=note)
-    assert path.exists() and applied['applied'] == 1 and applied['feature_rebuild_required']
-    assert (db.db_path.parent / 'backups' / applied['backup_name']).exists()
-    again, _ = apply_recovery_run(db, folder, review_note=note)
-    assert again['applied'] == 0 and again['already_applied'] == 1 and again['backup_name'] is None
-    assert len(list((db.db_path.parent / 'backups').glob('*.db'))) == 1
+    from ops.price_recovery import main
+    assert main(['--review-run',str(folder)])==0
+    summary=json.loads(capsys.readouterr().out)
+    assert summary['trade_path_candidates']==1 and summary['applicable_without_native_candle']==0
+    assert db.conn.total_changes==before and not (db.db_path.parent/'backups').exists()
     assert (folder / 'result.json').read_text(encoding='utf-8') == json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
 
 
@@ -88,32 +97,80 @@ def test_change_of_current_code_rejects_old_apply_but_does_not_edit_the_run(db, 
         verified_recovery(folder)
 
 
-def test_evidence_change_after_backup_rolls_back_rows_and_receipts(db, source, tmp_path, monkeypatch):
+def test_v2_read_only_replay_requires_known_producer_and_unchanged_replay_logic(db, source, tmp_path, monkeypatch):
+    from ops import price_recovery
+
+    _, folder=collect_recovery(db,from_preflight=source,provider=Provider(db,tmp_path))
+    plan=json.loads((folder/'plan.json').read_text(encoding='utf-8'))
+    result=json.loads((folder/'result.json').read_text(encoding='utf-8'))
+    plan['version']=result['version']=price_recovery.LEGACY_VERSION
+    write_private_report(folder/'plan.json',plan)
+    result['artifacts_sha256']['plan.json']=price_recovery.sha(folder/'plan.json')
+    write_private_report(folder/'result.json',result)
+    monkeypatch.setattr(price_recovery,'LEGACY_OPS_SHA256',plan['code']['ops/price_recovery.py'])
+    assert len(verified_recovery(folder)[2])==1
+    monkeypatch.setattr(price_recovery,'LEGACY_OPS_SHA256','0'*64)
+    with pytest.raises(ValueError,match='کد'):
+        verified_recovery(folder)
+    monkeypatch.setattr(price_recovery,'LEGACY_OPS_SHA256',plan['code']['ops/price_recovery.py'])
+    monkeypatch.setattr(price_recovery,'_selection',lambda *a,**kw:None)
+    with pytest.raises(ValueError,match='کد'):
+        verified_recovery(folder)
+
+
+@pytest.mark.parametrize('option',[['--offset','1'],['--include-warmup'],['--fetch']])
+def test_review_run_rejects_network_and_new_selection_before_opening_archive(monkeypatch,option):
+    from ops import price_recovery
+
+    monkeypatch.setattr(price_recovery,'verified_recovery',lambda *_:pytest.fail('Archive should not be opened'))
+    with pytest.raises(SystemExit) as error:
+        price_recovery.main(['--review-run','not-a-real-folder',*option])
+    assert error.value.code==2
+
+
+def test_evidence_change_before_commit_rolls_back_low_level_legacy_write(db, source, tmp_path):
     from database import price_recovery
 
     _, folder = collect_recovery(db, from_preflight=source, provider=Provider(db, tmp_path))
-    original = price_recovery.apply_recoveries
-    def mutate_before_commit(*args, **kwargs):
-        callback = kwargs['before_commit']
-        def changed():
-            (folder / 'plan.json').write_text('{}', encoding='utf-8')
-            return callback()
-        return original(*args, **(kwargs | dict(before_commit=changed)))
-    monkeypatch.setattr('ops.price_recovery.apply_recoveries', mutate_before_commit)
+    plan, _, candidates, _ = verified_recovery(folder)
+    def changed():
+        (folder / 'plan.json').write_text('{}', encoding='utf-8')
+        verified_recovery(folder)
     with pytest.raises(ValueError):
-        apply_recovery_run(db, folder, review_note='آزمون تغییر فایل پس از پشتیبان و پیش از commit')
+        price_recovery.apply_recoveries(db,plan['run_id'],candidates,cutoff=plan['cutoff'],
+                                        evidence={'test_only':True},before_commit=changed)
     assert db.get_daily_prices_df('آزمون').open_raw.isna().all()
     assert db.conn.execute('SELECT count(*) FROM price_recoveries').fetchone()[0] == 0
 
 
 def test_recovery_cli_and_migration_are_explicit_and_repeatable(db):
     args = build_parser().parse_args(['recover-prices', '--from-preflight', 'test.json'])
-    assert not args.fetch and args.apply_run is None and args.max_rows == 5
+    assert not args.fetch and args.apply_run is None and args.review_run is None and args.max_rows is None
     assert apply_migrations(db.conn) == []
     path = next(path for number, _, path in discover_migrations() if number == 15)
     _run_sql_migration(db.conn, path)
     db.conn.commit()
     assert db.conn.execute('SELECT count(*) FROM price_recoveries').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('option', [['--max-rows', '2'], ['--review-note', 'ignored']])
+def test_readonly_recovery_review_rejects_irrelevant_options(option):
+    from ops import price_recovery
+
+    with pytest.raises(SystemExit) as error:
+        price_recovery.main(['--review-run', 'not-a-real-folder', *option])
+    assert error.value.code == 2
+
+
+def test_recovery_cli_forwards_readonly_review_and_explicit_limit(monkeypatch):
+    from brs import cmd_price_recovery
+    from ops import price_recovery
+
+    captured = []
+    monkeypatch.setattr(price_recovery, 'main', lambda argv: captured.append(argv) or 0)
+    args = build_parser().parse_args(['recover-prices', '--review-run', 'archive', '--max-rows', '2'])
+    assert cmd_price_recovery(args) == 0
+    assert captured == [['--review-run', 'archive', '--max-rows', '2']]
 
 
 @pytest.fixture
@@ -142,11 +199,15 @@ class PagedProvider:
         return result
 
 
-def test_next_page_keeps_fixed_frame_after_first_page_is_applied(db, multi_source, tmp_path):
+def test_next_page_keeps_fixed_frame_after_first_page_changes(db, multi_source, tmp_path):
     provider = PagedProvider(db, tmp_path)
     first, first_folder = collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=1)
     assert first['eligible_rows_in_frame'] == 3 and first['next_offset'] == 1 and not first['frame_exhausted']
-    apply_recovery_run(db, first_folder, review_note='اعمال اولین دسته فقط در دیتابیس موقت آزمون')
+    first_issue, first_candidate=verified_recovery(first_folder)[2][0]
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET open_raw=?,open=? WHERE symbol_id=? AND date=?',
+                        (first_candidate['after']['open_raw'],first_candidate['after']['open_raw'],
+                         first_issue['symbol_id'],first_issue['date']))
     second, second_folder = collect_recovery(db, from_preflight=multi_source, provider=provider, max_rows=1, offset=1)
     assert provider.calls == [('123', '2024-02-06'), ('123', '2024-02-05')]
     assert second['next_offset'] == 2 and not second['current_global_quality_verified']

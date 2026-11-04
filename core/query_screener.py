@@ -3,11 +3,12 @@
 import math
 from collections import Counter
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
+from fractions import Fraction
 
 from core.text import normalize_symbol
 
-VERSION = 'market-query-v4'
+VERSION = 'market-query-v5'
 METRICS = {'market_cap_rial', 'confirmed_count', 'ambiguous_count', 'possible_count', 'valid_sessions',
            'observed_sessions', 'avg_value_rial', 'sector_code', 'symbol_fa'}
 
@@ -27,6 +28,22 @@ def decimal(value):
     except (InvalidOperation, ValueError):
         return None
     return number if number.is_finite() and not isinstance(value, bool) else None
+
+
+def _bounded_fraction(number):
+    """Exact arithmetic for bounded public numeric fields, independent of Decimal context."""
+    if number is None or not number.is_finite():
+        raise ValueError('A finite numeric field is required')
+    parts = number.as_tuple()
+    if len(parts.digits) > 100 or abs(parts.exponent) > 100:
+        raise ValueError('Numeric field exceeds supported exact precision')
+    return Fraction(number)
+
+
+def _fraction_text(number):
+    # These price thresholds have terminating decimal representations.
+    with localcontext(Context(prec=500, rounding=ROUND_HALF_EVEN)):
+        return str(Decimal(number.numerator) / Decimal(number.denominator))
 
 
 def iso_day(value):
@@ -148,7 +165,8 @@ def rank_caps(instruments, prices, *, low=10., high=40.):
     lo, hi = decimal(low), decimal(high)
     if lo is None or hi is None or not 0 <= lo < hi <= 100:
         raise ValueError('برش صدکی نامعتبر است')
-    first, last = n-math.floor(n*hi/100)+1, n-math.floor(n*lo/100)
+    first = n - math.floor(n * _bounded_fraction(hi) / 100) + 1
+    last = n - math.floor(n * _bounded_fraction(lo) / 100)
     for row in rows:
         cap = row['market_cap_rial']
         lower = 1+sum(c > cap for c in known) if cap is not None else None
@@ -176,7 +194,15 @@ def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
     result['unavailable_price_fields']=[k for k,v in [('open_raw',op),('close_raw',last)] if v is None]
     if low>high or any(v is not None and (v<=0 or not low<=v<=high) for v in (op,last)):
         return result
-    dip, rally = ref*(1+decimal(dip_pct)/100), ref*(1+decimal(rally_pct)/100)
+    try:
+        for value in (*values.values(), op, last):
+            if value is not None:
+                _bounded_fraction(value)
+        ref_exact = _bounded_fraction(ref)
+        dip = ref_exact * (1 + _bounded_fraction(decimal(dip_pct)) / 100)
+        rally = ref_exact * (1 + _bounded_fraction(decimal(rally_pct)) / 100)
+    except (ValueError, OverflowError):
+        return result
     candidate = low <= dip and high >= rally
     open_proof,last_proof=op is not None and op<=dip,last is not None and last>=rally
     confirmed = candidate and (open_proof or last_proof)
@@ -184,7 +210,7 @@ def daily_evidence(row, *, dip_pct=-2., rally_pct=2.):
               'low_before_last' if last_proof else 'order_unknown')
     result.update(event_confirmed=True if confirmed else None if candidate else False,
                   event_possible=bool(candidate), evidence=reason,
-                  dip_level_rial=str(dip), rally_level_rial=str(rally))
+                  dip_level_rial=_fraction_text(dip), rally_level_rial=_fraction_text(rally))
     return result
 
 
@@ -220,7 +246,11 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
             if isinstance(raw.get('canceled'), bool) or raw.get('canceled') not in (0, 1):
                 raise ValueError('وضعیت ابطال معامله نامعلوم است')
             number, clock, price, volume = [decimal(raw.get(k)) for k in ('nTran', 'hEven', 'pTran', 'qTitTran')]
-            if any(v is None for v in (number, clock, price, volume)) or number <= 0 or number != int(number):
+            if any(v is None for v in (number, clock, price, volume)) or number <= 0:
+                raise ValueError('شماره یا داده معامله نامعتبر است')
+            for item in (number, clock, price, volume):
+                _bounded_fraction(item)
+            if number != int(number):
                 raise ValueError('شماره یا داده معامله نامعتبر است')
             if clock != int(clock) or not 0 <= int(clock)//10000 <= 23 or not 0 <= int(clock)//100 % 100 < 60 or not 0 <= int(clock) % 100 < 60:
                 raise ValueError('ساعت معامله نامعتبر است')
@@ -246,9 +276,13 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
             raise ValueError('قیمت ریزمعامله بیرون از کندل روز است')
         result.update(payload_date_verified=dates_verified, payload_identity_verified=identities_verified)
         count, volume = decimal(daily.get('trade_count')), decimal(daily.get('volume'))
-        total_value = sum(r['price']*r['volume'] for r in active)
-        total_volume = sum(r['volume'] for r in active)
+        total_value = sum((_bounded_fraction(r['price'])*_bounded_fraction(r['volume'])
+                           for r in active), Fraction())
+        total_volume = sum((_bounded_fraction(r['volume']) for r in active), Fraction())
         value = decimal(daily.get('value'))
+        for item in (count, volume, value):
+            if item is not None:
+                _bounded_fraction(item)
         invalid_present = any(daily.get(k) is not None and decimal(daily[k]) is None
                               for k in ('trade_count', 'value'))
         if (invalid_present or (count is not None and (count <= 0 or count != count.to_integral_value()))
@@ -272,8 +306,9 @@ def trade_evidence(observation, daily, *, dip_pct=-2., rally_pct=2.):
         if excess or (exhausted and not all(available_checks)):
             result['contradictory'] = True
             raise ValueError('جمع یا مسیر ریزمعاملات با آمار روز تعارض دارد؛ وقوع الگو تأیید نمی‌شود')
-        dip = decimal(daily['ref_price_raw'])*(1+decimal(dip_pct)/100)
-        rally = decimal(daily['ref_price_raw'])*(1+decimal(rally_pct)/100)
+        ref = _bounded_fraction(decimal(daily['ref_price_raw']))
+        dip = ref * (1 + _bounded_fraction(decimal(dip_pct)) / 100)
+        rally = ref * (1 + _bounded_fraction(decimal(rally_pct)) / 100)
         first = None
         for row in active:
             if first is None and row['price'] <= dip:

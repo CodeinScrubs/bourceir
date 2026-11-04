@@ -1,0 +1,21 @@
+<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
+<title>SYNTHETIC Farabi timing simulator</title>
+<style>body{font:16px sans-serif;margin:32px;background:#eef4f4}form{max-width:420px;background:white;padding:20px}input{display:block;margin:12px}table{background:white;margin-top:20px}td,th{padding:10px}#notice{direction:ltr}</style>
+<h1>SYNTHETIC — local timing simulator</h1><p id="notice">No broker connection. No real trading.</p>
+<div role="tab" aria-selected="true">خرید</div><div role="tab" aria-selected="true">سفارش عادی</div>
+<form><label>تعداد<input type="tel" value="7"></label><label>قیمت<input type="tel" value="100"></label>
+<div>معتبر تا امروز</div><button type="button">ارسال خرید</button></form>
+<div role="status" id="status">SYNTHETIC READY</div>
+<table><thead><tr><th>سمت</th><th>نماد</th><th>تعداد (انجام شده)</th><th>قیمت سفارش</th><th>قیمت لحظه‌ای</th><th>زمان</th><th>وضعیت سفارش</th></tr></thead><tbody id="orders"></tbody></table>
+<button id="reload" type="button">Reload simulator</button>
+<script>
+window.syntheticBenchmark=false;
+document.querySelector('form button').addEventListener('click',async()=>{
+  if(window.syntheticBenchmark)return;
+  const reply=await fetch('/api/orders?token=SEEDED_QUERY_SECRET',{method:'POST',headers:{'Content-Type':'application/json','X-Test-Secret':'SEEDED_HEADER_SECRET'},body:JSON.stringify({seed:'SEEDED_BODY_SECRET',synthetic:true})});
+  const result=await reply.json();
+  document.querySelector('#status').textContent='SYNTHETIC '+result.business_status;
+  document.querySelector('#orders').innerHTML='<tr><td>خرید</td><td>فکور</td><td>7 (0)</td><td>100</td><td>100</td><td>synthetic time</td><td>ناموفق</td></tr>';
+});
+document.querySelector('#reload').addEventListener('click',()=>location.reload());
+</script></html>

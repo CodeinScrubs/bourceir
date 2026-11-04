@@ -115,9 +115,9 @@ def test_inferred_calendar_conflict_is_unknown_without_discarding_the_raw_row(mo
     assert ('x', '2024-01-03') in result.index
 
 
-def test_missing_calendar_entry_stays_a_nonexecution_proxy_not_a_numeric_return():
+def test_missing_calendar_entry_stays_unknown_not_a_nonexecution_proxy():
     calendar = ['2024-01-01', '2024-01-02', '2024-01-03']
     outcome = row(prices(['2024-01-01', '2024-01-03']), calendar)
-    assert outcome.label_status_1d == 'entry_blocked'
+    assert outcome.label_status_1d == 'invalid_data'
     assert not outcome.entry_executable
     assert pd.isna(outcome.net_ret_1d)

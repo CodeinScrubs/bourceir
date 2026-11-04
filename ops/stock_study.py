@@ -56,7 +56,7 @@ def load_latest_study(root=None):
     if not pointer_file.exists():
         return None
     pointer=json.loads(pointer_file.read_text(encoding='utf-8'))
-    if pointer.get('version')!=STOCK_STUDY_VERSION:
+    if pointer.get('version') not in ('stock-study-v1', 'stock-study-v2', STOCK_STUDY_VERSION):
         raise ValueError('قرارداد مطالعه قدیمی است؛ نتیجه جاری فرض نمی‌شود')
     folder=(root/pointer['folder']).resolve()
     if not folder.is_relative_to(root) or folder==root:
@@ -65,7 +65,7 @@ def load_latest_study(root=None):
         if _sha(folder/name)!=pointer[key]:
             raise ValueError('اثر انگشت گزارش مطالعه ناسازگار است')
     result=json.loads((folder/'study.json').read_text(encoding='utf-8'))
-    if result.get('version')!=STOCK_STUDY_VERSION or result.get('study_id')!=pointer['study_id']:
+    if result.get('version')!=pointer['version'] or result.get('study_id')!=pointer['study_id']:
         raise ValueError('هویت گزارش مطالعه ناسازگار است')
     for prefix,manifest in ((folder,result['inputs']),(folder/'code',result['source_files_sha256'])):
         for name,digest in manifest.items():

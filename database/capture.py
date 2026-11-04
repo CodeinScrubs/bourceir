@@ -15,7 +15,7 @@ CAPTURE_FILES = ('brs.py', 'data_collector/scheduler.py', 'data_collector/tsetmc
                  'database/migrations/011_capture_evidence.sql', 'core/timeutils.py',
                  'ops/capture_audit.py', 'ops/intraday_audit.py', 'config/settings.py', 'requirements.lock.txt',
                  'core/capture_evidence.py', 'core/legacy_quotes.py', 'data_collector/base.py', 'core/quote_context.py',
-                 'core/feed_health.py')
+                 'core/feed_health.py', 'core/order_book.py')
 
 
 def canonical_json(value):

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from core.timeutils import is_canonical_iso_date
+
 
 @dataclass(frozen=True)
 class TimeFold:
@@ -13,6 +15,19 @@ class TimeFold:
     test_start: str
     test_end_exclusive: str
     embargo_sessions: int
+
+
+def preceding_price_observations(prices: pd.DataFrame, before: str) -> pd.DataFrame:
+    """Return each symbol's latest actual prior bar, independently of source row order."""
+    if (not isinstance(prices, pd.DataFrame) or prices.columns.duplicated().any()
+            or not {'date', 'symbol'} <= set(prices) or not is_canonical_iso_date(before)):
+        raise ValueError('ستون‌های نماد و تاریخ و مرز معتبر برای قیمت پیشین لازم است')
+    if any(not is_canonical_iso_date(day) for day in prices.date.unique()):
+        raise ValueError('تاریخ قیمت پیشین باید میلادی معتبر باشد')
+    earlier = prices.loc[prices.date.lt(before)]
+    if earlier.duplicated(['symbol', 'date']).any():
+        raise ValueError('قیمت پیشین با نماد/تاریخ تکراری نامعتبر است')
+    return earlier.sort_values(['symbol', 'date']).groupby('symbol', sort=False).tail(1)
 
 
 def time_folds(calendar, *, min_train_sessions=504, test_sessions=252, embargo_sessions=6, end_exclusive):

@@ -172,6 +172,14 @@ def capture_share_changes(provider,instruments,*,start,end_exclusive,capital_stu
             try:
                 observed=provider.get_share_change_observation(request['ins_code'])
                 if observed is not None:
+                    # The shared JSON transport also reports its HTTP status.
+                    # The v1 share-change receipt predates that field. Accept
+                    # exactly a successful native status, then preserve the
+                    # established byte-bound receipt schema for offline review.
+                    if isinstance(observed,dict) and set(observed)==OBSERVATION_KEYS|{'content','http_status'}:
+                        if type(observed['http_status']) is not int or observed['http_status']!=200:
+                            raise ValueError('پاسخ HTTP کامل و موفق برای منبع تعداد سهام لازم است')
+                        observed={k:v for k,v in observed.items() if k!='http_status'}
                     if not isinstance(observed,dict) or set(observed)!=OBSERVATION_KEYS|{'content'}:
                         raise ValueError('قرارداد رسید بایتی معتبر نیست')
                     observation={k:v for k,v in observed.items() if k!='content'}

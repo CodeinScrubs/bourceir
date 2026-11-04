@@ -7,12 +7,14 @@ import numpy as np
 import pandas as pd
 
 from backtest.fractions import SyntheticFractionBook
+from backtest.prepared import PRICE_SNAPSHOT_VERSION, PreparedPortfolioPrices, prepare_portfolio_prices
 from config import settings
-from core import market_rules
 from core.risk import finite_number
+from core.timeutils import is_canonical_iso_date
 
-PORTFOLIO_VERSION = "portfolio-v4"
-RISK_EXIT_VERSION = "portfolio-risk-floor-exit-v1"
+PORTFOLIO_VERSION = "portfolio-v8"
+RISK_EXIT_VERSION = "portfolio-risk-floor-exit-v2"
+ENTRY_ALLOCATION_VERSION = "portfolio-entry-allocation-v1"
 
 
 @dataclass(frozen=True)
@@ -48,19 +50,62 @@ class PortfolioResult:
     assumptions: dict
 
 
+class OffCalendarPriceError(ValueError):
+    """An observed in-window price conflicts with the declared replay calendar."""
+
+
 def _calendar(values):
     result = np.asarray(values).astype(str)
     if result.ndim != 1 or not len(result) or list(result) != sorted(set(result)):
         raise ValueError("تقویم باید یکتا، مرتب و غیرخالی باشد")
-    if pd.to_datetime(result, format="%Y-%m-%d", errors="coerce").isna().any():
+    if any(not is_canonical_iso_date(day) for day in result):
         raise ValueError("تاریخ تقویم معتبر نیست")
     return result
 
 
-def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
+def _checked_window(prices, selections, calendar, start, end):
+    """Reject conflicting observations in the requested window before book mutation.
+
+    A price before the replay window may provide warmup for a reference chain.
+    An explicitly bounded replay ignores decisions outside that window; without
+    an explicit boundary, every supplied decision must belong to the calendar.
+    Agreement with an inferred calendar does not prove its historical coverage.
+    """
+    if any(value is not None and not is_canonical_iso_date(value) for value in (start, end)):
+        raise ValueError('تاریخ مرز اجرای سبد باید میلادی استاندارد باشد')
+    if not isinstance(selections, pd.DataFrame) or selections.columns.duplicated().any() or not {'symbol', 'date'} <= set(selections):
+        raise ValueError('ستون نماد و تاریخ برای انتخاب‌های سبد لازم است')
+    if isinstance(prices, PreparedPortfolioPrices):
+        if prices.version != PRICE_SNAPSHOT_VERSION:
+            raise ValueError('Unsupported prepared-price contract')
+        price_dates = list(prices.sessions)
+        if sum(len(session) for session in prices.sessions.values()) != prices.row_count:
+            raise ValueError('تعداد ردیف‌های تصویر قیمت آماده ناقص است')
+    elif isinstance(prices, pd.DataFrame) and not prices.columns.duplicated().any() and {'symbol', 'date'} <= set(prices):
+        price_dates = prices.date.unique().tolist()
+    else:
+        raise ValueError('ستون نماد و تاریخ برای قیمت‌های سبد لازم است')
+    decision_dates = selections.date.unique().tolist()
+    if any(not is_canonical_iso_date(day) for day in [*price_dates, *decision_dates]):
+        raise ValueError('تاریخ ورودی سبد باید میلادی استاندارد و معلوم باشد')
+    days = [day for day in calendar if (start is None or day >= start) and (end is None or day < end)]
+    if not days:
+        raise ValueError('بازه اجرای سبد خالی است')
+    declared = set(calendar)
+    price_start = start if start is not None else calendar[0]
+    if any(day >= price_start and (day < end if end is not None else day <= calendar[-1])
+           and day not in declared for day in price_dates):
+        raise OffCalendarPriceError('تقویم اجرای سبد با تاریخ قیمت ناسازگار است؛ حذف ردیف مجاز نیست')
+    if any((start is None or day >= start) and (end is None or day < end) and day not in declared
+           for day in decision_dates):
+        raise ValueError('تقویم اجرای سبد با تاریخ انتخاب ناسازگار است؛ حذف انتخاب مجاز نیست')
+    return days
+
+
+def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections: pd.DataFrame, calendar,
                      config: PortfolioConfig, start: str | None = None, end: str | None = None,
                      dip_rule=None, *, cash_dividends=None, bonus_shares=None, subscription_rights=None,
-                     loss_floor_exit=False) -> PortfolioResult:
+                     loss_floor_exit=False, entry_allocation_fraction=None) -> PortfolioResult:
     """Decisions t -> next session; shared cash, slots, partial fills and delayed exits.
 
     Purchases precede sales in daily bookkeeping, so same-day sale proceeds cannot fund an earlier
@@ -69,8 +114,14 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     Unknown action/mark for an open position invalidates returns and halts the replay.
     """
     calendar = _calendar(calendar)
+    days = _checked_window(prices, selections, calendar, start, end)
     if type(loss_floor_exit) is not bool:
         raise ValueError('گزینه خروج پس از حد زیان باید بولی صریح باشد')
+    if entry_allocation_fraction is not None:
+        entry_allocation_fraction = finite_number(entry_allocation_fraction)
+        if not 0 < entry_allocation_fraction <= 1:
+            raise ValueError('سهم تخصیص خرید باید بزرگ‌تر از صفر و حداکثر یک باشد')
+    combined_dividends = None
     if subscription_rights is not None:
         from backtest.subscription_rights import LIMIT, SubscriptionRightsBook
 
@@ -79,9 +130,12 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             raise ValueError('دفتر مستقل حق‌تقدم و سرمایه در دامنه دقیق لازم است؛ سود نقدی داخل همین دفتر تعریف می‌شود')
     if bonus_shares is not None:
         from backtest.bonus_shares import BonusShareBook
+        from backtest.corporate_actions import BonusDividendBook
 
         if not isinstance(bonus_shares, BonusShareBook) or cash_dividends is not None:
             raise ValueError('دفتر مستقل سهام جایزه لازم است؛ ترکیب با سود نقدی هنوز تعریف نشده')
+        if isinstance(bonus_shares, BonusDividendBook):
+            combined_dividends = bonus_shares.dividends
     if cash_dividends is not None:
         from backtest.cash_dividends import CashDividendBook
 
@@ -91,31 +145,17 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     if dip_rule is not None:
         if dip_rule.hold != config.horizon or dip_rule.stop_loss is not None:
             raise ValueError('قاعده DIP باید هم‌افق سبد و بدون حد زیان باشد؛ این نسخه فقط خروج هدف/زمان را مدل می‌کند')
-    if prices.duplicated(["symbol", "date"]).any() or selections.duplicated(["symbol", "date"]).any():
+    if selections.duplicated(["symbol", "date"]).any():
         raise ValueError("نماد/تاریخ تکراری مجاز نیست")
-    required = {"symbol", "date", "low_raw", "high_raw", "close_raw", "close_final_raw", "ref_price_raw", "volume", "value"}
-    if not required <= set(prices):
-        raise ValueError("ستون‌های خام لازم قیمت موجود نیستند")
-    if dip_rule is not None and 'open_raw' not in prices:
+    prepared = prices if isinstance(prices,PreparedPortfolioPrices) else prepare_portfolio_prices(prices)
+    if prepared.version!=PRICE_SNAPSHOT_VERSION:
+        raise ValueError('Unsupported prepared-price contract')
+    if dip_rule is not None and not prepared.has_open:
         raise ValueError('قیمت گشایش برای مدل DIP لازم است')
-    prices = prices.sort_values(["symbol", "date"]).copy()
-    prices["vwap"] = market_rules.daily_vwap(prices)
-    prices["mark"] = market_rules.official_close(prices)
     share_book = bonus_shares if bonus_shares is not None else subscription_rights
-    if cash_dividends is not None or share_book is not None:
-        prices['previous_official'] = prices.groupby('symbol')['mark'].shift(1)
-        prices['previous_date'] = prices.groupby('symbol')['date'].shift(1)
-    prices["action"] = market_rules.corporate_action_factors(prices)
-    locks = market_rules.lock_flags(prices)
-    prices["up"], prices["down"] = locks["locked_up"], locks["locked_down"]
-    prices["valid"] = np.isfinite(prices[["vwap", "ref_price_raw", "mark"]]).all(axis=1)
-    prices["valid"] &= (prices["ref_price_raw"] > 0) & (prices["mark"] > 0)
-    by_day = {d: g.set_index("symbol").to_dict("index") for d, g in prices.groupby("date", sort=False)}
+    by_day = prepared.sessions
     order = selections.sort_values(["date", "rank", "symbol"]) if "rank" in selections else selections.sort_values(["date", "symbol"])
     selected = {d: g["symbol"].tolist() for d, g in order.groupby("date")}
-    days = [d for d in calendar if (start is None or d >= start) and (end is None or d < end)]
-    if not days:
-        raise ValueError("بازه اجرای سبد خالی است")
     if share_book is not None:
         share_book.start(days)
     positions, pending, executions, decisions, curve = {}, [], [], [], []
@@ -139,7 +179,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
     def unvalued_share_rights():
         if subscription_rights is not None:
             return subscription_rights.has_unvalued_claims or any(not math.isfinite(p['mark']) for p in positions.values())
-        return bonus_shares is not None and bonus_shares.pending_units > 0
+        return bonus_shares is not None and bonus_shares.has_unvalued_claims
 
     rights_pause = False
 
@@ -178,7 +218,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                     row = session.get(symbol)
                     if row is None:
                         continue
-                    if not row['valid'] or not math.isfinite(row['action']):
+                    if not row['mark_valid'] or not math.isfinite(row['action']):
                         raise ValueError('قیمت یا نوع اقدام برای دارایی/حق باز نامعلوم است')
                     if not np.isclose(row['action'], 1.0) or row['ref_price_raw'] != row['previous_official']:
                         share_book.check_action(symbol, day, row)
@@ -197,8 +237,8 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             if row is None:
                 continue
             factor = row["action"]
-            known_mark = all(math.isfinite(row[key]) and row[key] > 0 for key in ('mark', 'ref_price_raw'))
-            if not known_mark or (pos is not None and not row['valid']) or not math.isfinite(factor) or factor <= 0:
+            known_mark = row['mark_valid']
+            if not known_mark or not math.isfinite(factor) or factor <= 0:
                 note(day, symbol, "unknown_open_position")
                 invalid = True
                 break
@@ -251,7 +291,10 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             row = session.get(symbol)
             if row is None:
                 note(day, symbol, "no_session", decision_date=decision["date"])
-                continue
+                # An absent bar may be a halt or missing data. Neither the
+                # ordering nor the hypothetical fill is established by absence.
+                invalid = True
+                break
             if not row["valid"]:
                 note(day, symbol, "unknown_entry_execution", decision_date=decision["date"])
                 invalid = True
@@ -317,8 +360,19 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             if lot_dip is None and index < pos["due"] and not risk_exit_active:
                 continue
             row = session.get(symbol)
-            if row is None or not row["valid"] or row["down"]:
-                note(day, symbol, "exit_delayed")
+            if row is None:
+                note(day, symbol, "missing_exit_bar")
+                # A missing bar cannot establish that a pending exit failed.
+                invalid = True
+                break
+            if not row['valid']:
+                # An unknown price/capacity on a required execution day cannot
+                # be called a known failed order and filled profitably later.
+                note(day,symbol,'unknown_exit_execution')
+                invalid = True
+                break
+            if row['down']:
+                note(day,symbol,'exit_delayed')
                 continue
             exit_kind = 'loss_floor' if risk_exit_active else 'time'
             if lot_dip is not None:
@@ -388,7 +442,10 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             try:
                 credits, credit_cash, credit_realized = share_book.end_day(day, positions)
                 for pos in credits.values():
-                    pos.update(entry_date=day, due=index+1,
+                    due = index+1
+                    if combined_dividends is not None and bonus_shares.credit_exit_session is not None:
+                        due = max(due, day_position[bonus_shares.credit_exit_session])
+                    pos.update(entry_date=day, due=due,
                         entry_kind='rights_credit' if subscription_rights is not None else 'bonus_credit', target=None)
                 positions.update(credits)
                 cash += credit_cash
@@ -440,7 +497,9 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             curve[-1].update(priced_assets_rial=equity, uncredited_bonus_units=dict(
                 numerator=bonus_shares.pending_units.numerator, denominator=bonus_shares.pending_units.denominator),
                 unvalued_rights_pause=rights_pause, issuer_exposures=len(exposure_symbols()))
-            if bonus_shares.pending_units > 0:
+            if combined_dividends is not None:
+                curve[-1]['cash_dividend_receivable_face_rial'] = float(combined_dividends.outstanding_face_rial)
+            if unvalued_share_rights():
                 curve[-1]['equity_rial'] = np.nan
                 curve[-1]['noncash_receivable_rial'] = np.nan
         if subscription_rights is not None:
@@ -457,6 +516,18 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
             curve[-1]['risk_exit_requested'] = risk_exit_active
         if index + 1 < len(calendar) and (end is None or calendar[index + 1] < end) and not stopped and not rights_pause:
             reservable_cash = cash
+            per_position_budget = equity / config.max_positions
+            if entry_allocation_fraction is not None:
+                # Only decision-day information. Future closes cannot resize a
+                # pending order or retroactively free a reserve. Price movement
+                # may later change the actual weight; this is an entry budget.
+                if (not math.isfinite(curve[-1]['equity_rial']) or curve[-1]['stale_positions']
+                        or curve[-1].get('stale_fractional_exposures', 0)):
+                    if selected.get(day):
+                        note(day, '', 'allocation_unknown_stale_marks')
+                    continue
+                reservable_cash = max(0., min(cash, cash-(1-entry_allocation_fraction)*equity))
+                per_position_budget = equity*entry_allocation_fraction/config.max_positions
             occupied=exposure_symbols()
             slots = config.max_positions - len(occupied)
             for symbol in selected.get(day, []):
@@ -466,13 +537,19 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 row = session.get(symbol)
                 if row is None or not row["valid"]:
                     note(day, symbol, "invalid_decision")
-                    continue
-                budget = min(reservable_cash, equity / config.max_positions)
+                    # A selected decision with unknown inputs is not a known
+                    # no-trade/cash outcome and must not improve a backtest.
+                    invalid = True
+                    curve[-1]['equity_rial'] = np.nan
+                    break
+                budget = min(reservable_cash, per_position_budget)
                 pending.append(dict(date=day, symbol=symbol, value=row["value"], volume=row["volume"], budget=budget))
                 reservable_cash -= budget
                 if symbol not in occupied:
                     slots -= 1
                     occupied.add(symbol)
+        if invalid:
+            break
     equity_frame = pd.DataFrame(curve)
     values = pd.concat([pd.Series([config.initial_capital_rial]), equity_frame["equity_rial"]], ignore_index=True)
     drawdown = values / values.cummax() - 1
@@ -487,10 +564,16 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                    executions=len(executions), open_positions=position_count(), corporate_action_events=action_count,
                    noncash_receivable_rial=fractions.value(), noncash_receivable_cost_rial=fractions.cost,
                    fractional_exposures=fractions.records(),
-                   actual_corporate_entitlements_verified=action_count == 0,
+                   # Absence of a detected reference-price discontinuity does
+                   # not prove that real entitlements were absent or settled.
+                   actual_corporate_entitlements_verified=False,
                    stopped_new_entries=stopped, stale_mark_days=int((equity_frame['stale_positions'].gt(0)
                        | equity_frame.get('stale_fractional_exposures', pd.Series(0, index=equity_frame.index)).gt(0)).sum()))
-    assumptions = dict(version=PORTFOLIO_VERSION, config=asdict(config), fees=dict(settings.FEES),
+    assumptions = dict(version=PORTFOLIO_VERSION, engine_version=PORTFOLIO_VERSION,
+        valuation_price_basis='observed official close and reference; independent of execution VWAP',
+        missing_entry_bar_policy='unknown_entry_execution_and_no_total_return',
+        missing_exit_bar_policy='unknown_exit_execution_and_no_total_return',
+        config=asdict(config), fees=dict(settings.FEES),
         execution_model="bounded_daily_vwap_proxy" if not config.stress else "buy_high_sell_low_stress",
         corporate_action_model="synthetic_whole_shares_plus_noncash_fraction", same_day_sale_cash_reused=False,
         fractional_valuation='current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed',
@@ -498,6 +581,23 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         historical_same_day_resale_permissions_verified=False,
         limitations=["historical universe incomplete", "synthetic corporate actions are not actual entitlements",
                      "halting days retain stale marks", "daily volume is not proof of own fills", "no intraday stop execution"])
+    if entry_allocation_fraction is not None:
+        known = (equity_frame.equity_rial.notna() & equity_frame.equity_rial.gt(0)
+            & equity_frame.stale_positions.eq(0)
+            & equity_frame.get('stale_fractional_exposures', pd.Series(0, index=equity_frame.index)).eq(0))
+        invested = ((equity_frame.equity_rial-equity_frame.cash_rial)/equity_frame.equity_rial).where(known)
+        equity_frame['known_liquidation_proxy_invested_fraction'] = invested
+        metrics.update(entry_allocation_fraction=entry_allocation_fraction,
+            allocation_unknown_days=int((~known).sum()),
+            maximum_known_invested_fraction=None if invested.dropna().empty else float(invested.max()),
+            known_allocation_drift_days=int(invested.gt(entry_allocation_fraction+1e-12).sum()),
+            actual_economic_exposure_verified=False)
+        assumptions.update(entry_allocation_version=ENTRY_ALLOCATION_VERSION,
+            entry_allocation_fraction=entry_allocation_fraction,
+            allocation_basis='observed decision-day cash and net-sell-fee liquidation proxy; all pending budgets share the reserve',
+            per_position_budget='decision-day equity * allocation_fraction / max_positions',
+            new_decisions_paused_on_stale_marks=True, allocation_price_drift_rebalanced=False,
+            allocation_is_guaranteed_ongoing_weight=False)
     if dip_rule is not None:
         assumptions.update(dip_rule=asdict(dip_rule),
             time_exit_price_basis='last_trade_raw_at_session_end_minus_slippage',
@@ -536,7 +636,7 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
         metrics.update(actual_corporate_entitlements_verified=False, open_lots=len(positions),
             pending_bonus_units=rational(bonus_shares.pending_units), bonus_claims=bonus_shares.records(),
             bonus_pending_cost_basis_rial=rational(bonus_shares.pending_basis),
-            noncash_receivable_rial=None if bonus_shares.pending_units > 0 else 0.,
+            noncash_receivable_rial=None if unvalued_share_rights() else 0.,
             noncash_receivable_cost_rial=float(bonus_shares.pending_basis),
             issuer_exposures=len(exposure_symbols()), new_entries_paused_for_unvalued_rights=rights_pause,
             unvalued_fractional_issuers=len(bonus_shares.pending_symbols-bonus_shares.pending_whole_symbols),
@@ -563,6 +663,34 @@ def replay_portfolio(prices: pd.DataFrame, selections: pd.DataFrame, calendar,
                 'issuer registration/deposit is not holder credit; releases are explicit model inputs',
                 'pending and fractional shares have unknown fair value; no price-imputed cash',
                 'mixed cash/bonus or overlapping uncredited actions require a separate verified contract'])
+        from backtest.corporate_actions import PORTFOLIO_VERSION as COMBINED_PORTFOLIO_VERSION
+
+        if combined_dividends is not None:
+            dividends = combined_dividends
+            cash_income = float(dividends.total_paid_rial)
+            metrics.update(cash_dividend_income_rial=cash_income,
+                cash_dividend_receivable_face_rial=float(dividends.outstanding_face_rial),
+                stock_realized_net_rial=realized-cash_income-float(bonus_shares.total_fraction_realized),
+                cash_dividend_claims=dividends.records(), cash_dividend_ledger=dividends.ledger)
+            if unvalued and not invalid:
+                metrics['status'] = 'unvalued_corporate_action_path'
+            assumptions.update(version=COMBINED_PORTFOLIO_VERSION,
+                corporate_action_model='explicit_sequential_bonus_shares_and_cash_dividend_claims',
+                source_dividends=[asdict(e) for e in dividends.events],
+                source_dividend_payments=[asdict(p) for p in dividends.payments],
+                source_previous_price_sessions=dict(getattr(dividends, 'previous_price_sessions', {})),
+                dividend_record_snapshot_sessions=dict(getattr(dividends, 'record_snapshot_sessions', {})),
+                credited_share_exit_session=bonus_shares.credit_exit_session,
+                bonus_target_policy='original nominal targets unchanged; credited lots wait for next session and declared exit session',
+                bonus_release_timing='end_of_first_observed_session_on_or_after_explicit_date; disposal no earlier than next session and declared exit session',
+                dividend_settlement_verified=False, same_day_dividend_cash_reused=False,
+                risk_and_budget_basis='cash_plus_priced_tradable_lots_excluding_unvalued_bonus_and_dividend_claims',
+                limitations=[s for s in assumptions['limitations'] if
+                    s != 'mixed cash/bonus or overlapping uncredited actions require a separate verified contract']+[
+                    'simultaneous cash/bonus actions are rejected',
+                    'dividend entitlement on pending bonus shares is unknown and rejected',
+                    'meeting inventory snapshots use the supplied observed calendar, not a verified market calendar',
+                    'announced dividends and issuer registration do not prove holder payment or saleable shares'])
     if subscription_rights is not None:
         from backtest.bonus_shares import rational
         from backtest.subscription_rights import PORTFOLIO_VERSION as RIGHTS_PORTFOLIO_VERSION

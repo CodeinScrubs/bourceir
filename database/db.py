@@ -174,7 +174,7 @@ class DatabaseManager:
         symbol_fa = normalize_symbol(meta.get("symbol_fa", ""))
         if not symbol_fa:
             return None
-        ins_code = meta.get("ins_code") or None
+        ins_code = str(meta["ins_code"]) if meta.get("ins_code") else None
         now = now_tehran_iso()
         isin = meta.get("tse_code") if str(meta.get("tse_code") or "").startswith("IR") else None
         # فقط فیلدهای ارائه‌شده به‌روز می‌شوند؛ مقدار پیش‌فرض فقط هنگام درج ردیف جدید استفاده می‌شود
@@ -194,6 +194,8 @@ class DatabaseManager:
         }
         try:
             with self.conn:
+                if not self.conn.in_transaction:
+                    self.conn.execute('BEGIN IMMEDIATE')
                 row = None
                 if ins_code:
                     row = self.conn.execute("SELECT id FROM symbols WHERE ins_code = ?;", (ins_code,)).fetchone()
@@ -210,12 +212,16 @@ class DatabaseManager:
                         f"INSERT INTO symbols ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))});", vals
                     )
                     return cur.lastrowid
-                if ins_code:
-                    existing = self.conn.execute("SELECT ins_code FROM symbols WHERE id = ?;", (row["id"],)).fetchone()
-                    if existing["ins_code"] and existing["ins_code"] != ins_code:
-                        # معمولاً یعنی انتقال نماد بین بازارها (مثلاً فرابورس به بورس) با شناسه جدید
-                        logger.warning("شناسه TSETMC نماد «%s» از %s به %s تغییر کرد.", symbol_fa,
-                                       existing["ins_code"], ins_code)
+                existing = self.conn.execute("SELECT ins_code, tse_code FROM symbols WHERE id = ?;", (row["id"],)).fetchone()
+                if ins_code and existing["ins_code"] and existing["ins_code"] != ins_code:
+                    logger.error("تعارض شناسه TSETMC برای «%s»: شناسه قبلی %s و شناسه مشاهده‌شده %s؛ "
+                                 "ردیف قبلی و داده‌های وابسته تغییر نکردند.", symbol_fa, existing["ins_code"], ins_code)
+                    return None
+                if (isin and existing["tse_code"] and str(existing["tse_code"]).startswith("IR")
+                        and existing["tse_code"] != isin):
+                    logger.error("تعارض شناسه اوراق برای «%s»: شناسه قبلی %s و شناسه مشاهده‌شده %s؛ "
+                                 "نیازمند بررسی مستقل است.", symbol_fa, existing["tse_code"], isin)
+                    return None
                 updates = {k: v for k, v in fields.items() if v is not None}
                 updates.update({"symbol_fa": symbol_fa, "updated_at": now, "last_seen_at": now, "is_active": 1})
                 self.conn.execute(

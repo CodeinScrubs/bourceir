@@ -318,8 +318,16 @@ def cmd_research_recheck(args) -> int:
 def cmd_price_recovery(args) -> int:
     from ops.price_recovery import main
 
-    argv = ['--from-preflight', args.from_preflight] if args.from_preflight else ['--apply-run', args.apply_run]
-    argv += ['--max-rows', str(args.max_rows)]
+    if args.from_preflight:
+        argv = ['--from-preflight', args.from_preflight]
+    elif args.review_run:
+        argv = ['--review-run', args.review_run]
+    else:
+        argv = ['--apply-run', args.apply_run]
+    if args.from_preflight:
+        argv += ['--max-rows', str(args.max_rows if args.max_rows is not None else 5)]
+    elif args.max_rows is not None:
+        argv += ['--max-rows', str(args.max_rows)]
     if args.offset:
         argv += ['--offset', str(args.offset)]
     if args.include_warmup:
@@ -334,7 +342,7 @@ def cmd_price_recovery(args) -> int:
 def cmd_research_preflight(args) -> int:
     from ops.research_preflight import main as preflight
 
-    argv = ['--json', args.json]
+    argv = ['--json', args.json, '--detail-limit', str(args.detail_limit)]
     if args.before is not None:
         argv += ['--before', args.before]
     return preflight(argv)
@@ -520,6 +528,16 @@ def cmd_stock_study(args) -> int:
     return 0
 
 
+def cmd_rights_mark(args) -> int:
+    import json
+
+    from core.rights_mark import hypothetical_rights_mark
+
+    spec = json.loads(Path(args.spec).read_text(encoding='utf-8-sig'))
+    print(json.dumps(hypothetical_rights_mark(spec), ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_codal_document(args) -> int:
     import json
 
@@ -540,6 +558,16 @@ def cmd_codal_tables(args) -> int:
     return 0 if result['status'] == 'captured' else 1
 
 
+def cmd_codal_financial_cells(args) -> int:
+    import json
+
+    from ops.codal_financial_archive import capture_financial_statement
+
+    result = capture_financial_statement(args.url, args.expected_tracing_no)
+    print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+    return 0 if result['status'] == 'captured' else 1
+
+
 def cmd_codal_normalize(args) -> int:
     import json
 
@@ -547,6 +575,20 @@ def cmd_codal_normalize(args) -> int:
     result = normalize_codal_archive(args.archive)
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))
     return 0 if result['normalized']['verified'] else 2
+
+
+def cmd_codal_operating(args) -> int:
+    import json
+
+    from ops.codal_operating import capture_operating_report, review_operating_report
+
+    result = review_operating_report(args.archive) if args.review else capture_operating_report(args.archive)
+    metrics = result['result']['metrics']
+    print(json.dumps(dict(folder=result.get('folder', str(args.archive)), status=result['status'],
+        tracing_no=metrics.get('tracing_no'), row_statuses=metrics.get('row_statuses'),
+        exact_source_replay=result['exact_source_replay'], accepted_for_features=False,
+        accepted_for_signals=False, profitability_proven=False), ensure_ascii=False))
+    return 0 if result['status'] == 'observed' else 2
 
 
 def cmd_dip_diagnostics(args) -> int:
@@ -773,10 +815,50 @@ def cmd_market_review(args) -> int:
     return 0 if result['report']['status'] == 'observed' else 2
 
 
+def cmd_radar(args) -> int:
+    import json
+
+    from ops import jobs
+    from ops.opportunity_radar import status, verify, watch
+
+    if args.mode == 'start':
+        command=['radar','watch']
+        if args.root:
+            command+=['--root',args.root]
+        if args.new_run:
+            command+=['--new-run']
+        print(json.dumps(dict(started=jobs.start_job('opportunity-radar',command),
+                              worker=jobs.job_status('opportunity-radar')),ensure_ascii=False))
+        return 0
+    if args.mode == 'stop':
+        print(json.dumps(dict(stopped=jobs.stop_job('opportunity-radar')),ensure_ascii=False))
+        return 0
+    if args.mode == 'verify':
+        print(json.dumps(verify(args.root),ensure_ascii=False))
+        return 0
+    if args.mode == 'status':
+        result=status(args.root)
+        latest=(result.get('latest') or {}).get('report') or {}
+        print(json.dumps(dict(active=result['active'],worker=jobs.job_status('opportunity-radar'),
+            heartbeat=result.get('heartbeat'),scope=len(latest.get('scope',[])),
+            price_session_date=latest.get('price_session_date'),
+            observed_prices=sum(r['status']=='observed' for r in latest.get('rows',[])),
+            news_coverage=latest.get('news_coverage'),accepted_for_signals=False),ensure_ascii=False))
+        return 0
+    return watch(args.root,new_run=args.new_run,once=args.mode=='once',force_prices=args.force_prices)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BRS — سامانه نوسان‌گیری هوشمند بورس و فرابورس")
     parser.add_argument("-v", "--verbose", action="store_true", help="نمایش جزئیات بیشتر")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser('radar',help='رادار سراسری مشاهده و اطلاعیه؛ بدون سیگنال یا سفارش')
+    p.add_argument('mode',choices=['start','stop','status','watch','once','verify'])
+    p.add_argument('--root',default=None,help='پوشه مستقل داخل data/private')
+    p.add_argument('--new-run',action='store_true',help='ثبت نسخه تازه؛ سابقه قبلی حفظ می‌شود')
+    p.add_argument('--force-prices',action='store_true',help='یک دریافت قیمت با تاریخ واقعی منبع')
+    p.set_defaults(func=cmd_radar)
 
     p = sub.add_parser("doctor", help="بررسی سلامت سامانه")
     p.add_argument("--offline", action="store_true", help="بدون آزمایش اتصال اینترنت")
@@ -884,6 +966,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')
     p.add_argument('--json', default=str(settings.DATA_DIR / 'private' / 'research-preflight.json'))
+    p.add_argument('--detail-limit', type=int, default=1000, help='سقف جزئیات نقص قیمت؛ بین صفر تا ۱۰۰۰۰')
     p.set_defaults(func=cmd_research_preflight)
 
     p = sub.add_parser('trader-readiness', help='گزارش آفلاین نصب و داده بازار؛ تأیید سودآوری نیست')
@@ -897,12 +980,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--fetch', action='store_true', help='دریافت واقعی؛ بدون این گزینه فقط برنامه محلی ثبت می‌شود')
     p.set_defaults(func=cmd_research_recheck)
 
-    p = sub.add_parser('recover-prices', help='بازیابی گشایش/آخرین معامله گمشده از مسیر کامل؛ اعمال صریح با رسید و پشتیبان')
+    p = sub.add_parser('recover-prices', help='بررسی نامزد قیمت از ریزمعاملات؛ اصلاح نیازمند شاهد جداگانه کندل تاریخ‌دار است')
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument('--from-preflight', help='گزارش خصوصی کیفیت جاری برای انتخاب نمونه')
-    mode.add_argument('--apply-run', help='پوشه برنامه/شواهد محفوظ؛ هیچ دریافت شبکه‌ای ندارد')
+    mode.add_argument('--review-run', help='بازپخش فقط‌خواندنی شواهد محفوظ')
+    mode.add_argument('--apply-run', help='سازگاری قدیمی؛ نامزد صرفاً ریزمعامله اعمال نمی‌شود')
     p.add_argument('--fetch', action='store_true', help='دریافت واقعی ریزمعاملات؛ پیش‌فرض بدون شبکه')
-    p.add_argument('--max-rows', type=int, default=5, help='یک تا پنجاه مورد؛ ابتدا تازه‌ترین نقص‌های توسعه')
+    p.add_argument('--max-rows', type=int, default=None, help='یک تا پنجاه مورد برای جمع‌آوری؛ پیش‌فرض پنج')
     p.add_argument('--offset', type=int, default=0, help='آغاز دسته در فهرست مرتب همان گزارش ثابت؛ پیش‌فرض صفر')
     p.add_argument('--include-warmup', action='store_true', help='سابقه پیش از توسعه برای ورودی فیچر نیز بررسی شود؛ فقط پیش از holdout')
     p.add_argument('--review-note', default=None, help='توضیح بررسی برای اعمال صریح؛ تصدیق انسانی/بیرونی نیست')
@@ -943,6 +1027,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--observations',default=None,help='مشاهده عمومی محفوظ برای ارزش بازار فعلی؛ اختیاری')
     p.add_argument('--news',default=None,help='فهرست اطلاعیه عمومی با زمان انتشار؛ پیش‌فرض آرشیو محلی')
     p.set_defaults(func=cmd_stock_study)
+
+    p = sub.add_parser('rights-mark', help='ارزش‌گذاری فرضی سهم و حق‌تقدم با ورودی صریح؛ بدون سفارش')
+    p.add_argument('--spec', required=True, help='فایل JSON شامل فرض‌ها، قیمت‌ها و تاریخ‌های صریح')
+    p.set_defaults(func=cmd_rights_mark)
 
     p = sub.add_parser('query',help='پرسش توصیفی ارزش شرکت و ترتیب منفی به مثبت؛ بدون سیگنال')
     p.add_argument('--spec',default=None,help='قرارداد JSON با شرط‌های مجاز؛ کد اجرا نمی‌شود')
@@ -1003,9 +1091,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--expected-tracing-no', required=True, type=int, help='شماره پیگیری مستقل از فهرست اطلاعیه‌ها')
     p.set_defaults(func=cmd_codal_tables)
 
+    p = sub.add_parser('codal-financial-cells', help='حفظ پژوهشی سلول‌های صورت مالی؛ بدون تأیید ارقام یا تولید سیگنال')
+    p.add_argument('--url', required=True, help='پیوند عمومی گزارش صورت مالی کدال')
+    p.add_argument('--expected-tracing-no', required=True, type=int, help='شماره پیگیری مستقل از فهرست اطلاعیه‌ها')
+    p.set_defaults(func=cmd_codal_financial_cells)
+
     p = sub.add_parser('codal-normalize', help='تطبیق سخت‌گیر واحد و ستون ماهانه در خروجی مستقل؛ بدون ارتقای هویت سند')
     p.add_argument('--archive', required=True, help='پوشه CODALTABLE محفوظ')
     p.set_defaults(func=cmd_codal_normalize)
+    p = sub.add_parser('codal-operating', help='مقدار فروش و نرخ ضمنی با واحد صریح؛ بدون فیچر یا سیگنال')
+    p.add_argument('--archive', required=True, help='پوشه CODALTABLE ورودی یا OPERATING برای بازخوانی')
+    p.add_argument('--review', action='store_true', help='بازخوانی آفلاین OPERATING محفوظ بدون منبع اولیه')
+    p.set_defaults(func=cmd_codal_operating)
     return parser
 
 

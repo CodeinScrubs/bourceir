@@ -5,10 +5,10 @@
 قرارداد اجرا (همان موتور بکتست؛ قیمت در بازه روز محدود می‌شود؛ پرشدن واقعی سفارش از OHLC اثبات نمی‌شود):
 - تصمیم: پایان روز t (فقط با داده تا پایان t). معامله با قیمت پایانی روز t ممکن نیست، چون بعد از بسته شدن
   بازار محاسبه می‌شود.
-- ورود: «روز معاملاتی بعدی بازار» به میانگین موزون قیمت آن روز (ارزش ÷ حجم) + لغزش. اگر نماد آن روز ردیف
-  معامله نداشت یا صف خرید قفل بود، ورود در مدل انجام نمی‌شود؛ نبود ردیف به‌تنهایی توقف نماد را اثبات نمی‌کند.
-- خروج: h جلسه معاملاتی بازار بعد از روز ورود، به میانگین موزون آن روز − لغزش. اگر آن روز صف فروش قفل یا نماد
-  متوقف بود، خروج به اولین روز قابل فروش بعدی منتقل می‌شود (گیر افتادن در صف/توقف، ریسک واقعی است).
+- ورود: «روز معاملاتی بعدی بازار» به میانگین موزون قیمت آن روز (ارزش ÷ حجم) + لغزش. نبود ردیف آن روز
+  نتیجه را نامعلوم می‌کند؛ صف خرید با تقریب روزانه مدل می‌شود و خودِ پرشدن واقعی را اثبات نمی‌کند.
+- خروج: h جلسه معاملاتی بازار بعد از روز ورود، به میانگین موزون آن روز − لغزش. صف فروش با تقریب روزانه
+  مدل می‌شود؛ نبود ردیف در بازه نگهداری، توقف یا خروج با تأخیر را اثبات نمی‌کند و نتیجه نامعلوم می‌ماند.
 - اقدام شرکتی با ضریب مصنوعی تعداد سهم مدل می‌شود؛ نوع رویداد، زمان وصول سود و قابلیت فروش سهام جدید تأیید نشده‌اند.
   شمار عبور از این رویداد جدا گزارش می‌شود؛ نتیجه، برآورد پژوهشی است.
 - کارمزد خرید و فروش از config (منبع یکتا).
@@ -28,8 +28,9 @@ import pandas as pd
 
 from config import settings
 from core import market_rules
+from core.price_quality import numeric_prices
 
-LABEL_SET_VERSION = "labels-v5"   # calendar-conflicted outcome paths remain unknown
+LABEL_SET_VERSION = "labels-v8"   # invalid raw execution inputs remain unknown
 DEFAULT_HORIZONS = (1, 2, 3, 5)
 CALENDAR_MIN_SYMBOLS = 20          # روزی «روز معاملاتی بازار» است که دست‌کم این تعداد نماد معامله داشته باشند
 
@@ -37,30 +38,35 @@ CALENDAR_MIN_SYMBOLS = 20          # روزی «روز معاملاتی بازا
 def market_calendar(prices: pd.DataFrame, min_symbols: Optional[int] = None) -> np.ndarray:
     """تقویم معاملاتی بازار از خود داده: روزهایی که دست‌کم min_symbols نماد معامله داشته‌اند (مرتب)."""
     min_symbols = CALENDAR_MIN_SYMBOLS if min_symbols is None else min_symbols
-    counts = prices.loc[prices["volume"] > 0].groupby("date")["symbol"].nunique()
+    volume = numeric_prices(prices, ('volume',))['volume']
+    active = volume.gt(0) & volume.eq(np.floor(volume))
+    counts = prices.loc[active].groupby("date")["symbol"].nunique()
     return np.array(sorted(counts.index[counts >= min_symbols]))
 
 
 def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[int],
                    buy_cost: float, sell_keep: float) -> pd.DataFrame:
-    """برچسب‌های یک نماد. df: ردیف‌های همان نماد، مرتب بر اساس تاریخ، فقط روزهای دارای معامله."""
+    """برچسب یک نماد؛ ردیف ناسازگار یا با فعالیت نامعلوم برای تشخیص نقص حفظ می‌شود."""
     n = len(df)
     dates = df["date"].to_numpy().astype(str)
     on_calendar = np.isin(dates, calendar)
     # Keep anomalous observations in the path; silently dropping them could change
     # the corporate-action chain and extrema while appearing to repair execution.
     off_calendar_cum = np.r_[0, np.cumsum(~on_calendar)]
+    on_calendar_cum = np.r_[0, np.cumsum(on_calendar)]
+    calendar_pos = np.searchsorted(calendar, dates)
     vwap = market_rules.daily_vwap(df).to_numpy(dtype=float)
     locks = market_rules.lock_flags(df)
     locked_up = locks["locked_up"].to_numpy()
     locked_down = locks["locked_down"].to_numpy()
-    high = df["high_raw"].to_numpy(dtype=float)
-    low = df["low_raw"].to_numpy(dtype=float)
+    numeric = numeric_prices(df, ('high_raw', 'low_raw', 'ref_price_raw', 'value'))
+    high = numeric['high_raw'].to_numpy(dtype=float)
+    low = numeric['low_raw'].to_numpy(dtype=float)
     # لگاریتم تجمعی ضریب اقدام شرکتی: ضرب ضرایب روزهای (j, k] = exp(cum[k] - cum[j])
     factors = market_rules.corporate_action_factors(df).to_numpy(dtype=float)
     cum = np.cumsum(np.log(np.where(factors > 0, factors, 1.0)))
 
-    out: Dict[str, np.ndarray] = {"date": dates, "value": df["value"].to_numpy(dtype=float)}
+    out: Dict[str, np.ndarray] = {"date": dates, "value": numeric['value'].to_numpy(dtype=float)}
 
     # روز ورود = روز معاملاتی بعدی بازار؛ نماد باید همان روز معامله داشته باشد
     cal_pos = np.searchsorted(calendar, dates, side="right")          # اندیس روز بعدی بازار در تقویم
@@ -70,8 +76,7 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
     j_ok = has_next & (j < n)
     j_safe = np.minimum(j, n - 1)
     j_ok &= dates[j_safe] == entry_date
-    refs = df["ref_price_raw"].to_numpy(dtype=float)
-    execution_valid = np.isfinite(vwap) & np.isfinite(refs) & (refs > 0)
+    execution_valid = np.isfinite(vwap) & market_rules.lock_inputs_known(df).to_numpy(dtype=bool)
     entry_observed_end = np.searchsorted(dates, entry_date, side="right")
     entry_calendar_conflict = ~on_calendar | (has_next & (
         off_calendar_cum[entry_observed_end] - off_calendar_cum[np.arange(n)] > 0))
@@ -97,16 +102,22 @@ def _symbol_labels(df: pd.DataFrame, calendar: np.ndarray, horizons: Iterable[in
         valid = entry_executable & planned_ok & (p < n) & (k < n)
         k_safe = np.minimum(k, n - 1)
         status = np.full(n, "censored", dtype=object)
-        status[has_next & (~j_ok | locked_up[j_safe])] = "entry_blocked"
+        status[has_next & j_ok & locked_up[j_safe]] = "entry_blocked"
         bad_entry = j_ok & ~execution_valid[j_safe]
         bad_window = valid & ((invalid_cum[k_safe] - invalid_cum[j_safe]) > 0)
         # When exit is not yet observable, a known calendar conflict in the held
         # prefix is still invalid data, not merely an unresolved future outcome.
         observed_end = np.where(planned_ok & (k < n), k, n - 1)
+        invalid_observed_prefix = entry_executable & ((invalid_cum[observed_end] - invalid_cum[j_safe]) > 0)
         calendar_window_conflict = entry_executable & (
             off_calendar_cum[observed_end + 1] - off_calendar_cum[j_safe] > 0)
+        # Every market session in a completed holding interval needs an observed
+        # bar: an absent session might contain an exit or a corporate event.
+        holding_gap = valid & ((calendar_pos[k_safe] - calendar_pos[j_safe]) !=
+                               (on_calendar_cum[k_safe + 1] - on_calendar_cum[j_safe + 1]))
         status[valid & ~bad_window] = "complete"
-        status[bad_entry | bad_window | entry_calendar_conflict | calendar_window_conflict] = "invalid_data"
+        status[(has_next & ~j_ok) | bad_entry | bad_window | invalid_observed_prefix | entry_calendar_conflict |
+               calendar_window_conflict | holding_gap] = "invalid_data"
         valid &= status == "complete"
         out[f"label_status_{h}d"] = status
         out[f"planned_exit_date_{h}d"] = planned_date
@@ -160,7 +171,11 @@ def compute_labels(prices: pd.DataFrame, horizons: Iterable[int] = DEFAULT_HORIZ
         return pd.DataFrame(columns=["date", "symbol"])
     if prices.duplicated(["symbol", "date"]).any():
         raise ValueError("برای هر نماد و تاریخ فقط یک ردیف قیمت مجاز است")
-    prices = prices.loc[prices["volume"] > 0].sort_values(["symbol", "date"])
+    totals = numeric_prices(prices, ('volume', 'value'))
+    # A zero-volume row is known not to trade only when value is also exactly
+    # zero. Keep contradictory or missing totals in the path as invalid evidence.
+    known_no_trade = totals.volume.eq(0) & totals.value.eq(0)
+    prices = prices.loc[~known_no_trade].sort_values(["symbol", "date"])
     calendar = (market_calendar(prices) if calendar is None else np.asarray(calendar)).astype(str)
     if calendar.ndim != 1 or not len(calendar):
         raise ValueError("تقویم معاملاتی کافی نیست؛ پوشش بازار را بررسی کنید یا تقویم صریح بدهید")

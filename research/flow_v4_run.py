@@ -22,11 +22,11 @@ from database.flow_data import load_flow_inputs
 from features.provenance import assert_compatible_inputs
 from research.flow_run import _rank_diagnostics, _summary, format_flow_report
 from research.labels import market_calendar
-from research.portfolio_run import _picks, select_from_past, verified_baseline_inputs
+from research.portfolio_run import BASELINE_SELECTION_VERSION, _picks, select_from_past, verified_baseline_inputs
 from research.probability_run import _dump
 from research.run import _deduplicate_input, _sha256, archive_research_code, research_code_fingerprint
 from research.uncertainty import compare_equity_curves
-from research.walkforward import time_folds
+from research.walkforward import preceding_price_observations, time_folds
 
 VERSION = 'flow-portfolio-v4'
 HORIZONS = (1, 2)
@@ -97,6 +97,7 @@ def run_flow_v4(db, *, source_id, initial_capital_rial=None, min_train_sessions=
         frame.to_parquet(path, index=False, compression='zstd')
         inputs[name] = _deduplicate_input(path, root / 'objects')
     protocol = dict(version=VERSION, filter_version=FLOW_FILTER_V4_VERSION, portfolio_version=PORTFOLIO_VERSION,
+        baseline_selection_version=BASELINE_SELECTION_VERSION,
         source_id=source_id, source_hashes=source_hashes, source_report_sha256=source_sha, inputs=inputs,
         config=asdict(config), horizons=list(HORIZONS), random_seeds=list(SEEDS), modes=modes, candidate_modes=candidates,
         definitions={n: list(filter_conditions_v4(pd.DataFrame(), n).columns) for n in V4_FILTERS},
@@ -131,12 +132,13 @@ def run_flow_v4(db, *, source_id, initial_capital_rial=None, min_train_sessions=
     panel = panel.loc[(panel.date >= cfg['dev_start']) & (panel.value >= cfg['min_daily_value_rial'])]
     results, accumulated, uncertainties = [], {}, []
     for index, fold in enumerate(folds):
-        chosen, training = select_from_past(panel, fold, HORIZONS, cfg['top_k'])
+        chosen, training = select_from_past(panel, fold, HORIZONS, cfg['top_k'], calendar=calendar)
         days = calendar[(calendar >= fold.test_start) & (calendar < fold.test_end_exclusive)]
         selection_end = days[max(0, len(days) - max(HORIZONS) - 1)]
         test = panel.loc[(panel.date >= fold.test_start) & (panel.date < selection_end)]
-        prior = prices.loc[prices.date < fold.test_start].groupby('symbol', sort=False).tail(1)
-        replay_prices = pd.concat([prior, prices.loc[prices.date.isin(days)]], ignore_index=True)
+        prior = preceding_price_observations(prices, fold.test_start)
+        current = prices.loc[prices.date.ge(fold.test_start) & prices.date.lt(fold.test_end_exclusive)]
+        replay_prices = pd.concat([prior, current], ignore_index=True)
         benchmark = _picks(test, chosen['strategy'], cfg['top_k']) if chosen else pd.DataFrame(columns=['date', 'symbol', 'rank'])
         jobs = {'past_baseline': (benchmark, replace(config, horizon=chosen['horizon'] if chosen else 1)),
                 'past_baseline_stress': (benchmark, replace(config, horizon=chosen['horizon'] if chosen else 1, stress=True))}

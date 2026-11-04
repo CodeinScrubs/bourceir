@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.timeutils import TEHRAN_TZ
-from ops.board_status import read_board_status
+from ops.board_status import CURRENT_BOARD_VERSION, read_board_status
 
 
 def fixture(tmp_path):
@@ -23,6 +23,13 @@ def test_absent_status(tmp_path):
     assert read_board_status(tmp_path)['state'] == 'absent'
 
 
+def test_dashboard_current_version_matches_watcher_engine():
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[1] / 'core' / 'board_alerts_v3.mjs'
+    assert f"export const version = '{CURRENT_BOARD_VERSION}';" in engine.read_text(encoding='utf-8')
+
+
 def test_current_stale_future_and_stopped(tmp_path):
     root, archive, at, _, status = fixture(tmp_path)
     assert read_board_status(root, at=at)['state'] == 'current'
@@ -31,6 +38,50 @@ def test_current_stale_future_and_stopped(tmp_path):
     status['running'] = False
     (archive / 'status.json').write_text(json.dumps(status), encoding='utf-8')
     assert read_board_status(root, at=at)['state'] == 'stale'
+
+
+@pytest.mark.parametrize('version,expected', [
+    ('visible-board-alerts-v1', 'current'),
+    ('visible-board-alerts-v2', 'current'),
+    ('visible-board-alerts-v3', 'current'),
+    ('visible-board-alerts-unknown', 'invalid'),
+    (None, 'invalid'),
+])
+def test_known_board_versions_and_unknown_version(tmp_path, version, expected):
+    root, archive, at, _, status = fixture(tmp_path)
+    status['version'] = version
+    (archive / 'status.json').write_text(json.dumps(status), encoding='utf-8')
+    assert read_board_status(root, at=at)['state'] == expected
+
+
+@pytest.mark.parametrize('version,warning_expected', [
+    ('visible-board-alerts-v1', True),
+    ('visible-board-alerts-v2', True),
+    ('visible-board-alerts-v3', False),
+])
+def test_dashboard_warns_if_a_previous_watcher_is_still_running(tmp_path, monkeypatch, version, warning_expected):
+    from streamlit.testing.v1 import AppTest
+
+    from config import settings
+    from core.timeutils import now_tehran_iso
+
+    root, archive, _, _, status = fixture(tmp_path)
+    status.update(version=version, updated_at=now_tehran_iso())
+    (archive / 'status.json').write_text(json.dumps(status), encoding='utf-8')
+    monkeypatch.setattr(settings, 'DATA_DIR', root.parent)
+    app = AppTest.from_string('from dashboard.board_alerts import board_alert_panel\nboard_alert_panel()').run()
+    assert not app.exception
+    assert any('نسخه قبلی' in warning.value for warning in app.warning) is warning_expected
+
+
+def test_dashboard_missing_version_stays_explicit_without_crashing(isolated_board_monitor):
+    from streamlit.testing.v1 import AppTest
+
+    isolated_board_monitor(dict(state='current', url='http://127.0.0.1:1',
+                               status=dict(boards=[], alerts=[])))
+    app = AppTest.from_string('from dashboard.board_alerts import board_alert_panel\nboard_alert_panel()').run()
+    assert not app.exception
+    assert any('نسخه پایش نامعلوم' in warning.value for warning in app.warning)
 
 
 @pytest.mark.parametrize('url', ['http://evil.test:12345', 'http://127.0.0.1:12345/?token=secret',

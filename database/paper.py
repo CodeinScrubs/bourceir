@@ -20,13 +20,13 @@ from core.paper import (
     quote_fill,
     text,
 )
-from core.risk import finite_number
-from core.screening import current_daily_row, current_snapshot, expected_completed_session
+from core.risk import finite_number, live_snapshot_blockers
+from core.screening import current_daily_row, expected_completed_session
 from core.text import normalize_symbol
 from core.timeutils import TEHRAN_TZ, is_trading_session, now_tehran
 from database.broker import BrokerRepository
 
-CODE_FILES = ('core/paper.py', 'core/journal.py', 'core/risk.py', 'core/screening.py',
+CODE_FILES = ('core/paper.py', 'core/journal.py', 'core/risk.py', 'core/order_book.py', 'core/screening.py',
               'core/market_rules.py', 'core/client_quality.py', 'core/timeutils.py', 'database/paper.py',
               'core/text.py', 'config/settings.py', 'database/broker.py',
               'database/migrations/013_paper_portfolios.sql', 'database/migrations/014_paper_opening_holdings.sql',
@@ -337,8 +337,7 @@ class PaperRepository:
             market = self._market(idea['symbol_id'], at)
             snapshot, daily = market['snapshot'], market['daily']
             price, mark_date, basis = None, None, None
-            if snapshot and all(current_snapshot(snapshot.get(k), at) and aware(snapshot[k]) <= at
-                                for k in ('captured_at', 'provider_timestamp')):
+            if snapshot and not live_snapshot_blockers(snapshot, at):
                 try:
                     last, bid = finite_number(snapshot['last_price']), finite_number(snapshot['bid_price_1'])
                     lower, upper = finite_number(snapshot['price_limit_down']), finite_number(snapshot['price_limit_up'])

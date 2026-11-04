@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtest.portfolio import RISK_EXIT_VERSION, replay_portfolio
+from backtest.portfolio import PORTFOLIO_VERSION, RISK_EXIT_VERSION, replay_portfolio
 from tests.test_portfolio import config, history, picks
 
 
@@ -28,7 +28,7 @@ def test_loss_floor_requests_next_session_exit_before_original_due_date(stress):
     assert old.executions.loc[old.executions.side.eq('sell'), 'date'].iloc[0] == days[7]
     assert result.executions.loc[result.executions.side.eq('buy'), 'date'].lt(days[2]).all()
     assert result.metrics['risk_exit_fully_liquidated']
-    assert result.assumptions['version'] == RISK_EXIT_VERSION and result.assumptions['base_accounting_version'] == 'portfolio-v4'
+    assert result.assumptions['version'] == RISK_EXIT_VERSION and result.assumptions['base_accounting_version'] == PORTFOLIO_VERSION
     assert not result.assumptions['risk_exit_loss_cap_guaranteed']
     assert result.metrics['total_return'] < -.15  # A request is not a guaranteed loss cap.
     daily = prices.loc[prices.date.eq(days[3])].iloc[0]
@@ -46,10 +46,22 @@ def test_unfinished_session_low_does_not_trigger_retrospective_same_day_stop():
     assert 'loss_floor' not in set(result.executions.get('exit_kind', []))
 
 
-def test_locked_and_missing_sessions_keep_requested_exit_pending():
+def test_missing_session_makes_requested_exit_unknown():
     prices, days = shock()
     prices = prices.loc[prices.date.ne(days[3])].copy()
+    result = replay_portfolio(prices, picks(days[:1], ('a',)), days,
+                              config(max_positions=1, horizon=7, max_loss_pct=.15), loss_floor_exit=True)
+    assert result.metrics['status'] == 'invalid_data' and result.metrics['total_return'] is None
+    assert not result.executions.side.eq('sell').any()
+    assert result.decisions.loc[result.decisions.status.eq('missing_exit_bar'), 'date'].tolist() == [days[3]]
+    assert pd.isna(result.equity.iloc[-1].equity_rial)
+
+
+def test_observed_locked_sessions_keep_requested_exit_pending():
+    prices, days = shock()
+    prices.loc[prices.date.eq(days[3]), ['open_raw', 'low_raw', 'high_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'value']] = [58, 58, 58, 58, 58, 60, 58000]
     prices.loc[prices.date.eq(days[4]), ['open_raw', 'low_raw', 'high_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'value']] = [55, 55, 55, 55, 55, 60, 55000]
+    prices.loc[prices.date.eq(days[4]), 'ref_price_raw'] = 58
     prices.loc[prices.date.eq(days[5]), 'ref_price_raw'] = 55
     result = replay_portfolio(prices, picks(days[:1], ('a',)), days,
                               config(max_positions=1, horizon=7, max_loss_pct=.15), loss_floor_exit=True)
@@ -57,7 +69,7 @@ def test_locked_and_missing_sessions_keep_requested_exit_pending():
     assert sells.date.iloc[0] == days[5]
     delayed = result.decisions.loc[result.decisions.status.eq('exit_delayed')]
     assert set(delayed.date) == {days[3], days[4]}
-    assert result.equity.loc[result.equity.date.eq(days[3]), 'stale_positions'].iloc[0] == 1
+    assert result.equity.loc[result.equity.date.eq(days[3]), 'stale_positions'].iloc[0] == 0
 
 
 def test_capacity_constrained_liquidation_uses_multiple_sessions_and_charges_fees_once():

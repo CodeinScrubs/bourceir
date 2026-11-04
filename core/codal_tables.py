@@ -280,6 +280,10 @@ def normalize_monthly_tables(data, *, available_at, observed_at, archived_at, id
                 raise ValueError('هر ستون فروش به دقیقاً یک تاریخ نمایان نیاز دارد')
             period = next(iter(dates))
             month = _month_number(period)
+            roles = [phrase for phrase in ('دوره یک ماهه منتهی به', 'ماه قبل', 'دوره مشابه سال قبل')
+                     if phrase in text]
+            if len(roles) != 1:
+                raise ValueError('نقش ماهانه ستون باید صریح و یکتا باشد؛ سربرگ متناقض پذیرفته نیست')
             if 'دوره یک ماهه منتهی به' in text:
                 role = 'current'
                 if period != report['period_end_jalali']:

@@ -29,6 +29,7 @@ try {
         } catch { return $false }
     }
     if (-not (Test-CaptureRuntime)) {
+        if ($Check) { throw 'Capture runtime is unavailable. No installation was attempted; run SETUP_FARABI.bat to install or repair it.' }
         if ($customRuntime) { throw 'Custom capture runtime is unavailable. Check Node.js, Playwright and browser paths.' }
         Write-Host 'Installing or repairing the local read-only capture runtime...'
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'setup_farabi.ps1')

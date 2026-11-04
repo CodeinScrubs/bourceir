@@ -6,6 +6,7 @@
 """
 
 import hashlib
+import io
 import json
 import logging
 import math
@@ -22,8 +23,8 @@ from core.timeutils import now_tehran_iso, to_jalali
 from database.db import DatabaseManager
 from features.provenance import assert_compatible_inputs, feature_environment
 from features.store import _code_fingerprint, _git_commit, load_feature_snapshot
-from research.baselines import STRATEGIES, run_baselines
-from research.labels import LABEL_SET_VERSION, compute_labels
+from research.baselines import STRATEGIES, _entry_masks, run_baselines
+from research.labels import LABEL_SET_VERSION, compute_labels, market_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -164,13 +165,22 @@ def research_panel(labels: pd.DataFrame, features: pd.DataFrame, start: str, end
     if end and "entry_date" in panel:
         for status in [c for c in panel if c.startswith("label_status_")]:
             suffix = status.removeprefix("label_status_")
-            crossing = (panel["entry_date"] >= end) | (panel[f"exit_date_{suffix}"] >= end)
-            crossing |= panel[f"planned_exit_date_{suffix}"] >= end
+            _, blocked = _entry_masks(panel, int(suffix.removesuffix('d')))
+            known_block = blocked & (panel['entry_date'] < end)
+            crossing = panel['entry_date'] >= end
+            crossing |= ((panel[f'exit_date_{suffix}'] >= end) |
+                         (panel[f'planned_exit_date_{suffix}'] >= end)) & ~known_block
             panel.loc[crossing, status] = "censored"
             for prefix in ("net_ret_", "mfe_", "mae_", "exit_delay_", "corporate_actions_"):
                 for column in (f"{prefix}{suffix}", f"{prefix}{suffix}_worst"):
                     if column in panel:
                         panel.loc[crossing, column] = float("nan")
+        # The scheduled entry date may be useful for censoring, but the actual
+        # entry outcome at or after the boundary was not yet observable.
+        future_entry = panel['entry_date'] >= end
+        if future_entry.any() and 'entry_executable' in panel:
+            panel['entry_executable'] = panel['entry_executable'].astype('boolean')
+            panel.loc[future_entry, 'entry_executable'] = pd.NA
     return panel
 
 
@@ -231,6 +241,13 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
     for name in ("labels.parquet", "prices.parquet"):
         _deduplicate_input(label_dir / name, RESEARCH_ROOT / "objects")
     labels = pd.read_parquet(label_dir / "labels.parquet")
+    price_bytes = (label_dir / 'prices.parquet').read_bytes()
+    if hashlib.sha256(price_bytes).hexdigest() != label_manifest['raw_prices_sha256']:
+        raise ValueError('اثر انگشت قیمت منبع تقویم پژوهش ناسازگار است')
+    calendar_prices = pd.read_parquet(io.BytesIO(price_bytes), columns=['date', 'symbol', 'volume'])
+    if cutoff and calendar_prices['date'].ge(cutoff).any():
+        raise ValueError('منبع تقویم شامل دوره مهروموم‌شده است')
+    calendar = market_calendar(calendar_prices)
     if cutoff:
         features = features.loc[features["date"] < cutoff].copy()
     artifact_dir = RESEARCH_ROOT / experiment_id
@@ -252,11 +269,13 @@ def run_research(db: DatabaseManager, unseal_holdout: bool = False, random_trial
     results: Dict[str, Any] = {}
     for name, (start, end) in periods.items():
         panel = research_panel(labels, features, start, end, cfg["min_daily_value_rial"])
+        period_calendar = [day for day in calendar if day >= start and (end is None or day < end)]
         results[name] = {
             "start": start, "end": end or str(panel["date"].max()),
             "rows": int(len(panel)), "symbols": int(panel["symbol"].nunique()),
             "horizons": run_baselines(panel, [holdout_horizon] if name == "holdout" else cfg["horizons"],
-                                       cfg["top_k"], trials, strategies=[selected] if name == "holdout" else None),
+                                       cfg["top_k"], trials, strategies=[selected] if name == "holdout" else None,
+                                       calendar=period_calendar),
         }
     feature_sha = _deduplicate_input(artifact_dir / "features.parquet", RESEARCH_ROOT / "objects")
     if research_code_fingerprint() != code_sha:
@@ -371,6 +390,10 @@ def format_report(payload: Dict[str, Any]) -> str:
             m, r = entry["market"], entry["random"]
             lines += [
                 "", f"### نگهداری {h} جلسه",
+                (f"- جلسه‌های تقویم: {m['calendar_days']}؛ روزهای فاقد پنل: {m['no_panel_days']}؛ "
+                 f"روزهای نامعلوم معیار بازار: {m['unknown_days']}؛ میانگین‌ها در حضور نامعلومی مشروط به روزهای معلوم‌اند. "
+                 "تقویم از داده موجود استنباط شده و مستقل تأیید نشده است.") if 'calendar_days' in m else
+                '- پوشش کامل تقویم در این گزارش قدیمی مشخص نیست؛ میانگین‌ها ممکن است مشروط به روزهای معلوم باشند.',
                 f"- خرید همه سهم‌های نقدشونده: میانگین معامله {_pct(m['mean_trade'])}، نرخ برد {_pct(m['win_rate'], 0)}",
                 f"- انتخاب تصادفی ({r['trials']} بار)، میانگین سبد با سرمایه بیکار: {_pct(r['mean'])} (بازه ۹۰٪: {_pct(r['p05'])} تا {_pct(r['p95'])})",
                 "",

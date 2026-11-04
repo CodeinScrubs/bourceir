@@ -18,6 +18,8 @@ from core.research_review import finite, summarize_evidence
 from core.timeutils import now_tehran_iso
 
 EXPERIMENT_PATTERN = r'EXP-\d{4}-\d{2}-\d{2}-(PORTFOLIO|FLOW)-[a-f0-9]{32}'
+FRACTIONAL_MARK_PORTFOLIO_VERSIONS = frozenset({'portfolio-v4', 'portfolio-v5', 'portfolio-v6', 'portfolio-v7', 'portfolio-v8'})
+SUPPORTED_PORTFOLIO_VERSIONS = FRACTIONAL_MARK_PORTFOLIO_VERSIONS | {'portfolio-v3'}
 
 
 def sha256(path):
@@ -131,7 +133,7 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
     if any(isinstance(v, (str, bool)) for v in equity['equity_rial']):
         raise ValueError('مقدار سرمایه باید عددی باشد')
     count_columns = ['positions', 'stale_positions']
-    if protocol['portfolio_version'] == 'portfolio-v4':
+    if protocol['portfolio_version'] in FRACTIONAL_MARK_PORTFOLIO_VERSIONS:
         if 'stale_fractional_exposures' not in equity:
             raise ValueError('شمار ارزش‌گذاری کهنه کسر سهم در قرارداد جدید موجود نیست')
         count_columns.append('stale_fractional_exposures')
@@ -172,13 +174,20 @@ def _checked_mode(folder, index, name, record, fold, protocol, artifact_names):
     if metrics['executions'] != len(fills) or metrics['open_positions'] != int(equity['positions'].iloc[-1]):
         raise ValueError('شمار اجرا یا پوزیشن با خروجی محفوظ سازگار نیست')
     stale_days = equity['stale_positions'].gt(0)
-    if protocol['portfolio_version'] == 'portfolio-v4':
+    if protocol['portfolio_version'] in FRACTIONAL_MARK_PORTFOLIO_VERSIONS:
         stale_days |= equity['stale_fractional_exposures'].gt(0)
     stale = int(stale_days.sum())
     if metrics['stale_mark_days'] != stale:
         raise ValueError('شمار قیمت کهنه با منحنی سازگار نیست')
-    if metrics['actual_corporate_entitlements_verified'] is not (metrics['corporate_action_events'] == 0):
-        raise ValueError('وضعیت حقوق اقتصادی با شمار عبور از اقدام شرکتی سازگار نیست')
+    if protocol['portfolio_version'] == 'portfolio-v8':
+        if metrics['actual_corporate_entitlements_verified'] is not False:
+            raise ValueError('قرارداد جدید حقوق واقعی را بدون شاهد مستقل تأیید نمی‌کند')
+    else:
+        # Validate the historical serialization contract, then correct its
+        # interpretation without rewriting the archived experiment.
+        if metrics['actual_corporate_entitlements_verified'] is not (metrics['corporate_action_events'] == 0):
+            raise ValueError('وضعیت قدیمی حقوق اقتصادی با قرارداد شمار رخداد سازگار نیست')
+        checked['actual_corporate_entitlements_verified'] = False
     return dict(metrics=checked, assumptions=assumptions)
 
 
@@ -199,7 +208,7 @@ def review_research(db, experiment_id, *, root=None):
     supported = {'expanding-portfolio-v3': 'PORTFOLIO', 'flow-portfolio-v3': 'FLOW', 'flow-portfolio-v4': 'FLOW'}
     if (payload['experiment_id'] != experiment_id or protocol.get('version') not in supported
             or '-' + supported[protocol['version']] + '-' not in experiment_id
-            or protocol.get('portfolio_version') not in ('portfolio-v3', 'portfolio-v4')
+            or protocol.get('portfolio_version') not in SUPPORTED_PORTFOLIO_VERSIONS
             or payload.get('accepted_for_signals') is not False
             or protocol.get('prospective_independence') is not False):
         raise ValueError('این بازبین فقط قراردادهای توسعه شناخته‌شده و فاقد مجوز سیگنال را می‌پذیرد')
@@ -266,7 +275,10 @@ def review_research(db, experiment_id, *, root=None):
                                for name, r in result['modes'].items()}
     output = summarize_evidence(payload, checked)
     output['portfolio_version'] = protocol['portfolio_version']
-    output['fractional_valuation_corrected'] = protocol['portfolio_version'] == 'portfolio-v4'
+    output['fractional_valuation_corrected'] = protocol['portfolio_version'] in FRACTIONAL_MARK_PORTFOLIO_VERSIONS
+    output['legacy_entitlement_claim_reinterpreted'] = protocol['portfolio_version'] != 'portfolio-v8'
+    if output['legacy_entitlement_claim_reinterpreted']:
+        output['limitations'].append('legacy zero reference-change count does not verify actual corporate entitlements; archived flags reinterpreted as unverified')
     if protocol['version'] == 'flow-portfolio-v4':
         output['uncertainty_sha256_verified'] = True
         output['uncertainty_statistics_recomputed'] = False

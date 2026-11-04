@@ -16,10 +16,10 @@ from core.capital_capacity import diagnose_cash_ledger, summarize_cases
 from core.timeutils import now_tehran_iso
 from ops.research_review import _relative_file, _verify_inventory, read_development_parquet
 from research.labels import market_calendar
-from research.portfolio_run import _picks, select_from_past, verified_baseline_inputs
+from research.portfolio_run import BASELINE_SELECTION_VERSION, _picks, select_from_past, verified_baseline_inputs
 from research.probability import opportunity_features
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
-from research.walkforward import time_folds
+from research.walkforward import preceding_price_observations, time_folds
 
 VERSION = 'holding-horizon-study-v1'
 HOLDING_SESSIONS = (5, 20, 60)  # Includes the entry session: engine horizons are 4, 19, 59.
@@ -85,13 +85,13 @@ def _jobs(chosen, config, baseline):
     return jobs
 
 
-def _past_baseline(inputs, panel, days, fold, horizons, k):
+def _past_baseline(inputs, panel, days, fold, horizons, k, calendar):
     """Choose among existing rules using only purged training outcomes, never test outcomes."""
     full = opportunity_features(inputs['features'], inputs['labels'], prices=inputs['prices'])
     full = full.merge(panel[['date', 'symbol']], on=['date', 'symbol'], how='inner', validate='one_to_one')
     training = full.loc[full.date.lt(fold.train_end_exclusive)].merge(
         inputs['labels'].drop(columns='value'), on=['date', 'symbol'], validate='one_to_one')
-    best, diagnostics = select_from_past(training, fold, horizons, k)
+    best, diagnostics = select_from_past(training, fold, horizons, k, calendar=calendar)
     test = full.loc[full.date.ge(days[0]) & full.date.lt(days[-max(HOLDING_SESSIONS)-1])]
     picked = _picks(test, best['strategy'], k) if best else pd.DataFrame(columns=['date', 'symbol', 'rank'])
     return (picked, best['horizon'] if best else horizons[0]), best, diagnostics
@@ -99,7 +99,7 @@ def _past_baseline(inputs, panel, days, fold, horizons, k):
 
 def _fold_inputs(prices, calendar, fold):
     days = calendar[(calendar >= fold.test_start) & (calendar < fold.test_end_exclusive)]
-    prior = prices.loc[prices.date.lt(fold.test_start)].groupby('symbol', sort=False).tail(1)
+    prior = preceding_price_observations(prices, fold.test_start)
     current = prices.loc[prices.date.ge(fold.test_start) & prices.date.lt(fold.test_end_exclusive)]
     return pd.concat([prior, current], ignore_index=True), days
 
@@ -182,6 +182,7 @@ def run_holding_study(db, *, source_root, source_id, root, initial_capital_rial,
     if digests != copied_digests:
         raise ValueError('نسخه محفوظ منبع با ورودی خوانده‌شده برابر نیست')
     protocol = dict(version=VERSION, portfolio_version=PORTFOLIO_VERSION, source_id=source_id,
+        baseline_selection_version=BASELINE_SELECTION_VERSION,
         registered_at=now_tehran_iso(), source_files=archive_research_code(folder / 'code'),
         input_files=hashes, inputs=digests, code_sha256=fingerprint, config=asdict(config),
         development_start=cfg['dev_start'], holdout_start=cfg['holdout_start'],
@@ -197,7 +198,7 @@ def run_holding_study(db, *, source_root, source_id, root, initial_capital_rial,
         selection='same 20-session PIT momentum score as existing baseline; ties by decision value then symbol; no parameter fitting',
         intake='same decision window for all holding periods; stop 60 sessions before fold boundary',
         risk='independent hypothetical sleeve; pause new entries at 15% initial loss; not full owner portfolio or guaranteed loss limit',
-        accounting='portfolio-v4 synthetic reference adjustment; actual entitlements and historical fees unverified',
+        accounting=f'{PORTFOLIO_VERSION} synthetic reference adjustment; actual entitlements and historical fees unverified',
         inference='descriptive rejection screen only; no p-values, winner selection, holdout access or signal acceptance',
         baseline='best positive prior cohort mean among eight existing rules/source horizons; actual-exit purge before training boundary; otherwise cash',
         prospective_independence=False, accepted_for_signals=False, profitability_proven=False)
@@ -207,7 +208,7 @@ def run_holding_study(db, *, source_root, source_id, root, initial_capital_rial,
     for index, fold in enumerate(folds):
         replay_prices, days = _fold_inputs(inputs['prices'], calendar, fold)
         chosen = fold_picks(panel, days, config.max_positions, index)
-        baseline, best, training = _past_baseline(inputs, panel, days, fold, protocol['source_horizons'], config.max_positions)
+        baseline, best, training = _past_baseline(inputs, panel, days, fold, protocol['source_horizons'], config.max_positions, calendar)
         jobs = _jobs(chosen, config, baseline)
         # All decisions are sealed on disk before the engine sees test-period execution data.
         for mode, (picked, _) in jobs.items():
@@ -296,7 +297,7 @@ def review_holding_study(db, folder):
     for index, fold in enumerate(folds):
         prices, days = _fold_inputs(inputs['prices'], calendar, fold)
         chosen = fold_picks(panel, days, p['config']['max_positions'], index)
-        baseline, best, training = _past_baseline(inputs, panel, days, fold, p['source_horizons'], p['config']['max_positions'])
+        baseline, best, training = _past_baseline(inputs, panel, days, fold, p['source_horizons'], p['config']['max_positions'], calendar)
         record = dict(fold=asdict(fold), best_past_baseline=best, baseline_training=training, modes={})
         for mode, (picked, configuration) in _jobs(chosen, PortfolioConfig(**p['config']), baseline).items():
             prefix = f'fold-{index:02d}-{mode}'

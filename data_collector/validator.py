@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from core.data_quality import quant_anomaly_flags
+from core.order_book import book_bound_violations
 
 logger = logging.getLogger(__name__)
 
@@ -184,5 +185,8 @@ class DataValidator:
         if last_p and up and down and (snapshot.get("trade_count") or 0) > 0:
             if not (down <= last_p <= up):
                 errors.append(f"قیمت آخرین معامله ({last_p}) خارج از دامنه مجاز [{down}، {up}] است.")
+
+        errors.extend(f"قیمت عمق {item['field']} خارج از دامنه مشاهده‌شده است"
+                      for item in book_bound_violations(snapshot))
 
         return len(errors) == 0, errors

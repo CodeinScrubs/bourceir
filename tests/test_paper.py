@@ -70,6 +70,21 @@ def test_capital_independent_fixed_fees_and_shared_cash(paper, db, monkeypatch):
     assert repo.report(first)['protocol']['fees']['sell'] != .5
 
 
+def test_paper_report_does_not_mark_with_legacy_contradictory_book(paper, db):
+    repo, clock = paper
+    key = portfolio(paper)
+    iid = idea(repo, key)
+    clock[0] += timedelta(seconds=10)
+    snapshot(db, clock[0])
+    trade(repo, key, iid)
+    assert repo.report(key)['observations'][iid]['basis'] == 'fresh_min_last_bid'
+    clock[0] += timedelta(seconds=1)
+    snapshot(db, clock[0], bid_price_4=899)
+    report = repo.report(key)
+    assert report['observations'][iid]['basis'] != 'fresh_min_last_bid'
+    assert report['equity_rial'] is None
+
+
 def test_partial_exit_attributes_costs_per_idea_without_blending(paper, db):
     repo, clock = paper
     key = portfolio(paper)
@@ -438,6 +453,37 @@ def test_ui_create_analysis_buy_partial_sell_and_export(dashboard_db):
         assert db.conn.execute('SELECT count(*) FROM journal_executions').fetchone()[0] == 0
 
 
+def test_ui_defaults_to_newest_portfolio_and_identifies_unknown_holding(dashboard_db, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from database.db import DatabaseManager
+    from tests.test_dashboard import DASHBOARD
+
+    clock = [datetime(2026, 10, 13, 10, tzinfo=TEHRAN_TZ)]
+    monkeypatch.setattr('database.paper.now_tehran', lambda: clock[0])
+    with DatabaseManager(db_path=dashboard_db) as db:
+        db.upsert_symbol(dict(symbol_fa='فولاد', ins_code='123', instrument_type_code=300))
+        repo = PaperRepository(db)
+        old = repo.create(name='پورتفوی قدیمی', capital_rial=100_000, rationale='روش قبلی')
+        clock[0] += timedelta(seconds=1)
+        new = repo.create(name='پورتفوی تازه', capital_rial=100_000, rationale='روش تازه')
+        iid = idea(repo, new)
+        trade(repo, new, iid)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('💼 پورتفوی مجازی').run()
+    assert not at.exception
+    picker = next(w for w in at.selectbox if w.label == 'پورتفوی فعال')
+    assert picker.value == new
+    table = next(frame.value for frame in at.dataframe if 'علت نامعلومی ارزش‌گذاری' in frame.value.columns)
+    assert 'قیمت پس از معامله هنوز موجود نیست' in table.loc[table['نماد'].eq('فولاد'), 'علت نامعلومی ارزش‌گذاری'].iloc[0]
+    assert any(metric.label == 'ارزش خالص برآوردی پورتفوی مجازی' and 'نامعلوم' in metric.value for metric in at.metric)
+    assert any('خرید مجازی تازه' in warning.value and 'متوقف است' in warning.value for warning in at.warning)
+    assert any('دارایی‌ها و تحلیل‌های دارای ابهام (1)' in item.label for item in at.expander)
+    picker.set_value(old).run()
+    assert not at.exception
+    assert next(w for w in at.selectbox if w.label == 'پورتفوی فعال').value == old
+
+
 def test_observed_ui_displays_quote_and_will_not_fill_changed_price(dashboard_db, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
@@ -458,6 +504,7 @@ def test_observed_ui_displays_quote_and_will_not_fill_changed_price(dashboard_db
     at.sidebar.radio[0].set_value('💼 پورتفوی مجازی').run()
     assert not at.exception
     assert any(m.label == 'بهترین عرضه مشاهده‌شده برای خرید' for m in at.metric)
+    assert next(m for m in at.metric if m.label == 'بهترین تقاضای مشاهده‌شده برای فروش').value == '99.9 تومان'
     assert next(n for n in at.number_input if 'قیمت سناریوی دستی' in n.label).disabled
     clock[0] += timedelta(seconds=1)
     with DatabaseManager(db_path=dashboard_db) as db:

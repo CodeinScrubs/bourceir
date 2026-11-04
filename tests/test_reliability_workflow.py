@@ -67,6 +67,47 @@ def test_quality_panel_shows_unknown_denominator_without_claiming_edge(db, tmp_p
     assert not at.success
 
 
+def test_quality_panel_displays_retained_trade_only_lineage_without_claiming_all_are_wrong(db, tmp_path, monkeypatch):
+    from core.recovery_lineage import VERSION as LINEAGE_VERSION
+    from core.timeutils import now_tehran_iso
+    from ops.trader_readiness import VERSION, code_identity
+
+    store(db)
+    write_report(db,tmp_path,monkeypatch)
+    lineage=dict(version=LINEAGE_VERSION,cutoff_exclusive=settings.RESEARCH_CONFIG['holdout_start'],
+        development_start=settings.RESEARCH_CONFIG['dev_start'],legacy_trade_receipts=3,retained_all_rows=2,
+        retained_partial_rows=1,superseded_rows=0,retained_development_rows=2,retained_prior_rows=1,
+        unrecognized_receipts=0,malformed_receipts=0,excluded_out_of_scope=0,review_clear=False,status='unresolved',
+        source_conflict_count_known=False,independent_source_correctness_verified=False,
+        historical_availability_verified=False,accepted_for_signals=False)
+    readiness=dict(version=VERSION,generated_at=now_tehran_iso(),code=code_identity(),status='blocked',
+        recovery_lineage=lineage,accepted_for_signals=False,profitability_proven=False)
+    (tmp_path/'private'/'trader-readiness.json').write_text(json.dumps(readiness),encoding='utf-8')
+    at=AppTest.from_function(_panel).run(timeout=60)
+    assert not at.exception
+    assert any('۳' in w.value or '3' in w.value for w in at.warning if 'ریزمعامله' in w.value)
+    assert any('غلط‌بودن' in w.value and 'همه' in w.value for w in at.warning)
+
+
+def test_quality_panel_does_not_trust_a_malformed_or_old_lineage_receipt(db,tmp_path,monkeypatch):
+    store(db)
+    write_report(db,tmp_path,monkeypatch)
+    target=tmp_path/'private'/'trader-readiness.json'
+    target.write_text(json.dumps({'version':'trader-readiness-v1','recovery_lineage':{'review_clear':True}}),encoding='utf-8')
+    at=AppTest.from_function(_panel).run(timeout=60)
+    assert not at.exception
+    assert any('منشأ' in w.value and ('نامعتبر' in w.value or 'قدیمی' in w.value) for w in at.warning)
+
+
+def test_lineage_receipt_rejects_duplicate_json_keys(tmp_path):
+    from dashboard.reliability import load_lineage_report
+
+    target=tmp_path/'lineage.json'
+    target.write_text('{"version":"old","version":"new"}',encoding='utf-8')
+    with pytest.raises(ValueError,match='تکراری'):
+        load_lineage_report(target)
+
+
 def test_quality_panel_marks_different_code_as_archival(db, tmp_path, monkeypatch):
     output, report = write_report(db, tmp_path, monkeypatch)
     report['diagnostic_code_sha256'] = 'different'
@@ -74,6 +115,22 @@ def test_quality_panel_marks_different_code_as_archival(db, tmp_path, monkeypatc
     at = AppTest.from_function(_panel).run(timeout=60)
     assert not at.exception
     assert any('گزارش آرشیوی' in item.value for item in at.warning)
+
+
+def test_quality_panel_distinguishes_total_history_from_development(db, tmp_path, monkeypatch):
+    prices, clients, sid = store(db)
+    prior_prices = prices.head(1).assign(date='2012-01-03')
+    prior_clients = clients.head(1).assign(date='2012-01-03')
+    db.upsert_daily_prices_df(sid, prior_prices)
+    db.upsert_client_types_df(sid, prior_clients)
+    _, report = write_report(db, tmp_path, monkeypatch)
+    assert report['price_rows'] == 26
+    assert report['records'][0]['development_price_rows'] == 25
+    at = AppTest.from_function(_panel).run(timeout=60)
+    assert not at.exception
+    assert at.metric[0].label == 'ردیف قیمت بررسی‌شده'
+    assert at.metric[0].value == '26'
+    assert any('25 ردیف' in item.value for item in at.caption)
 
 
 def test_quality_panel_marks_changed_environment_as_archival(db, tmp_path, monkeypatch):

@@ -34,9 +34,11 @@ def set_day(frame, i, op, high, low, close, ref, vwap=None):
 def client_types(frame):
     return pd.DataFrame({'date': frame['date'], 'buy_i_value': 60000.0, 'sell_i_value': 40000.0, 'buy_i_volume': 600.0, 'sell_i_volume': 400.0, 'buy_i_count': 10, 'sell_i_count': 10, 'buy_n_volume': 400.0, 'sell_n_volume': 600.0})
 
-def dip_stats(statuses):
+def dip_stats(statuses, entry_filled=None):
     picks = pd.DataFrame({'date': CAL[:len(statuses)], 'symbol': 'x'})
     trades = picks.assign(dip_status=statuses, entry_kind='limit', exit_kind='target', days_held=1, net_ret=[0.1 if status == 'complete' else np.nan for status in statuses])
+    if entry_filled is not None:
+        trades['entry_filled'] = entry_filled
     result = dip_run.evaluate(trades, picks, pd.Index(picks['date']), 1, 1, pd.Series(0.6, index=picks['date']))
     return result
 
@@ -125,7 +127,7 @@ def test_missing_dip_result_is_unknown_instead_of_idle_cash():
     assert math.isnan(result['mean_daily_cohort'])
 
 def test_censored_exit_can_still_have_a_known_filled_entry():
-    result = dip_stats(['complete', 'censored', 'not_filled'])
+    result = dip_stats(['complete', 'censored', 'not_filled'], [1, 1, 0])
     assert result['fill_rate'] == pytest.approx(2 / 3)
     assert result['trades'] == 1 and result['censored'] == 1
 

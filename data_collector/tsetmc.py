@@ -12,13 +12,13 @@
 """
 
 import hashlib
+import json
 import logging
 import math
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
@@ -33,8 +33,9 @@ from core.legacy_quotes import quote_request
 from core.price_revision import daily_request
 from core.text import normalize_fa, normalize_symbol
 from core.timeutils import TEHRAN_TZ, deven_to_iso, heven_to_time, is_canonical_iso_date, now_tehran, now_tehran_iso
-from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, DAILY_COLUMNS, BaseDataProvider
-from data_collector.validator import DataValidator
+from data_collector.base import CLIENT_TYPE_HISTORY_COLUMNS, BaseDataProvider
+from data_collector.daily_history import normalize_history_payload
+from data_collector.source_cooldown import SourceGate
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class TsetmcProvider(BaseDataProvider):
     name = "tsetmc"
     supports_dated_publications = True
     supports_dated_instrument_states = True
+    supports_history_observations = True
 
     def close(self) -> None:
         if hasattr(self.session, 'close'):
@@ -88,12 +90,31 @@ class TsetmcProvider(BaseDataProvider):
             return None
         return dict(observation, requested_date=trade_date, observation_kind='instrument_state')
 
+    def get_historical_market_messages(self, ins_code: str, start: str, end_exclusive: str) -> Optional[Dict[str, Any]]:
+        """Project one bounded historical window; never return full mixed-period bytes."""
+        from core.market_messages import MAX_BYTES, message_request, project_messages
+
+        url = message_request(ins_code, start, end_exclusive)
+        observation = self._get_quote_context_json(ins_code, url, max_bytes=MAX_BYTES)
+        if observation is None:
+            return None
+        try:
+            data = project_messages(observation['content'], ins_code, start, end_exclusive,
+                                    received_at=observation['received_at'])
+        except (ValueError, TypeError, KeyError) as exc:
+            logger.warning('Malformed market message response: %s', type(exc).__name__)
+            return None
+        receipt = {key: value for key, value in observation.items() if key != 'content'}
+        return dict(receipt=receipt, projection=data)
+
     def __init__(self, session: Optional[requests.Session] = None, *, realtime=False):
         if type(realtime) is not bool:
             raise ValueError('وضعیت پروفایل زنده باید بولی صریح باشد')
         self.realtime = realtime
         self.timeout = min(settings.REQUEST_TIMEOUT_SECONDS, 5) if realtime else settings.REQUEST_TIMEOUT_SECONDS
         self.session = session if session is not None else self._build_session(realtime=realtime)
+        self.source_gate = SourceGate()
+        self.last_transport_evidence = None
         self.request_profile = ('external-session-unknown' if session is not None else
                                 'live-no-retry-5s-io' if realtime else 'retrying-default')
 
@@ -102,11 +123,21 @@ class TsetmcProvider(BaseDataProvider):
         session = requests.Session()
         retry = Retry(
             total=0 if realtime else settings.MAX_RETRIES, backoff_factor=0.0 if realtime else 1.0,
-            status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",),
+            status=0, redirect=0, other=0, status_forcelist=(), allowed_methods=("GET",),
+            raise_on_status=False, respect_retry_after_header=False,
         )
         session.mount("https://", HTTPAdapter(max_retries=retry, pool_maxsize=8))
         session.headers.update({"User-Agent": "Mozilla/5.0 (BRS Quant Engine)", "Accept": "application/json"})
         return session
+
+    def _send(self, url, **options):
+        if options.get('allow_redirects') not in (None,False):
+            raise ValueError('Public source requests cannot follow redirects')
+        options['allow_redirects'] = False
+        try:
+            return self.source_gate.get(self.session, url, **options)
+        finally:
+            self.last_transport_evidence = self.source_gate.last_evidence
 
     def _get_json(self, url: str, rate_limit: bool = True, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         if rate_limit and settings.RATE_LIMIT_DELAY > 0:
@@ -114,10 +145,10 @@ class TsetmcProvider(BaseDataProvider):
         try:
             request_timeout = min(timeout or self.timeout, 5) if self.realtime else timeout or self.timeout
             options = {'allow_redirects': False} if self.realtime else {}
-            response = self.session.get(url, timeout=request_timeout, **options)
+            response = self._send(url, timeout=request_timeout, **options)
             response.raise_for_status()
-            if self.realtime and response.status_code != 200:
-                raise ValueError('پاسخ زنده باید کامل و بدون تغییرمسیر باشد')
+            if response.status_code != 200:
+                raise ValueError('پاسخ عمومی باید کامل و بدون تغییرمسیر باشد')
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError('ریشه پاسخ TSETMC باید شیء JSON باشد')
@@ -299,6 +330,19 @@ class TsetmcProvider(BaseDataProvider):
         logger.warning("نماد «%s» در TSETMC یافت نشد.", symbol_fa)
         return None
 
+    def get_research_rights_search_observation(self, parent_code: str,
+                                               parent_symbol: str) -> Optional[Dict[str, Any]]:
+        """Public bounded search for research; never adds rights to the operational universe."""
+        from core.rights_discovery import MAX_BYTES, VERSION, search_request
+
+        request = search_request(parent_code, parent_symbol)
+        observed = self._get_quote_context_json(request['parent_code'], request['url'],
+                                                max_bytes=MAX_BYTES, validate_content=False)
+        if observed is None:
+            return None
+        return dict(observed, version=VERSION, parent_symbol=request['parent_symbol'],
+                    query_symbol=request['query_symbol'])
+
     def get_instrument_info(self, ins_code: str) -> Optional[Dict[str, Any]]:
         data = self._get_json(f"{BASE_URL}/Instrument/GetInstrumentInfo/{ins_code}")
         info = (data or {}).get("instrumentInfo")
@@ -337,37 +381,17 @@ class TsetmcProvider(BaseDataProvider):
 
     def get_symbol_history(self, ins_code: str, last_n: int = 0) -> Optional[pd.DataFrame]:
         data = self._get_json(f"{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{ins_code}/{int(last_n)}")
-        rows = (data or {}).get("closingPriceDaily")
-        if rows is None:
+        return normalize_history_payload(data, ins_code=ins_code, as_of=now_tehran())
+
+    def get_symbol_history_observation(self, ins_code: str, last_n: int = 100) -> Optional[Dict[str, Any]]:
+        from data_collector.daily_history import MAX_BYTES, VERSION, history_request
+
+        code, url = history_request(ins_code, last_n)
+        observation = self._get_quote_context_json(code, url, max_bytes=MAX_BYTES, validate_content=False)
+        if observation is None:
             return None
-        df = pd.DataFrame(rows)
-        if df.empty:
-            return pd.DataFrame(columns=DAILY_COLUMNS)
-        numeric_columns = {
-            "open_raw": "priceFirst", "high_raw": "priceMax", "low_raw": "priceMin",
-            "close_raw": "pDrCotVal", "close_final_raw": "pClosing", "ref_price_raw": "priceYesterday",
-            "volume": "qTotTran5J", "value": "qTotCap", "trade_count": "zTotTran",
-        }
-        # Check before astype: a boolean would otherwise become a plausible 0/1 value.
-        # Only numeric fields are constrained; source status flags are legitimately boolean.
-        for column in numeric_columns.values():
-            if df[column].map(lambda value: isinstance(value, (bool, np.bool_))).any():
-                logger.error("نماد %s: مقدار بولی در ستون عددی %s؛ پاسخ تاریخچه رد شد.", ins_code, column)
-                return None
-        df = pd.DataFrame({
-            "date": df["dEven"].map(deven_to_iso),
-            **{target: df[source].astype(float) for target, source in numeric_columns.items()},
-        })
-        # روزهای بدون معامله (توقف نماد) کندل ندارند
-        df = df[df["volume"] > 0].sort_values("date").reset_index(drop=True)
-        # کندل امروز قبل از ساعت ۱۳ (پیش از محاسبه قیمت پایانی رسمی) و هر تاریخ آینده پذیرفته نمی‌شود
-        now = now_tehran()
-        today = now.date().isoformat()
-        df = df[(df["date"] < today) | ((df["date"] == today) & (now.hour >= 13))].reset_index(drop=True)
-        df, removed = DataValidator.validate_daily_dataframe(df)
-        if removed:
-            logger.warning("نماد %s: %d رکورد نامعتبر حذف شد.", ins_code, removed)
-        return df[DAILY_COLUMNS]
+        return dict(observation, version=VERSION, price_unit='Rial', last_n=last_n,
+                    normalization_as_of=observation['received_at'])
 
     def get_dated_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
         code, _ = daily_request(ins_code, trade_date)
@@ -385,6 +409,173 @@ class TsetmcProvider(BaseDataProvider):
                     url=url, received_at=now_tehran_iso(), received_row_count=len(rows),
                     payload=dict(closingPriceDaily=selected), response_scope='selected_native_rows',
                     unselected_numeric_rows_not_archived=True)
+
+    def get_development_history_observation(self, ins_code: str, start_date: str,
+                                            end_date: str) -> Optional[Dict[str, Any]]:
+        """بازه پژوهشی محدود؛ ارقام خارج بازه و holdout در پاسخ مصرف‌کننده قرار نمی‌گیرند."""
+        from data_collector.daily_history import MAX_BYTES, _finite_float, _nonfinite, _unique
+
+        class _IntegerToken(str):
+            pass
+
+        class _FloatToken(str):
+            pass
+
+        class _NonfiniteToken(str):
+            pass
+
+        def _selected_value(value):
+            # Numeric values are converted only after their row has passed the date boundary.
+            if type(value) is _IntegerToken:
+                return int(value)
+            if type(value) is _FloatToken:
+                return _finite_float(value)
+            if type(value) is _NonfiniteToken:
+                return _nonfinite(value)
+            if isinstance(value, list):
+                return [_selected_value(item) for item in value]
+            if isinstance(value, dict):
+                return {key: _selected_value(item) for key, item in value.items()}
+            return value
+
+        if (not is_canonical_iso_date(start_date) or not is_canonical_iso_date(end_date)
+                or start_date < settings.RESEARCH_CONFIG['dev_start']
+                or end_date > settings.RESEARCH_CONFIG['holdout_start'] or start_date >= end_date):
+            raise ValueError('بازه تاریخچه باید کاملاً پیش از holdout و در بازه پژوهش باشد')
+        code, _ = daily_request(ins_code, start_date)
+        url = f'{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{code}/0'
+        observation = self._get_quote_context_json(code, url, max_bytes=MAX_BYTES, validate_content=False)
+        if observation is None:
+            return None
+        try:
+            data = json.loads(observation['content'].decode('utf-8-sig'), object_pairs_hook=_unique,
+                              parse_constant=_NonfiniteToken, parse_float=_FloatToken, parse_int=_IntegerToken)
+            rows = data.get('closingPriceDaily') if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                raise ValueError('فهرست بومی تاریخچه موجود نیست')
+            selected = []
+            for row in rows:
+                if not isinstance(row, dict) or type(row.get('dEven')) not in (str, _IntegerToken):
+                    raise ValueError('تاریخ بومی تاریخچه نامعلوم است')
+                day = str(row['dEven'])
+                if len(day) != 8 or not day.isascii() or not day.isdigit():
+                    raise ValueError('تاریخ بومی تاریخچه نامعتبر است')
+                iso = f'{day[:4]}-{day[4:6]}-{day[6:]}'
+                if not is_canonical_iso_date(iso):
+                    raise ValueError('تاریخ بومی تاریخچه نامعتبر است')
+                if start_date <= iso < end_date:
+                    if type(row.get('insCode')) not in (str, _IntegerToken) or str(row['insCode']) != code:
+                        raise ValueError('شناسه ردیف تاریخچه متفاوت است')
+                    selected.append(_selected_value(row))
+        except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+            logger.warning('تاریخچه پژوهشی پذیرفته نشد: %s', type(exc).__name__)
+            return None
+        selected_payload = {'closingPriceDaily': selected}
+        selected_body = json.dumps(selected_payload, ensure_ascii=False, sort_keys=True,
+                                   separators=(',', ':'), allow_nan=False).encode('utf-8')
+        return {key: value for key, value in observation.items() if key != 'content'} | dict(
+            price_unit='Rial', start_date=start_date, end_date_exclusive=end_date,
+            payload=selected_payload, selected_row_count=len(selected),
+            selected_payload_sha256=hashlib.sha256(selected_body).hexdigest(),
+            response_scope='selected_native_rows_pre_holdout', source_body_archived=False,
+            unselected_numeric_rows_not_archived=True)
+
+    def get_retrospective_rights_history_observation(self, ins_code: str, start_date: str,
+                                                   end_date: str, *, retrospective_rights_only=False) -> Optional[Dict[str, Any]]:
+        """Isolated, explicitly opted-in retrospective rights history; today is excluded."""
+        if retrospective_rights_only is not True:
+            raise ValueError('Explicit retrospective rights-only opt-in is required')
+        from data_collector.daily_history import MAX_BYTES, _finite_float, _nonfinite, _unique
+
+        class _IntegerToken(str):
+            pass
+
+        class _FloatToken(str):
+            pass
+
+        class _NonfiniteToken(str):
+            pass
+
+        def _selected_value(value):
+            # Numeric values are converted only after their row has passed the date boundary.
+            if type(value) is _IntegerToken:
+                return int(value)
+            if type(value) is _FloatToken:
+                return _finite_float(value)
+            if type(value) is _NonfiniteToken:
+                return _nonfinite(value)
+            if isinstance(value, list):
+                return [_selected_value(item) for item in value]
+            if isinstance(value, dict):
+                return {key: _selected_value(item) for key, item in value.items()}
+            return value
+
+        if (not is_canonical_iso_date(start_date) or not is_canonical_iso_date(end_date)
+                or start_date < '1967-01-01'
+                or end_date > now_tehran().date().isoformat() or start_date >= end_date):
+            raise ValueError('Retrospective history must exclude today and start no earlier than 1967')
+        code, _ = daily_request(ins_code, start_date)
+        url = f'{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{code}/0'
+        observation = self._get_quote_context_json(code, url, max_bytes=MAX_BYTES, validate_content=False)
+        if observation is None:
+            return None
+        try:
+            data = json.loads(observation['content'].decode('utf-8-sig'), object_pairs_hook=_unique,
+                              parse_constant=_NonfiniteToken, parse_float=_FloatToken, parse_int=_IntegerToken)
+            rows = data.get('closingPriceDaily') if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                raise ValueError('فهرست بومی تاریخچه موجود نیست')
+            selected = []
+            for row in rows:
+                if not isinstance(row, dict) or type(row.get('dEven')) not in (str, _IntegerToken):
+                    raise ValueError('تاریخ بومی تاریخچه نامعلوم است')
+                day = str(row['dEven'])
+                if len(day) != 8 or not day.isascii() or not day.isdigit():
+                    raise ValueError('تاریخ بومی تاریخچه نامعتبر است')
+                iso = f'{day[:4]}-{day[4:6]}-{day[6:]}'
+                if not is_canonical_iso_date(iso):
+                    raise ValueError('تاریخ بومی تاریخچه نامعتبر است')
+                if iso > now_tehran().date().isoformat():
+                    raise ValueError('Future source date is invalid')
+                if start_date <= iso < end_date:
+                    if type(row.get('insCode')) not in (str, _IntegerToken) or str(row['insCode']) != code:
+                        raise ValueError('شناسه ردیف تاریخچه متفاوت است')
+                    selected.append(_selected_value(row))
+        except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+            logger.warning('تاریخچه پژوهشی پذیرفته نشد: %s', type(exc).__name__)
+            return None
+        selected_payload = {'closingPriceDaily': selected}
+        selected_body = json.dumps(selected_payload, ensure_ascii=False, sort_keys=True,
+                                   separators=(',', ':'), allow_nan=False).encode('utf-8')
+        return {key: value for key, value in observation.items() if key != 'content'} | dict(
+            price_unit='Rial', start_date=start_date, end_date_exclusive=end_date,
+            payload=selected_payload, selected_row_count=len(selected),
+            selected_payload_sha256=hashlib.sha256(selected_body).hexdigest(),
+            response_scope='selected_native_rows_retrospective_rights', source_body_archived=False,
+            unselected_numeric_rows_not_archived=True, holdout_contaminated_for_rights_hypothesis=True,
+            accepted_for_signals=False)
+
+    def get_historical_day_universe_observation(self, trade_date: str) -> Optional[Dict[str, Any]]:
+        """Public single-day archive; no response can cross the sealed research boundary."""
+        from core.rights_daily_universe import MAX_BYTES, day_request
+
+        url = day_request(trade_date)
+        observation = self._get_quote_context_json('', url, max_bytes=MAX_BYTES)
+        if observation is None:
+            return None
+        return dict(observation, requested_date=trade_date)
+
+    def get_retrospective_day_universe_observation(self, trade_date: str, *, retrospective_rights_only=False) -> Optional[Dict[str, Any]]:
+        """Isolated retrospective discovery; never changes the sealed model-development boundary."""
+        from core.rights_daily_retrospective import MAX_BYTES, day_request
+
+        if retrospective_rights_only is not True:
+            raise ValueError('Explicit retrospective rights-only opt-in is required')
+        url = day_request(trade_date)
+        observation = self._get_quote_context_json('', url, max_bytes=MAX_BYTES)
+        if observation is None:
+            return None
+        return dict(observation, requested_date=trade_date)
 
     def get_client_types_history(self, ins_code: str, dates: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
         """
@@ -560,7 +751,7 @@ class TsetmcProvider(BaseDataProvider):
         try:
             if settings.RATE_LIMIT_DELAY > 0:
                 time.sleep(settings.RATE_LIMIT_DELAY)
-            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+            response = self._send(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
                 stream=True, allow_redirects=False, headers={'Accept': 'text/plain'})
             try:
                 response.raise_for_status()
@@ -650,7 +841,7 @@ class TsetmcProvider(BaseDataProvider):
         try:
             if settings.RATE_LIMIT_DELAY > 0:
                 time.sleep(settings.RATE_LIMIT_DELAY)
-            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+            response = self._send(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
                                         stream=True, allow_redirects=False, headers={'Accept': 'text/plain'})
             try:
                 response.raise_for_status()
@@ -678,34 +869,52 @@ class TsetmcProvider(BaseDataProvider):
             logger.warning('دریافت مظنه یکپارچه ناموفق بود: %s', type(error).__name__)
             return None
 
-    def _get_quote_context_json(self, code: str, url: str) -> Optional[Dict[str, Any]]:
+    def _get_quote_context_json(self, code: str, url: str, *, max_bytes=None,
+                                validate_content=True) -> Optional[Dict[str, Any]]:
         """بایت محدود JSON بومی؛ فراخوان‌های داخلی نشانی ثابت می‌سازند و نشست صادر نمی‌شود."""
         from core.quote_context import MAX_JSON_BYTES
+
+        limit = MAX_JSON_BYTES if max_bytes is None else max_bytes
+        if type(limit) is not int or limit < 1 or type(validate_content) is not bool:
+            raise ValueError('Explicit positive byte limit and content-validation policy required')
 
         requested, started = now_tehran_iso(), time.monotonic()
         try:
             if settings.RATE_LIMIT_DELAY > 0:
                 time.sleep(settings.RATE_LIMIT_DELAY)
-            response = self.session.get(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
+            response = self._send(url, timeout=(min(self.timeout, 10), min(self.timeout, 10)),
                 stream=True, allow_redirects=False, headers={'Accept': 'application/json'})
             try:
                 response.raise_for_status()
                 if response.status_code != 200 or response.url != url:
                     raise ValueError('پاسخ جزئی یا تغییرمسیر مشخصات/دامنه مجاز نیست')
-                length = response.headers.get('Content-Length', '')
-                if length.isdigit() and int(length) > MAX_JSON_BYTES:
-                    raise ValueError('پاسخ مشخصات/دامنه از حد حجم گذشت')
+                length = response.headers.get('Content-Length')
+                declared_length = None
+                if length is not None:
+                    if not isinstance(length, str) or not length.isascii() or not length.isdigit():
+                        raise ValueError('طول اعلام‌شده پاسخ نامعتبر است')
+                    declared_length = int(length)
+                    if declared_length > limit:
+                        raise ValueError('پاسخ مشخصات/دامنه از حد حجم گذشت')
                 chunks, size = [], 0
                 for chunk in response.iter_content(chunk_size=65536):
                     size += len(chunk)
-                    if size > MAX_JSON_BYTES or time.monotonic()-started > 15:
+                    if size > limit or time.monotonic()-started > 15:
                         raise ValueError('پاسخ مشخصات/دامنه از حد حجم یا زمان گذشت')
                     chunks.append(chunk)
                 content = b''.join(chunks)
-                if not content or content.lstrip().startswith(b'<') or b'\x00' in content:
+                # iter_content decompresses the body but Content-Length refers to
+                # encoded bytes; reconcile only where both sizes are comparable.
+                encoding = response.headers.get('Content-Encoding', '').strip().lower()
+                transfer = response.headers.get('Transfer-Encoding', '').strip().lower()
+                if (declared_length is not None and encoding in ('', 'identity')
+                        and transfer in ('', 'identity') and size != declared_length):
+                    raise ValueError('طول بدنه با طول اعلام‌شده منبع متفاوت است')
+                if validate_content and (not content or content.lstrip().startswith(b'<') or b'\x00' in content):
                     raise ValueError('پاسخ خالی یا HTML به جای مشخصات/دامنه')
                 return dict(source=self.name, ins_code=code, url=url, requested_at=requested,
-                    received_at=now_tehran_iso(), response_bytes=len(content), content=content,
+                    received_at=now_tehran_iso(), http_status=response.status_code,
+                    response_bytes=len(content), content=content,
                     body_sha256=hashlib.sha256(content).hexdigest())
             finally:
                 response.close()

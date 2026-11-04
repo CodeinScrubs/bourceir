@@ -2,7 +2,7 @@
 
 import ast
 import hashlib
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +136,40 @@ def test_live_page_all_null_and_mixed_rows_render_without_invalid_flow(monkeypat
         assert not app.exception
         assert not any(metric in frame.value.columns for frame in app.dataframe)
         assert len(app.dataframe) == int(monitor_present)
+        assert any('داده ناموجود یا کهنه نبود صف را اثبات نمی‌کند' in item.value for item in app.info)
+
+
+@pytest.mark.parametrize('condition', ['contradictory_book', 'missing_price_time', 'stale_price_time',
+                                       'missing_capture_time', 'stale_capture_time', 'unverified_source', 'fresh'])
+def test_live_page_masks_unverified_queue(monkeypatch, isolated_board_monitor, condition):
+    current = now_tehran_iso()
+    old = (datetime.fromisoformat(current) - timedelta(minutes=2)).isoformat()
+    source_time = (None if condition == 'missing_price_time' else
+                   old if condition == 'stale_price_time' else current)
+    captured = None if condition == 'missing_capture_time' else old if condition == 'stale_capture_time' else current
+    bad = live_snapshot(symbol_fa='آزمون', value=100_000., ref_price=100., close_price=100.,
+                        captured_at=captured, provider_timestamp=source_time,
+                        source=None if condition == 'unverified_source' else 'tsetmc', price_unit='Rial',
+                        price_limit_down=90., price_limit_up=110.,
+                        bid_price_4=80. if condition == 'contradictory_book' else 95.,
+                        buy_queue_volume=5000., sell_queue_volume=3000.)
+    tree = ast.parse((settings.BASE_DIR/'dashboard/app.py').read_text(encoding='utf-8'))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'page_live')
+    namespace = dict(st=st, pd=pd, jobs=SimpleNamespace(job_status=lambda _: dict(running=False)),
+                     latest_snapshots=lambda: pd.DataFrame([bad]), DataFreshnessMonitor=DataFreshnessMonitor,
+                     to_jalali=to_jalali, to_fa_digits=to_fa_digits, interval_panel=lambda _: None)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), 'book_display', 'exec'), namespace)
+    monkeypatch.setattr(st, '_brs_live_book_quarantine', namespace['page_live'], raising=False)
+    app = AppTest.from_string('import streamlit as st\nst._brs_live_book_quarantine()').run()
+    assert not app.exception
+    table = next(frame.value for frame in app.dataframe if 'صف فروش (حجم)' in frame.value.columns)
+    if condition == 'fresh':
+        assert table.loc[0, 'صف خرید (حجم)'] == 5000 and table.loc[0, 'صف فروش (حجم)'] == 3000
+        return
+    assert pd.isna(table.loc[0, 'صف خرید (حجم)']) and pd.isna(table.loc[0, 'صف فروش (حجم)'])
+    app.radio[0].set_value('فقط صف فروش').run()
+    assert not app.exception
+    assert any('داده ناموجود یا کهنه نبود صف را اثبات نمی‌کند' in item.value for item in app.info)
 
 
 def test_runtime_mismatch_masks_all_current_profit_paths_in_export(paper, db, monkeypatch):

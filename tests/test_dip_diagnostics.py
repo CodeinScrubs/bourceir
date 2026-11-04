@@ -39,6 +39,14 @@ def test_sell_queue_rolls_to_actual_exit_instead_of_dropping_loss():
     assert output['realized_net_rial'] == pytest.approx(result.metrics['realized_net_rial'])
 
 
+def test_missing_trade_volume_does_not_prove_planned_exit_was_unlocked():
+    prices, calendar = dip_history()
+    result = replay(prices, calendar, max_positions=1)
+    prices.loc[2, 'volume'] = 0
+    output = diagnose(prices, calendar, result)
+    assert output['entries'][0]['locked_down_on_planned_exit'] is None
+
+
 def test_unknown_total_fold_return_stays_unknown_despite_known_partial_realized_cash():
     prices, calendar = dip_history()
     result = replay(prices, calendar)

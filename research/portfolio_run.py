@@ -17,13 +17,23 @@ from core.timeutils import is_canonical_iso_date, now_tehran_iso, to_jalali
 from database.workbench import WorkbenchRepository
 from features.daily import FEATURE_SET_VERSION
 from features.provenance import assert_compatible_environment
-from research.baselines import STRATEGIES, _cohort_returns, pick_top
+from research.baselines import (
+    SCORE_COVERAGE_VERSION,
+    STRATEGIES,
+    _cohort_returns,
+    _outcome_masks,
+    decision_score_inputs,
+    eligible_strategy_score,
+    pick_top,
+    score_coverage,
+)
 from research.dip import DIP_VERSION, TIME_EXIT_PRICE_BASIS, DipRule
 from research.labels import LABEL_SET_VERSION
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
-from research.walkforward import time_folds
+from research.walkforward import preceding_price_observations, time_folds
 
 WALKFORWARD_VERSION = "expanding-portfolio-v3"
+BASELINE_SELECTION_VERSION = 'past-baseline-calendar-v3'
 
 
 def verified_baseline_inputs(root, experiment_id=None):
@@ -81,30 +91,64 @@ def verified_baseline_inputs(root, experiment_id=None):
     return experiment_id, frames, digests
 
 
-def select_from_past(panel, fold, horizons, k):
+def select_from_past(panel, fold, horizons, k, *, calendar, outcome_mode='market_labels'):
     """Rank each fixed baseline only on labels known before the embargo boundary.
 
     Ranks are formed before purging outcomes; an unknown future exit cannot improve historical
     candidate ranks by removing that stock. Unknown picks remain unknown in the score series.
+    Market sessions without any eligible panel row remain unknown: absence can be
+    incomplete source coverage and does not establish an idle-cash observation.
     """
+    horizons = tuple(horizons)
+    if outcome_mode not in ('market_labels', 'paired_dip_floor') or (
+            outcome_mode == 'paired_dip_floor' and horizons != (1,)):
+        raise ValueError('قرارداد نتیجه انتخاب پایه معتبر نیست')
+    days = list(calendar)
+    if (not days or any(not is_canonical_iso_date(day) for day in days)
+            or days != sorted(set(days))):
+        raise ValueError('تقویم بازار باید شامل تاریخ‌های معتبر، یکتا و مرتب باشد')
+    training_days = pd.Index([day for day in days if fold.train_start <= day < fold.train_end_exclusive])
+    if training_days.empty:
+        raise ValueError('تقویم دوره آموزش خالی است')
     past = panel.loc[(panel["date"] >= fold.train_start) & (panel["date"] < fold.train_end_exclusive)].copy()
-    calendar = pd.Index(sorted(past["date"].unique()))
+    observed = set(past['date'].unique())
+    if not observed.issubset(set(training_days)):
+        raise ValueError('تاریخ ورودی آموزش با تقویم بازار ناسازگار است')
+    missing = ~training_days.isin(observed)
+    decision_inputs = decision_score_inputs(past)
+    prepared = [(rule, rule.score(decision_inputs)) for rule in STRATEGIES]
+    coverage = {rule.name: score_coverage(decision_inputs, rule, score) for rule, score in prepared}
+    prepared = [(rule, eligible_strategy_score(decision_inputs, rule, score)) for rule, score in prepared]
     candidates, best = [], None
     for horizon in horizons:
         status, exit_col, net_col = f"label_status_{horizon}d", f"exit_date_{horizon}d", f"net_ret_{horizon}d"
-        known_exit = (past[status] == "complete") & (past[exit_col] != "") & (past[exit_col] < fold.train_end_exclusive)
-        known_block = (past[status] == "entry_blocked") & (past["entry_date"] != "") & (past["entry_date"] < fold.train_end_exclusive)
+        complete, blocked = _outcome_masks(past, horizon)
+        if outcome_mode == 'paired_dip_floor':
+            if 'resolved_at' not in past or {'entry_date', 'entry_executable', exit_col} & set(past):
+                raise ValueError('نتیجه جفت‌شده باید زمان رفع ابهام مستقل از تاریخ اجرا داشته باشد')
+            resolved = past['resolved_at']
+            valid_dates = [day for day in resolved.dropna().unique() if is_canonical_iso_date(day)]
+            after_decision = resolved.astype('string').gt(past['date'].astype('string')).fillna(False)
+            known_at_boundary = resolved.isin(valid_dates) & after_decision & resolved.fillna('').lt(fold.train_end_exclusive)
+            known_exit, known_block = complete & known_at_boundary, blocked & known_at_boundary
+        else:
+            known_exit = complete & past[exit_col].fillna('').lt(fold.train_end_exclusive)
+            known_block = blocked & past['entry_date'].fillna('').lt(fold.train_end_exclusive)
         evaluated = past.copy()
         evaluated.loc[~(known_exit | known_block), status] = "censored"
         evaluated.loc[~known_exit, net_col] = np.nan
-        for strategy in STRATEGIES:
-            picks = pick_top(evaluated, strategy.score(evaluated), k)
-            returns = _cohort_returns(picks, calendar, horizon, k)
+        for strategy, score in prepared:
+            picks = pick_top(evaluated, score, k)
+            returns = _cohort_returns(picks, training_days, horizon, k)
+            returns.loc[missing] = np.nan
             unknown = float(returns.isna().mean()) if len(returns) else 1.0
             mean = float(returns.mean()) if len(returns) else np.nan
             acceptable = np.isfinite(mean) and unknown <= 0.05 and len(returns) >= 100
             candidate = dict(strategy=strategy.name, horizon=horizon, mean_cohort=mean,
-                             unknown_fraction=unknown, scored_days=len(returns), selectable=bool(acceptable))
+                             unknown_fraction=unknown, scored_days=len(returns),
+                             observed_days=len(observed), missing_panel_days=int(missing.sum()),
+                             score_coverage=coverage[strategy.name],
+                             selectable=bool(acceptable))
             candidates.append(candidate)
             if acceptable and mean > 0 and (best is None or mean > best["mean_cohort"]):
                 best = candidate
@@ -114,7 +158,7 @@ def select_from_past(panel, fold, horizons, k):
 def _picks(panel, strategy, k, random_seed=None):
     if random_seed is None:
         rule = next(s for s in STRATEGIES if s.name == strategy)
-        score = rule.score(panel)
+        score = eligible_strategy_score(decision_score_inputs(panel), rule)
     else:
         score = pd.Series(np.random.default_rng(random_seed).random(len(panel)), index=panel.index)
     picked = pick_top(panel, score, k)[["date", "symbol"]].copy()
@@ -162,7 +206,9 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
         path = artifacts / f"{name}.parquet"
         frame.to_parquet(path, index=False, compression="zstd")
         _deduplicate_input(path, root / "objects")
-    protocol = dict(version=WALKFORWARD_VERSION, portfolio_version=PORTFOLIO_VERSION, source_id=source_id, inputs=digests,
+    protocol = dict(version=WALKFORWARD_VERSION, baseline_selection_version=BASELINE_SELECTION_VERSION,
+                    baseline_score_coverage_version=SCORE_COVERAGE_VERSION,
+                    portfolio_version=PORTFOLIO_VERSION, source_id=source_id, inputs=digests,
                     config=asdict(base), horizons=list(horizons), random_seed=random_seed, folds=[asdict(f) for f in folds],
                     selection="highest positive past cohort mean, otherwise idle cash; fixed eight existing baselines",
                     purge="actual exit before train boundary; unknown rank rows retained", holdout_start=cfg["holdout_start"],
@@ -183,13 +229,13 @@ def run_portfolio_research(db, *, source_id=None, initial_capital_rial=None, min
     results, accumulated = [], {mode: [] for mode in ("selected", "stress", "random", "baseline", 'dip', 'dip_stress', 'dip_random', 'dip_vwap')}
     capitals = {mode: float(capital) for mode in accumulated}
     for index, fold in enumerate(folds):
-        selected, training = select_from_past(panel, fold, horizons, cfg["top_k"])
+        selected, training = select_from_past(panel, fold, horizons, cfg["top_k"], calendar=calendar)
         test = panel.loc[(panel["date"] >= fold.test_start) & (panel["date"] < fold.test_end_exclusive)]
         selections = _picks(test, selected["strategy"], cfg["top_k"]) if selected else pd.DataFrame(columns=["date", "symbol", "rank"])
         # Independent test accounts; never silently liquidate/reuse cash from an open previous-fold holding.
         horizon = selected["horizon"] if selected else horizons[0]
         result = dict(fold=asdict(fold), selected=selected, training=training, modes={})
-        prior = prices.loc[prices["date"] < fold.test_start].groupby("symbol", sort=False).tail(1)
+        prior = preceding_price_observations(prices, fold.test_start)
         test_prices = prices.loc[(prices["date"] >= fold.test_start) & (prices["date"] < fold.test_end_exclusive)]
         replay_prices = pd.concat([prior, test_prices], ignore_index=True)
         test_calendar = calendar[(calendar >= fold.test_start) & (calendar < fold.test_end_exclusive)]

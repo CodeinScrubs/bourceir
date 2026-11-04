@@ -37,9 +37,9 @@ def test_fixed_holding_replay_registers_first_reconciles_cash_and_reviews(db, fl
     monkeypatch.setattr(holding_horizon, 'fold_picks', picked)
     select_past = holding_horizon.select_from_past
 
-    def past_only(panel, fold, *args):
+    def past_only(panel, fold, *args, **kwargs):
         assert panel.date.lt(fold.train_end_exclusive).all()
-        return select_past(panel, fold, *args)
+        return select_past(panel, fold, *args, **kwargs)
 
     monkeypatch.setattr(holding_horizon, 'select_from_past', past_only)
     result, folder = run(db, flow_baseline, tmp_path)

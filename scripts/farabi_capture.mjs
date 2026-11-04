@@ -182,18 +182,48 @@ export async function capturePortfolio(tab) {
   return snapshot;
 }
 
-export async function captureReports(tab, download) {
-  const files = [];
-  for (const [route, header, filename] of [
-    ['/account-turnover', 'بدهکار (ریالء)', 'account-turnover.xlsx'],
-    ['/orders-history', 'وضعیت سفارش', 'orders-history.xlsx'],
+function captureErrorType(error) {
+  return error?.name === 'TimeoutError' ? 'timeout' :
+    error?.name === 'TargetClosedError' ? 'browser_closed' : 'other';
+}
+
+export async function writeCaptureStatus(output, status) {
+  const temporary = path.join(output, 'capture-status.json.tmp');
+  await fs.writeFile(temporary, JSON.stringify(status, null, 2), {mode:0o600});
+  await fs.rename(temporary, path.join(output, 'capture-status.json'));
+}
+
+export async function captureReports(tab, download, onProgress = async () => {}) {
+  const files = [], reports = {};
+  for (const [key, route, header, filename] of [
+    ['account_turnover', '/account-turnover', 'بدهکار (ریالء)', 'account-turnover.xlsx'],
+    ['orders_history', '/orders-history', 'وضعیت سفارش', 'orders-history.xlsx'],
   ]) {
-    await tab.goto(origin + route);
-    await tab.playwright.getByRole('columnheader', {name:header, exact:true}).waitFor({state:'visible'});
-    // Export reflects the selected report range. This script never alters filters or claims full-history coverage.
-    files.push(await download(tab, filename));
+    let phase = 'navigate';
+    let progressFailed = false;
+    const progress = async event => {
+      try { await onProgress(event); }
+      catch (error) { progressFailed = true; throw error; }
+    };
+    await progress({report:key, status:'running', phase, error_type:null});
+    try {
+      await tab.goto(origin + route);
+      phase = 'table';
+      await progress({report:key, status:'running', phase, error_type:null});
+      await tab.playwright.getByRole('columnheader', {name:header, exact:true}).waitFor({state:'visible'});
+      phase = 'download';
+      await progress({report:key, status:'running', phase, error_type:null});
+      // Export reflects the selected report range; filters are never changed.
+      files.push(await download(tab, filename));
+      reports[key] = {status:'saved', phase:'complete', error_type:null};
+    } catch (error) {
+      if (progressFailed) throw error;
+      // Never persist exception text, page content, credentials, or account data.
+      reports[key] = {status:'failed', phase, error_type:captureErrorType(error)};
+    }
+    await progress({report:key, ...reports[key]});
   }
-  return files;
+  return {files, reports};
 }
 
 async function main() {
@@ -202,6 +232,10 @@ async function main() {
   const output = path.resolve(process.argv[2] || 'data/private/farabi/capture-' + Date.now());
   if (!output.startsWith(path.resolve('data/private') + path.sep)) throw new Error('Use a private output directory under data/private');
   await fs.mkdir(output,{recursive:true});
+  const status = {version:'farabi-capture-status-v1', portfolio:{status:'pending'},
+    reports:{account_turnover:{status:'pending'}, orders_history:{status:'pending'}},
+    historical_coverage_verified:false, real_orders_submitted:false};
+  await writeCaptureStatus(output, status);
   const browser = await chromium.launch({headless:false});
   try {
     const context = await browser.newContext({acceptDownloads:true});
@@ -219,22 +253,41 @@ async function main() {
         await page.mouse.wheel(0,(direction === 'up' ? -1 : 1)*pages*height);
         await page.waitForTimeout(100);
       }};
-    const snapshot = await capturePortfolio(adapter);
-    await fs.writeFile(path.join(output,'portfolio-dom.json'),JSON.stringify(snapshot,null,2));
-    await captureReports(adapter,async (tab,filename) => {
-      const pending = page.waitForEvent('download',{timeout:30000});
-      await tab.playwright.getByText('خروجی',{exact:true}).click();
-      const result = await pending;
+    status.portfolio = {status:'running', phase:'capture_and_verify'};
+    await writeCaptureStatus(output, status);
+    try {
+      const snapshot = await capturePortfolio(adapter);
+      await fs.writeFile(path.join(output,'portfolio-dom.json'),JSON.stringify(snapshot,null,2));
+      status.portfolio = {status:'saved', phase:'complete'};
+    } catch (error) {
+      status.portfolio = {status:'failed', phase:'capture_and_verify', error_type:captureErrorType(error)};
+      await writeCaptureStatus(output, status);
+      throw error;
+    }
+    await writeCaptureStatus(output, status);
+    const captured = await captureReports(adapter,async (tab,filename) => {
+      const [result] = await Promise.all([
+        page.waitForEvent('download',{timeout:30000}),
+        tab.playwright.getByText('خروجی',{exact:true}).click(),
+      ]);
       const target = path.join(output,filename);
       await result.saveAs(target);
       return target;
+    }, async ({report, ...progress}) => {
+      status.reports[report] = progress;
+      await writeCaptureStatus(output, status);
     });
-    console.log('برداشت کامل شد. فایل‌ها در پوشه خصوصی ذخیره شدند. برای واردکردن از صفحه حساب BRS استفاده کنید.');
+    if (Object.values(captured.reports).some(report => report.status !== 'saved')) {
+      console.error('برداشت ناقص است؛ وضعیت هر خروجی در capture-status.json پوشه خصوصی ثبت شد.');
+      process.exitCode = 1;
+    } else {
+      console.log('فایل‌ها در پوشه خصوصی ذخیره شدند؛ بازه گزارش‌ها را جداگانه بررسی کنید.');
+    }
   } finally {
     await browser.close();
   }
 }
 
 if (typeof process !== 'undefined' && process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().catch(error => {console.error('برداشت متوقف شد:', error.message); process.exitCode=1;});
+  main().catch(() => {console.error('برداشت متوقف شد؛ وضعیت را در پوشه خصوصی بررسی کنید.'); process.exitCode=1;});
 }

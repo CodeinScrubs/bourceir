@@ -26,12 +26,13 @@ import pandas as pd
 
 from config import settings
 from core.client_quality import validated_client_data
+from core.price_quality import validated_feature_prices
 from core.text import normalize_symbol
 from core.timeutils import is_canonical_iso_date, now_tehran_iso
 from database.db import DatabaseManager
 from features.daily import DAILY_FEATURES, FEATURE_SET_VERSION, compute_daily_features
 from features.market import MARKET_FEATURES, RELATIVE_FEATURES, add_relative_features, compute_market_features
-from features.provenance import feature_environment, feature_logic_fingerprint, raw_input_snapshot
+from features.provenance import feature_environment, feature_logic_fingerprint, raw_input_snapshot, registry_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,10 @@ def build_feature_panel(db: DatabaseManager, symbols: Optional[List[str]] = None
         feats = compute_daily_features(prices, client_types)
         feats.insert(1, "symbol", symbol)
         # ستون‌های کمکی برای فیچر بازار (بعداً حذف می‌شوند)
-        feats["value"] = prices["value"].to_numpy()
+        valid_prices = validated_feature_prices(prices)
+        feats["value"] = valid_prices["value"].to_numpy()
         if not client_types.empty:
-            merged = validated_client_data(prices, client_types)
+            merged = validated_client_data(valid_prices, client_types)
             feats["real_net_value"] = (merged["buy_i_value"] - merged["sell_i_value"]).to_numpy()
         else:
             feats["real_net_value"] = float("nan")
@@ -164,6 +166,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
     try:
         environment = feature_environment()
         logic_sha = feature_logic_fingerprint()
+        registry = registry_snapshot(db)
         panel = build_feature_panel(db, symbols=symbols, progress=progress, before=before)
         # انبار سراسری حتی داده مشتریِ نماد بدون قیمت را در منشأ نگه می‌دارد؛ انتخاب صریح نام‌های یکسان‌شده دارد.
         raw_inputs = raw_input_snapshot(db, symbols=None if symbols is None else panel.attrs['selection']['included_symbols'],
@@ -197,7 +200,7 @@ def build_feature_store(db: DatabaseManager, symbols: Optional[List[str]] = None
         "symbol_selection": panel.attrs['selection'],
         "provenance": _provenance(db, tmp_parquet),
     }
-    manifest['provenance'].update(raw_inputs=raw_inputs, feature_logic_sha256=logic_sha,
+    manifest['provenance'].update(raw_inputs=raw_inputs, registry_snapshot=registry, feature_logic_sha256=logic_sha,
                                   database_schema_version=schema_version, feature_environment=environment,
                                   requirements_lock_sha256=environment['requirements_lock_sha256'],
                                   python_version=platform.python_version())

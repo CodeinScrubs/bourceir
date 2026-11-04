@@ -6,6 +6,7 @@ import pandas as pd
 
 from core import market_rules
 from core.daily_publications import MAX_BYTES, _clock, _numeric, parse_publication, publication_request
+from core.source_cooldown import VERSION as TRANSPORT_VERSION
 from core.text import normalize_symbol
 
 VERSION = 'observed-no-trade-mark-v1'
@@ -44,8 +45,10 @@ def parse_no_trade_publication(observation, ins_code, day, *, requested_after=No
 
 def parse_no_trade_receipt(record):
     """Reparse a preserved daily-publication receipt; never trust its cached parsed result."""
-    if not isinstance(record, dict) or record.get('version') != 'daily-publication-archive-v1':
+    if not isinstance(record, dict) or record.get('version') not in ('daily-publication-archive-v1','daily-publication-archive-v2'):
         raise ValueError('رسید بومی روزانه برای دفتر ارزش لازم است')
+    if record['version']=='daily-publication-archive-v2' and 'transport'not in record:
+        raise ValueError('وضعیت انتقال در رسید نسخه۲ باید صریح باشد')
     task = record.get('task')
     if (not isinstance(task, dict) or task.get('kind') != 'price'
             or type(task.get('instrument_type_code')) is not int or task['instrument_type_code'] not in (300, 303)
@@ -66,6 +69,17 @@ def parse_no_trade_receipt(record):
         raise ValueError('رسید خطای دریافت با بایت موجود ناسازگار است')
     if not isinstance(source, dict):
         raise ValueError('بایت بومی رسید ارزش موجود نیست')
+    # Transport is auxiliary evidence, not a numerical mark. A v2 native body
+    # cannot be paired with a failed/deferred or different transport response.
+    if record['version']=='daily-publication-archive-v2' and record['transport']is not None:
+        transport=record['transport']
+        fields={'version','status','admitted','url','requested_at','received_at','http_status'}
+        if (not isinstance(transport,dict) or set(transport)!=fields
+                or transport['version']!=TRANSPORT_VERSION or transport['status']!='response_received'
+                or transport['admitted']is not True or type(transport['http_status'])is not int or transport['http_status']!=200
+                or transport['url']!=source.get('url')
+                or not start<=_clock(transport['requested_at'])<=_clock(transport['received_at'])<=end):
+            raise ValueError('شاهد انتقال با بایت و زمان رسید ارزش سازگار نیست')
     encoded = source.get('body_base64')
     if not isinstance(encoded, str) or not 0 < len(encoded) <= 4*((MAX_BYTES+2)//3):
         raise ValueError('بایت رسید ارزش موجود نیست یا از حد حجم گذشت')

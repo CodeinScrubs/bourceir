@@ -14,6 +14,13 @@ def _number(value, digits=2):
     return 'نامعلوم' if value is None else f'{value:,.{digits}f}'
 
 
+def _locks(pre):
+    up, down = pre.get('locked_up_rows'), pre.get('locked_down_rows')
+    if up is None or down is None:
+        return 'نامعلوم؛ پوشش ' + str(pre.get('lock_coverage', 'نامعلوم'))
+    return f'{up}/{down}'
+
+
 def _table(headers, rows):
     return '<div class="scroll"><table><thead><tr>'+''.join('<th>'+escape(str(v))+'</th>' for v in headers)+\
         '</tr></thead><tbody>'+''.join('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in row)+'</tr>' for row in rows)+\
@@ -58,10 +65,13 @@ def render_stock_study(result, panel, target):
         lo,hi=cap.get('rank_lower_bound'),cap.get('rank_upper_bound')
         rows.append([case['symbol'],case.get('sector_name') or case.get('sector_code'),to_jalali(case['start']),
                      _number(w.get('last_price_multiple'))+'×',_number(w.get('synthetic_multiple'))+'×',
+                     _number(w.get('observed_only_synthetic_multiple'))+'×',
                      _number(cap.get('market_cap_rial')/1e13 if cap.get('market_cap_rial') is not None else None),
                      str(lo) if lo==hi and lo is not None else f'{lo} تا {hi}' if lo else 'نامعلوم'])
     parts += ['<section><h2>خلاصهٔ مشاهده</h2>',_table(['نماد','گروه رسمی فعلی','شروع','نسبت آخرین قیمت خام',
-               'نسبت شاخص مصنوعی PIT','ارزش بازار مشاهده؛ همت','رتبه در جامعه مشاهده'],rows),
+               'شاخص کامل PIT','شاخص فقط مشاهدات موجود','ارزش بازار مشاهده؛ همت','رتبه در جامعه مشاهده'],rows),
+              '<p class="note">شاخص فقط روی ردیف‌های موجود محاسبه شده است؛ تقویم کامل و نبود جلسه گمشده تأیید نشده و '
+              'این عدد شاخص کامل بازه یا بازده اقتصادی نیست. شاخص کامل و میانگین همتایان تا تأیید پیوستگی نامعلوم می‌مانند.</p>',
               '<p>همت = هزار میلیارد تومان. ارزش بازار = تعداد سهام مشاهده‌شده × آخرین قیمت ریالی ÷ ۱۰¹³. '
               'این رتبه بر اساس مشاهده فعلی و تاریخ اثر تأییدنشده تعداد سهام است؛ رتبه تاریخیِ روز شروع/پایان نیست. '
               'مقادیر مفقود در کران رتبه باقی می‌مانند. قیمت پایین هر برگه به معنی شرکت کوچک یا ارزنده نیست.</p>',
@@ -99,8 +109,9 @@ def render_stock_study(result, panel, target):
             parts.append(f'<p>قیمت ادعاشده: {_number(claim_buy)} ← {_number(claim_sell)} تومان؛ نسبت حسابی '
                          f'{claim_sell/claim_buy:.3f} برابر، رشد {(claim_sell/claim_buy-1)*100:.2f}٪. '
                          'این نسبت از اعداد پیام است؛ ستون‌های بالا، دادهٔ مستقل آرشیو هستند.</p>')
-        parts.append(f'<p>نسبت پایانی خام: {_number(w["official_price_multiple"])}×؛ شاخص مصنوعی PIT: '
-                     f'{_number(w["synthetic_multiple"])}×؛ افت بیشینهٔ پایانی شاخص در مسیر: '
+        parts.append(f'<p>نسبت پایانی خام: {_number(w["official_price_multiple"])}×؛ شاخص کامل: '
+                     f'{_number(w["synthetic_multiple"])}×؛ شاخص فقط مشاهدات موجود: '
+                     f'{_number(w["observed_only_synthetic_multiple"])}×؛ افت کامل مسیر: '
                      f'{_number(-100*w["synthetic_close_drawdown"] if w["synthetic_close_drawdown"] is not None else None)}٪؛ '
                      f'{len(w["reference_gaps"])} شکاف مرجع. بازده اقتصادی و بازده قابل اجرا: نامعلوم.</p>')
         if w['reference_gaps']:
@@ -127,7 +138,7 @@ def render_stock_study(result, panel, target):
             [n,case[f'pre_{n}']['observed_rows'],to_jalali(case[f'pre_{n}']['end']),
              _number(case[f'pre_{n}']['synthetic_return']*100 if case[f'pre_{n}']['synthetic_return'] is not None else None)+'٪',
              _number(case[f'pre_{n}']['mean_value_rial']/1e10 if case[f'pre_{n}']['mean_value_rial'] is not None else None),
-             f'{case[f"pre_{n}"]["locked_up_rows"]}/{case[f"pre_{n}"]["locked_down_rows"]}'] for n in (20,60)]))
+             _locks(case[f'pre_{n}'])] for n in (20,60)]))
         parts.append(_table(['متریک پیشین','معلوم از ۲۰','میانه زیرمجموعه معلوم','میانگین کامل'],[
             [label,case['flow_pre_20'][field]['known'],_number(case['flow_pre_20'][field]['known_subset_median']),
              _number(case['flow_pre_20'][field]['full_mean'])] for field,label in (
@@ -140,6 +151,10 @@ def render_stock_study(result, panel, target):
             [label,f'{peers[key]["known"]}/{peers[key]["expected"]}',_number(peers[key]['known_subset_median_multiple']),
              _number(peers[key]['known_subset_mean_multiple']),_number(peers[key]['mean_multiple']),
              peers[key]['known_subset_doubled']] for key,label in (('market','بازار متادیتای فعلی'),('sector','گروه رسمی فعلی'))]))
+        parts.append(_table(['قیاس توصیفی','تعداد دارای شاخص فقط مشاهدات','میانه مشاهده‌شده','میانگین مشاهده‌شده'],[
+            [label,peers[key]['observed_only_known'],_number(peers[key]['observed_only_median_multiple']),
+             _number(peers[key]['observed_only_mean_multiple'])] for key,label in (('market','بازار فعلی'),('sector','گروه فعلی'))]))
+        parts.append('<p>آمار جدول دوم فقط از ردیف‌های موجود است و پوشش بازه و میانگین کل را ثابت نمی‌کند.</p>')
         parts.append(_table(['همتای نزدیک از نظر نقدشوندگی پیشین','بازده ۲۰ جلسه پیشین','نسبت مصنوعی در همین بازه'],[
             [row['symbol'],_number(row['pre_20']['synthetic_return']*100 if row['pre_20']['synthetic_return'] is not None else None)+'٪',
              _number(row['synthetic_multiple'])] for row in peers['matched_by_prior_liquidity']]))

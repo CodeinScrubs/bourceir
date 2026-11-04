@@ -39,12 +39,30 @@ class BaseDataProvider(ABC):
     name: str = "base"
     supports_dated_publications: bool = False
     supports_dated_instrument_states: bool = False
+    supports_history_observations: bool = False
 
     def close(self) -> None:
         """آزادکردن منابع یک نمونه ساخته‌شده توسط گردآورنده؛ پیش‌فرض منبعی ندارد."""
 
     def get_daily_publication_observation(self, ins_code: str, trade_date: str, kind: str) -> Optional[Dict[str, Any]]:
         """بایت بومی قیمت/client با هویت و تاریخ صریح؛ دریافت به معنی اعتبار یا اجرای معامله نیست."""
+        raise NotImplementedError
+
+    def get_symbol_history_observation(self, ins_code: str, last_n: int = 100) -> Optional[Dict[str, Any]]:
+        """Bounded original history bytes and receipt; normalization validity is assessed separately."""
+        raise NotImplementedError
+
+    def get_research_rights_search_observation(self, parent_code: str,
+                                               parent_symbol: str) -> Optional[Dict[str, Any]]:
+        """Bounded symbol-search bytes; candidate identity and historical coverage are unverified."""
+        raise NotImplementedError
+
+    def get_historical_day_universe_observation(self, trade_date: str) -> Optional[Dict[str, Any]]:
+        """Bounded native response for a pre-holdout day; source coverage is unverified."""
+        raise NotImplementedError
+
+    def get_retrospective_day_universe_observation(self, trade_date: str, *, retrospective_rights_only=False) -> Optional[Dict[str, Any]]:
+        """Explicit retrospective rights-only request; permanently contaminates this hypothesis holdout."""
         raise NotImplementedError
 
     def get_dated_instrument_state_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
@@ -106,6 +124,16 @@ class BaseDataProvider(ABC):
 
     def get_dated_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
         """فقط ردیف‌های بومی روز درخواستی از فهرست تاریخچه، پیش از مصرف ارقام سایر روزها."""
+        raise NotImplementedError
+
+    def get_development_history_observation(self, ins_code: str, start_date: str,
+                                            end_date: str) -> Optional[Dict[str, Any]]:
+        """تاریخچه بومی بازه پیش از holdout؛ پایان بازه مستثناست و صحت داده جدا بررسی می‌شود."""
+        raise NotImplementedError
+
+    def get_retrospective_rights_history_observation(self, ins_code: str, start_date: str,
+                                                    end_date: str, *, retrospective_rights_only=False) -> Optional[Dict[str, Any]]:
+        """Isolated explicit rights research history; today and future are excluded."""
         raise NotImplementedError
 
     def get_market_overview(self, flow: int) -> Optional[Dict[str, Any]]:

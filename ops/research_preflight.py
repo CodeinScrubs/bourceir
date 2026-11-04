@@ -133,12 +133,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before', default=None)
     parser.add_argument('--json', default='data/private/research-preflight.json')
+    parser.add_argument('--detail-limit', type=int, default=1000)
     args = parser.parse_args(argv)
     from database.db import DatabaseManager
     try:
         target = private_report_path(args.json, forbidden_paths=(settings.DB_PATH,))
         with DatabaseManager(read_only=True) as db:
-            report = research_preflight(db, before=args.before)
+            report = research_preflight(db, before=args.before, detail_limit=args.detail_limit)
         write_private_report(target, report, forbidden_paths=(settings.DB_PATH,))
     except (ValueError, OSError, sqlite3.Error) as exc:
         parser.exit(2, str(exc) + '\n')

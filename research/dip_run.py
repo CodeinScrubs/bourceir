@@ -23,7 +23,7 @@ from database.db import DatabaseManager
 from features.daily import FEATURE_SET_VERSION
 from features.provenance import assert_compatible_inputs
 from features.store import _git_commit, load_feature_snapshot
-from research.baselines import STRATEGIES, pick_top, tolerant_t
+from research.baselines import STRATEGIES, decision_score_inputs, eligible_strategy_score, pick_top, tolerant_t
 from research.dip import DIP_VERSION, THROUGH_MARGIN, TIME_EXIT_PRICE_BASIS, DipRule, simulate
 from research.labels import market_calendar
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
@@ -35,7 +35,7 @@ MAIN_RULES = [  # روش کاربر: ۲٪ زیر قیمت مرجع بخر، ۳ �
 SENSITIVITY_RULES = [DipRule(d, tp, h, None, True) for d in (0.01, 0.02, 0.03) for tp in (0.02, 0.03, 0.04)
                      for h in (1, 2) if not (d == 0.02 and h == 1 and tp in (0.03, 0.04))]
 RANDOM_DRAWS = 20
-DIP_SUMMARY_VERSION = 'dip-summary-v2'
+DIP_SUMMARY_VERSION = 'dip-summary-v3'
 
 
 def _finite_stat(values, statistic, *args):
@@ -76,14 +76,16 @@ def evaluate(trades: pd.DataFrame, picks: pd.DataFrame, calendar_days: pd.Index,
              hold: int, regime: pd.Series) -> Dict[str, Any]:
     """آمار یک قاعده × یک روش انتخاب نامزد. k=None یعنی «همه سهم‌های نقدشونده» (وزن برابر)."""
     df = picks[["date", "symbol"]].merge(trades, on=["date", "symbol"], how="left", validate="one_to_one")
-    known = df["dip_status"].isin(["not_filled", "complete", "censored", "no_session"])
-    filled = df["dip_status"].isin(["complete", "censored"])
+    # A legacy censored row without its entry flag may be censored before entry,
+    # so status alone does not prove that a purchase occurred.
+    known = df["dip_status"].isin(["not_filled", "complete"])
+    filled = df["dip_status"].eq("complete")
     if "entry_filled" in df:
-        known = df["entry_filled"].notna()
-        filled = df["entry_filled"] == 1
+        known = df["entry_filled"].notna() & ~df["dip_status"].eq('no_session')
+        filled = df["entry_filled"].eq(1) & ~df["dip_status"].eq('no_session')
     done = df["dip_status"] == "complete"
     nets = df.loc[done, "net_ret"]
-    idle = df["dip_status"].isin(["not_filled", "no_session"])
+    idle = df["dip_status"].eq("not_filled")
     per_trade = df["net_ret"].where(done).mask(idle, 0.0)
     grouped = per_trade.groupby(df["date"])
     denominator = grouped.size() if k is None else k
@@ -99,7 +101,7 @@ def evaluate(trades: pd.DataFrame, picks: pd.DataFrame, calendar_days: pd.Index,
         "fill_rate": float(filled.sum() / known.sum()) if known.sum() else float("nan"),
         "trades": int(done.sum()),
         "censored": int((df["dip_status"] == "censored").sum()),
-        "invalid_or_missing": int((df["dip_status"].isna() | (df["dip_status"] == "invalid")).sum()),
+        "invalid_or_missing": int((df["dip_status"].isna() | df["dip_status"].isin(['invalid', 'no_session'])).sum()),
         "cohort_known_days": int(cohort.notna().sum()), "cohort_unknown_days": int(cohort.isna().sum()),
         "portfolio_simulated": False,
         "mean_trade": float(nets.mean()) if len(nets) else float("nan"),
@@ -151,7 +153,7 @@ def run_dip_research(db: DatabaseManager, log_experiment: bool = True,
     candidates: Dict[str, pd.DataFrame] = {"all_liquid": panel[["date", "symbol"]]}
     labels_fa = {"all_liquid": "همه سهم‌های نقدشونده (بدون انتخاب)"}
     for strategy in STRATEGIES:
-        candidates[strategy.name] = pick_top(panel, strategy.score(panel), k)[["date", "symbol"]]
+        candidates[strategy.name] = pick_top(panel, eligible_strategy_score(decision_score_inputs(panel), strategy), k)[["date", "symbol"]]
         labels_fa[strategy.name] = strategy.label_fa
     rng = np.random.default_rng(11)
     for draw in range(RANDOM_DRAWS):

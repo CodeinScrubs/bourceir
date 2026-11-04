@@ -41,9 +41,7 @@ def diagnose_dip_fold(prices, calendar, executions, decisions, picks, metrics, *
             due_position = position[day] + hold
             due_day = days[due_position] if due_position < len(days) else None
             due_row = rows.get((symbol, due_day), {})
-            due_ref = due_row.get('ref_price_raw')
-            due_low, due_high = due_row.get('low_raw'), due_row.get('high_raw')
-            lock_known = all(_finite(v) and v > 0 for v in (due_ref, due_low, due_high)) and due_low <= due_high
+            lock_known = bool(market_rules.lock_inputs_known(pd.DataFrame([due_row])).iloc[0])
             entry = dict(symbol=symbol, entry_date=day, category=category, close_position=close_position,
                          entry_quantity=record['quantity'], entry_fee_rial=record['fee_rial'], planned_exit=due_day,
                          planned_exit_missing_row=not bool(due_row),

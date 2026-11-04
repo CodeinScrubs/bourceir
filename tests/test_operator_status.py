@@ -98,3 +98,33 @@ def test_old_plan_budget_is_not_reverse_engineered_from_rounded_quantity(db):
     result = operator_status(db, metrics, pd.DataFrame())
     assert result['candidates'][0]['caps'] is None
     assert any('بودجه اولیه' in r for r in result['candidates'][0]['blockers'])
+
+
+def test_operator_blocks_manual_sizing_when_daily_reference_is_missing(db, monkeypatch):
+    monkeypatch.setattr('ops.operator_status.current_daily_row', lambda *args, **kwargs: True)
+    monkeypatch.setattr('ops.operator_status.expected_completed_session', lambda *args, **kwargs: '2024-01-01')
+    sid = db.upsert_symbol(dict(symbol_fa='الف', ins_code='123', instrument_type_code=300))
+    db.insert_daily_price(sid, '2024-01-01', 1000, 1050, 950, 1000, close_final_raw=1000,
+                          ref_price_raw=None, volume=1000, value=1_000_000)
+    profile = RiskProfile(1_000_000, 100_000)
+    repo = WorkbenchRepository(db)
+    repo.save_profile(profile, True)
+    calculation = plan_trade(profile=profile, entry_rial=1000, stop_rial=950, target_rial=1100,
+        trade_loss_budget_rial=10_000, available_cash_rial=profile.capital_rial,
+        equity_rial=profile.capital_rial, daily_value_rial=1_000_000, data_current=True, account_complete=True)
+    calculation['operator_inputs'] = {'trade_loss_budget_rial': 10_000}
+    repo.save_plan(symbol='الف', mode='actual', horizon='swing', entry_rial=1000, stop_rial=950,
+                   target_rial=1100, rationale='فقط آزمون', calculation=calculation)
+    metrics = _matching_metrics()
+    metrics['value'] = 1_000_000
+    missing = operator_status(db, metrics, pd.DataFrame(), at=datetime(2024, 1, 1, 15, tzinfo=TEHRAN_TZ))
+    assert any('به‌روز' in item for item in missing['candidates'][0]['blockers'])
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET ref_price_raw=1000 WHERE symbol_id=?', (sid,))
+        db.conn.execute('UPDATE daily_prices SET value=1 WHERE symbol_id=?', (sid,))
+    invalid_value = operator_status(db, metrics, pd.DataFrame(), at=datetime(2024, 1, 1, 15, tzinfo=TEHRAN_TZ))
+    assert any('به‌روز' in item for item in invalid_value['candidates'][0]['blockers'])
+    with db.conn:
+        db.conn.execute('UPDATE daily_prices SET value=1000000 WHERE symbol_id=?', (sid,))
+    complete = operator_status(db, metrics, pd.DataFrame(), at=datetime(2024, 1, 1, 15, tzinfo=TEHRAN_TZ))
+    assert not any('به‌روز' in item for item in complete['candidates'][0]['blockers'])

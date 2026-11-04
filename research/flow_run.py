@@ -22,9 +22,9 @@ from core.timeutils import now_tehran_iso
 from database.flow_data import load_flow_inputs
 from features.provenance import assert_compatible_inputs
 from research.labels import market_calendar
-from research.portfolio_run import _picks, select_from_past, verified_baseline_inputs
+from research.portfolio_run import BASELINE_SELECTION_VERSION, _picks, select_from_past, verified_baseline_inputs
 from research.run import _deduplicate_input, _json_safe, _sha256, archive_research_code, research_code_fingerprint
-from research.walkforward import time_folds
+from research.walkforward import preceding_price_observations, time_folds
 
 FLOW_RESEARCH_VERSION = 'flow-portfolio-v3'
 
@@ -99,6 +99,7 @@ def run_flow_research(db, *, source_id=None, initial_capital_rial=None, min_trai
         frame.to_parquet(path, index=False, compression='zstd')
         input_hashes[name] = _deduplicate_input(path, root/'objects')
     protocol = dict(version=FLOW_RESEARCH_VERSION, filter_version=FLOW_FILTER_VERSION,
+        baseline_selection_version=BASELINE_SELECTION_VERSION,
         portfolio_version=PORTFOLIO_VERSION, source_id=source_id, source_hashes=source_hashes, inputs=input_hashes,
         config=asdict(configuration), horizons=list(horizons), random_seed=random_seed,
         folds=[asdict(f) for f in folds], filters=list(RESEARCH_FILTERS),
@@ -132,8 +133,8 @@ def run_flow_research(db, *, source_id=None, initial_capital_rial=None, min_trai
     all_picks = {name: _rank_diagnostics(metrics, diagnostics[name], cfg['top_k']) for name in RESEARCH_FILTERS}
     results, accumulated = [], {}
     for index, fold in enumerate(folds):
-        chosen, training = select_from_past(panel, fold, horizons, cfg['top_k'])
-        prior = prices.loc[prices.date < fold.test_start].groupby('symbol', sort=False).tail(1)
+        chosen, training = select_from_past(panel, fold, horizons, cfg['top_k'], calendar=calendar)
+        prior = preceding_price_observations(prices, fold.test_start)
         test_prices = prices.loc[(prices.date >= fold.test_start) & (prices.date < fold.test_end_exclusive)]
         replay_prices = pd.concat([prior, test_prices], ignore_index=True)
         test_calendar = calendar[(calendar >= fold.test_start) & (calendar < fold.test_end_exclusive)]

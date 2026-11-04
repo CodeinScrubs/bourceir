@@ -258,9 +258,23 @@ def test_a_mixed_action_price_gap_is_not_silently_accepted_as_pure_bonus():
         replace(event,ex_reference_rial='70')
 
 
-def test_credited_shares_stay_non_cash_through_missing_sessions_until_an_observed_exit():
+def test_missing_exit_bar_does_not_fabricate_later_credited_share_disposal():
     prices, dates, event = market()
     prices=prices.loc[~prices.date.isin(dates[5:8])]
+    result=replay_bonus_share_portfolio(prices,pick(dates),dates,config(),events=[event],
+        releases=[release(event,dates[5])])
+    credit_sales=result.executions.loc[result.executions.get('credit_disposal').eq(True)]
+    assert result.metrics['status'] == 'invalid_data' and result.metrics['total_return'] is None
+    assert credit_sales.empty and 'missing_exit_bar' in set(result.decisions.status)
+
+
+def test_credited_shares_stay_non_cash_through_observed_model_locks():
+    prices, dates, event = market()
+    for index, price, reference in [(5, 77., 80.), (6, 74., 77.), (7, 71., 74.)]:
+        prices.loc[prices.date.eq(dates[index]), ['open_raw', 'low_raw', 'high_raw', 'close_raw',
+                    'close_final_raw', 'ref_price_raw', 'value']] = [price, price, price, price, price,
+                                                                     reference, price * 1000]
+    prices.loc[prices.date.eq(dates[8]), 'ref_price_raw'] = 71.
     result=replay_bonus_share_portfolio(prices,pick(dates),dates,config(),events=[event],
         releases=[release(event,dates[5])])
     credit_sales=result.executions.loc[result.executions.get('credit_disposal').eq(True)]

@@ -421,6 +421,33 @@ def test_real_incomplete_journal_never_displays_initial_capital_as_cash(dashboar
     assert next(m for m in app.metric if m.label == 'قدرت خرید آخرین گزارش').value == 'نامعلوم'
 
 
+def test_broker_page_renders_mixed_known_and_missing_archive_dates(dashboard_db, capture):  # noqa: F811
+    from streamlit.testing.v1 import AppTest
+
+    from database.db import DatabaseManager
+    from tests.test_dashboard import DASHBOARD
+    with DatabaseManager(db_path=dashboard_db) as db:
+        import_report(BrokerRepository(db), encoded(capture), 'portfolio.json')
+        symbol_id = db.upsert_symbol(dict(symbol_fa='فولاد', ins_code='123', instrument_type_code=300))
+        db.insert_daily_price(symbol_id, '2024-01-03', 1000, 1000, 1000, 1000,
+                              volume=10, value=10000, trade_count=1, close_final_raw=1000, ref_price_raw=1000)
+    app = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    app.sidebar.radio[0].set_value('🏦 حساب و تطبیق فارابی').run()
+    assert not app.exception
+    dates = app.dataframe[0].value['تاریخ آرشیو'].tolist()
+    assert 'نامعلوم' in dates and any(value != 'نامعلوم' for value in dates)
+
+
+def test_broker_archive_date_distinguishes_missing_from_malformed():
+    from dashboard.broker import _archive_date_display
+
+    assert _archive_date_display(None) == 'نامعلوم'
+    assert _archive_date_display(float('nan')) == 'نامعلوم'
+    assert _archive_date_display('') == 'نامعلوم'
+    assert _archive_date_display('2024-01-32') == 'نامعتبر'
+    assert _archive_date_display('2024-01-03') not in ('نامعلوم', 'نامعتبر')
+
+
 def test_public_quote_job_button_starts_once_and_recovers_after_completion(dashboard_db, capture, monkeypatch):  # noqa: F811
     from streamlit.testing.v1 import AppTest
 

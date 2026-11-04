@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import datetime, timedelta
 
+import pandas as pd
 import pytest
 
 from config import settings
@@ -20,6 +21,17 @@ def quote(**changes):
                   daily_value_rial=1_000_000, data_current=True, account_complete=True)
     inputs.update(changes)
     return plan_trade(**inputs)
+
+
+@pytest.mark.parametrize('rial,expected', [
+    (9952, '995.2 تومان'), (6131, '613.1 تومان'), (6690, '669 تومان'),
+    (1001.2345, '≈ 100.1234 تومان'), (None, 'نامعلوم'), (float('nan'), 'نامعلوم'),
+    (True, 'نامعلوم'), (0, 'نامعلوم'), (-1, 'نامعلوم'),
+])
+def test_per_share_price_display_preserves_rial_precision_and_marks_rounding(rial, expected):
+    from dashboard.workbench import _price_toman
+
+    assert _price_toman(rial) == expected
 
 
 def test_plan_enforces_cash_fees_and_participation():
@@ -129,6 +141,42 @@ def test_market_rows_and_weekend_freshness(workbench, db):
     assert result.iloc[0]["current"] and result.iloc[0]["liquid"]
 
 
+@pytest.mark.parametrize('field', ['high_raw', 'low_raw', 'ref_price_raw', 'value', 'volume', 'close_final_raw'])
+@pytest.mark.parametrize('invalid', [True, 'bad'])
+def test_descriptive_screen_does_not_make_invalid_price_data_liquid(field, invalid):
+    source = dict(symbol_fa='آزمون', instrument_type_code=300, is_active=1, date='2026-10-14',
+                  high_raw=1050, low_raw=950, close_raw=1000, close_final_raw=1000,
+                  ref_price_raw=1000, volume=1000, value=1_000_000)
+    source[field] = invalid
+    result = descriptive_screen(pd.DataFrame([source]), 0,
+                                datetime(2026, 10, 15, 15, tzinfo=TEHRAN_TZ))
+    assert not result.iloc[0]['data_valid'] and not result.iloc[0]['liquid']
+    if field in ('high_raw', 'low_raw', 'ref_price_raw', 'volume'):
+        assert pd.isna(result.iloc[0]['locked_up']) and pd.isna(result.iloc[0]['locked_down'])
+
+
+def test_shortlist_displays_numeric_string_value_without_changing_source(dashboard_db, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from database.db import DatabaseManager
+    from tests.test_dashboard import DASHBOARD
+
+    rows = pd.DataFrame([dict(symbol_fa='آزمون', instrument_type_code=300, is_active=1,
+        date='2024-01-01', high_raw=1050, low_raw=950, close_raw=1000, close_final_raw=1000,
+        ref_price_raw=1000, volume=1000, value='1000000')])
+    monkeypatch.setattr(WorkbenchRepository, 'market_rows', lambda self: rows.copy())
+    monkeypatch.setattr('core.screening.current_daily_row', lambda *args, **kwargs: True)
+    with DatabaseManager(db_path=dashboard_db):
+        pass
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.sidebar.radio[0].set_value('🔎 فهرست بررسی').run()
+    next(item for item in at.number_input if item.label == 'حداقل ارزش معاملات روز (میلیارد تومان)').set_value(0.)
+    at.run()
+    assert not at.exception
+    assert at.dataframe[0].value.iloc[0]['ارزش معاملات (میلیارد تومان)'] == pytest.approx(.0001)
+    assert rows.iloc[0]['value'] == '1000000'
+
+
 def test_migration_eight_is_repeatable_and_keeps_existing_prices(db):
     from database.migrator import MIGRATIONS_DIR, _run_sql_migration
     _run_sql_migration(db.conn, MIGRATIONS_DIR / "008_personal_workbench.sql")
@@ -174,6 +222,42 @@ def test_workbench_ui_stale_data_blocks_and_records_manual_fill(dashboard_db):
     with DatabaseManager(db_path=dashboard_db, read_only=True) as db:
         assert len(WorkbenchRepository(db).executions("paper")) == 1
         assert WorkbenchRepository(db).executions("actual") == []
+
+
+def test_workbench_swing_plan_blocks_missing_reference_even_with_fresh_vwap(dashboard_db, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    from database.db import DatabaseManager
+    from tests.test_dashboard import DASHBOARD
+
+    monkeypatch.setattr('dashboard.workbench.current_daily_row', lambda *args, **kwargs: True)
+    with DatabaseManager(db_path=dashboard_db) as db:
+        WorkbenchRepository(db).save_profile(RiskProfile(1_000_000, 100_000))
+        sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='1', instrument_type_code=300))
+        db.insert_daily_price(sid, '2026-10-13', 1000, 1050, 950, 1000, volume=1000,
+                              value=1_000_000, close_final_raw=1000, ref_price_raw=None)
+
+    def loaded_app():
+        app = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+        app.sidebar.radio[0].set_value('🛡️ برنامه و دفتر معاملات').run()
+        next(w for w in app.selectbox if w.label == 'افق').set_value('۲ تا ۳ روز')
+        by_label = {widget.label: widget for widget in app.number_input}
+        by_label['قیمت سناریوی خروج با زیان (تومان)'].set_value(95.)
+        by_label['قیمت هدف خودت (تومان)'].set_value(110.)
+        by_label['بودجه زیان همین معامله (تومان)'].set_value(1000)
+        return app.run()
+
+    missing = loaded_app()
+    assert not missing.exception
+    assert any('به‌روز' in warning.value for warning in missing.warning)
+    assert not any(button.label == 'ثبت برنامه دستی' for button in missing.button)
+
+    with DatabaseManager(db_path=dashboard_db) as db:
+        with db.conn:
+            db.conn.execute('UPDATE daily_prices SET ref_price_raw=1000 WHERE symbol_id=?', (sid,))
+    complete = loaded_app()
+    assert not complete.exception
+    assert any(button.label == 'ثبت برنامه دستی' for button in complete.button)
 
 
 def test_workbench_intraday_queue_uses_the_live_book_in_the_ui(dashboard_db, monkeypatch):
