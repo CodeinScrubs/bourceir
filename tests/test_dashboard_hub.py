@@ -90,10 +90,21 @@ def test_library_search_finds_persian_names_for_technical_folders(tmp_path):
 @pytest.mark.parametrize('relative', [
     '../secrets.json', '/outside.json', 'C:/outside.json', 'folder/../secrets.json',
     'C:outside.json', r'\\server\share\outside.json', r'folder\..\outside.json', r'\outside.json',
+    r'folder\report.json:alternate',
 ])
 def test_library_rejects_escape_paths(tmp_path, relative):
     with pytest.raises(ValueError):
         contained(tmp_path, relative)
+
+
+def test_hidden_subdirectory_is_inaccessible_by_direct_path(tmp_path):
+    hidden = tmp_path / '.hidden'
+    hidden.mkdir()
+    (hidden / 'report.json').write_text('{}', encoding='utf-8')
+    with pytest.raises(ValueError):
+        list_library(tmp_path, '.hidden')
+    with pytest.raises(ValueError):
+        read_library_file(tmp_path, '.hidden/report.json')
 
 
 def test_library_rejects_external_symlinks(tmp_path):
@@ -186,6 +197,24 @@ def test_html_report_is_download_only_in_the_library(tmp_path, monkeypatch):
     assert not app.exception
     assert any('این قالب فقط' in item.value for item in app.info)
     assert not any('MUST_NOT_RUN' in item.value for item in app.markdown)
+
+
+def test_report_selection_clears_the_previous_files_preview(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'DATA_DIR', tmp_path)
+    root = tmp_path / 'private'
+    root.mkdir()
+    (root / 'first.txt').write_text('First report', encoding='utf-8')
+    (root / 'second.txt').write_text('Second report', encoding='utf-8')
+    app = AppTest.from_string('from dashboard.hub import page_reports\npage_reports()').run()
+    selected = next(select for select in app.selectbox if select.label == 'پوشه یا گزارش')
+    selected.set_value('first.txt').run()
+    app.button(key='hub-library-read').click().run()
+    assert any(item.value == 'First report' for item in app.code)
+    next(select for select in app.selectbox if select.label == 'پوشه یا گزارش').set_value('second.txt').run()
+    assert not app.exception
+    assert not app.code
+    app.button(key='hub-library-read').click().run()
+    assert any(item.value == 'Second report' for item in app.code)
 
 
 def test_tools_page_is_read_only_and_exposes_advanced_access(tmp_path, monkeypatch):

@@ -213,6 +213,8 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
     with cols[0]:
         if status["running"]:
             st.info(f"⏳ «{JOB_LABELS.get(name, name)}» در حال اجراست...")
+        elif status["running"] is None:
+            st.warning("وضعیت وظیفه نامعلوم است. راه‌اندازی دوباره تا احراز وضعیت متوقف است.")
         elif status["started_at"]:
             st.caption(f"آخرین اجرا: {to_jalali(status['started_at'], with_time=True)}")
         st.caption(help_text)
@@ -221,7 +223,8 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
             if stoppable and st.button("⏹ توقف", key=f"stop-{name}", width="stretch"):
                 jobs.stop_job(name)
                 st.rerun()
-        elif st.button(start_label, key=f"start-{name}", type="primary", width="stretch", disabled=disabled):
+        elif st.button(start_label, key=f"start-{name}", type="primary", width="stretch",
+                       disabled=disabled or status["running"] is None):
             jobs.start_job(name, args)
             st.rerun()
     if status["log_tail"]:

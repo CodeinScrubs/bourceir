@@ -60,11 +60,13 @@ def symbol_review_panel(database_path, symbol):
             st.warning('اطلاعیه‌ای برای این نماد در آرشیو محلی ثبت نشده؛ این به معنی نبود خبر یا رویداد نیست.')
         st.code(f'.venv/Scripts/python.exe brs.py codal --symbol {symbol} --pages 12', language='powershell')
         status = jobs.job_status('codal')
-        if st.button('دریافت هدفمند اطلاعیه‌های این نماد', disabled=status['running'], key='symbol-codal'):
+        if st.button('دریافت هدفمند اطلاعیه‌های این نماد', disabled=status['running'] is not False, key='symbol-codal'):
             jobs.start_job('codal', ['codal', '--symbol', symbol, '--pages', '12'])
             st.rerun()
         if status['started_at']:
             st.caption('آخرین درخواست کدال: ' + ' '.join(status['args']) + (' — در حال اجرا' if status['running'] else ''))
+        if status['running'] is None:
+            st.warning('وضعیت دریافت اطلاعیه‌ها نامعلوم است.')
             if status['log_tail']:
                 st.code('\n'.join(status['log_tail']), language=None)
         st.caption('دریافت هدفمند سقف صفحه دارد؛ داده مالی تأییدشده، تاریخچه کامل قوانین/عضویت بازار '

@@ -14,7 +14,7 @@ from data_collector.codal import CodalProvider
 from data_collector.scheduler import DataCollector
 from data_collector.validator import DataValidator
 from database.symbol_review import load_symbol_review
-from tests.conftest import FakeSession
+from tests.conftest import FakeResponse, FakeSession
 from tests.test_codal_ai import RAW_LETTER
 from tests.test_flow_filters import history
 
@@ -144,6 +144,28 @@ def test_codal_empty_success_is_different_from_schema_error_or_all_malformed_rec
     provider = CodalProvider(session=FakeSession({'search.codal.ir': {'Letters': []}}))
     report = provider.get_latest_report(pages=2)
     assert report['reached_end'] and report['failed_page'] is None and report['pages_fetched'] == 1
+
+
+@pytest.mark.parametrize('payload', [
+    {'Letters': [], 'IsAttacker': True, 'Total': 0, 'Page': 0},
+    {'Letters': [], 'IsAttacker': None, 'Total': 0, 'Page': 0},
+    {'Letters': [], 'IsAttacker': False, 'Total': 20, 'Page': 1},
+])
+def test_codal_rejects_unverified_or_contradictory_empty_pages(payload):
+    session = FakeSession({'search.codal.ir': payload})
+    report = CodalProvider(session=session).get_latest_report(pages=2)
+    assert report['failed_page'] == 1
+    assert not report['reached_end']
+    assert not report['page_limit_reached']
+    assert len(session.calls) == 1
+
+
+def test_codal_partial_http_response_cannot_end_the_list():
+    session = FakeSession({})
+    session.get = lambda *args, **kwargs: FakeResponse({'Letters': []}, status=206)
+    report = CodalProvider(session=session).get_latest_report(pages=1)
+    assert report['failed_page'] == 1
+    assert not report['reached_end']
 
 
 def test_codal_wrong_symbol_is_rejected_and_page_limit_is_explicit():

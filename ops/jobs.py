@@ -7,6 +7,7 @@
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -34,43 +35,79 @@ def _state_file(name: str) -> Path:
 
 def _read_state(name: str) -> Optional[Dict[str, Any]]:
     path = _state_file(name)
-    if not path.exists():
-        return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return None
+    if not isinstance(state, dict) or type(state.get("pid")) is not int or state["pid"] <= 0:
+        raise ValueError("شناسهٔ فرایند وظیفه نامعتبر است")
+    created = state.get("created_at")
+    if created is not None and (type(created) not in (int, float) or not math.isfinite(created) or created <= 0):
+        raise ValueError("زمان ایجاد فرایند وظیفه نامعتبر است")
+    args = state.get("args", [])
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise ValueError("آرگومان‌های وظیفه نامعتبرند")
+    if state.get("started_at") is not None and not isinstance(state["started_at"], str):
+        raise ValueError("زمان شروع وظیفه نامعتبر است")
+    return state
 
 
-def _is_alive(pid: Optional[int], created_at: Optional[float] = None) -> bool:
-    if not pid or not psutil.pid_exists(pid):
-        return False
+def _job_process(state: Dict[str, Any]) -> Optional[psutil.Process]:
+    """Return the checked process object so stopping it requires no second PID lookup."""
+    if not state:
+        return None
     try:
-        proc = psutil.Process(pid)
+        proc = psutil.Process(state["pid"])
+        if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+            return None
+        created = state.get("created_at")
+        if created is not None and abs(proc.create_time() - created) >= 0.01:
+            return None
         command = proc.cmdline()
-        return (proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
-                and len(command) > 1 and Path(command[1]).resolve() == BRS_SCRIPT.resolve()
-                and created_at is not None and abs(proc.create_time() - created_at) < 0.01)
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return False
+        if len(command) < 2 or Path(command[1]).resolve() != BRS_SCRIPT.resolve():
+            return None
+        if "args" in state and command[2:] != state["args"]:
+            return None
+        if created is None:
+            raise ValueError("زمان ایجاد فرایند فعال ثبت نشده است")
+        return proc
+    except psutil.NoSuchProcess:
+        return None
+
+
+_IDENTITY_ERRORS = (OSError, ValueError, OverflowError, RuntimeError, psutil.AccessDenied)
 
 
 def job_status(name: str, tail_lines: int = 15) -> Dict[str, Any]:
-    state = _read_state(name) or {}
-    log_path = Path(state["log"]) if state.get("log") else None
-    tail: List[str] = []
-    if log_path and log_path.exists():
-        with log_path.open("rb") as stream:
-            stream.seek(max(0, log_path.stat().st_size - 65536))
-            lines = stream.read().decode("utf-8", errors="replace").splitlines()
-        tail = lines[-tail_lines:]
     owned = _OWNED_PROCESSES.get(name)
-    # handle خود فرایند قابل اتکاتر از جستجوی مجدد PID است (به‌ویژه در محیط‌های دارای PID namespace).
-    running = owned.poll() is None if owned is not None else _is_alive(state.get("pid"), state.get("created_at"))
+    owned_running = owned is not None and owned.poll() is None
+    running = True if owned_running else None
+    state = {}
+    try:
+        state = _read_state(name) or {}
+        if owned_running:
+            if state.get("pid") != owned.pid:
+                state = {}
+        else:
+            running = _job_process(state) is not None
+    except _IDENTITY_ERRORS:
+        pass
+    tail: List[str] = []
+    if state and tail_lines > 0:
+        log_path = settings.LOG_DIR / f"job-{name}.log"
+        try:
+            with log_path.open("rb") as stream:
+                end = stream.seek(0, os.SEEK_END)
+                size = min(end, 65536)
+                stream.seek(end - size)
+                tail = stream.read(size).decode("utf-8", errors="replace").splitlines()[-tail_lines:]
+        except OSError:
+            pass
     return {
         "name": name,
         "running": running,
-        "returncode": owned.returncode if owned is not None else None,
+        "returncode": (owned.returncode if running is False and owned is not None
+                       and state.get("pid") == owned.pid else None),
         "started_at": state.get("started_at"),
         "args": state.get("args", []),
         "log_tail": tail,
@@ -78,8 +115,8 @@ def job_status(name: str, tail_lines: int = 15) -> Dict[str, Any]:
 
 
 @contextmanager
-def _start_lock(name):
-    """OS lock, released after a crash; prevents check/start races across dashboard processes."""
+def _job_lock(name):
+    """Serialize start and stop for a job across dashboard processes."""
     path = _state_file(name).with_suffix('.lock')
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as stream:
@@ -108,13 +145,18 @@ def _start_lock(name):
 
 
 def start_job(name: str, args: List[str]) -> bool:
-    """اجرای brs.py با آرگومان‌های داده‌شده در پس‌زمینه. اگر همین کار در حال اجرا باشد False."""
-    with _start_lock(name) as acquired:
+    """Run a job only when no previous worker is active and its status is known."""
+    if isinstance(args, str):
+        raise ValueError("آرگومان‌های وظیفه باید فهرستی از متن‌ها باشند")
+    args = list(args)
+    if not all(isinstance(arg, str) for arg in args):
+        raise ValueError("آرگومان‌های وظیفه باید متن باشند")
+    with _job_lock(name) as acquired:
         return _start_job_locked(name, args) if acquired else False
 
 
 def _start_job_locked(name: str, args: List[str]) -> bool:
-    if job_status(name)["running"]:
+    if job_status(name, tail_lines=0)["running"] is not False:
         return False
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -122,6 +164,7 @@ def _start_job_locked(name: str, args: List[str]) -> bool:
     flags = 0
     if sys.platform.startswith("win"):
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    started_at = now_tehran_iso()
     with open(log_path, "w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
             [sys.executable, str(BRS_SCRIPT), *args],
@@ -137,7 +180,7 @@ def _start_job_locked(name: str, args: List[str]) -> bool:
     temporary = state.with_name(f'{state.stem}-{uuid.uuid4().hex}.tmp')
     try:
         temporary.write_text(json.dumps({
-            "pid": proc.pid, "args": args, "started_at": now_tehran_iso(), "log": str(log_path),
+            "pid": proc.pid, "args": args, "started_at": started_at, "log": str(log_path),
             "created_at": created_at,
         }, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, state)
@@ -155,24 +198,31 @@ def _start_job_locked(name: str, args: List[str]) -> bool:
 
 
 def stop_job(name: str) -> bool:
-    state = _read_state(name) or {}
-    pid = state.get("pid")
+    with _job_lock(name) as acquired:
+        return _stop_job_locked(name) if acquired else False
+
+
+def _stop_job_locked(name: str) -> bool:
     owned = _OWNED_PROCESSES.get(name)
-    if owned is not None:
-        if owned.poll() is not None:
+    owned_running = owned is not None and owned.poll() is None
+    proc = None
+    try:
+        state = _read_state(name) or {}
+        if not owned_running or state.get("pid") == owned.pid:
+            proc = _job_process(state)
+    except _IDENTITY_ERRORS:
+        pass
+    if proc is None:
+        if not owned_running:
             return False
         # در محیطی که psutil فضای PID دیگری می‌بیند، فقط handle متعلق به خودمان متوقف می‌شود.
-        if not _is_alive(pid, state.get("created_at")):
-            owned.terminate()
-            try:
-                owned.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                owned.kill()
-                owned.wait(timeout=5)
-            return True
-    if not _is_alive(pid, state.get("created_at")):
-        return False
-    proc = psutil.Process(pid)
+        owned.terminate()
+        try:
+            owned.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            owned.kill()
+            owned.wait(timeout=5)
+        return True
     processes = proc.children(recursive=True) + [proc]
     for target in processes:
         try:
@@ -188,6 +238,6 @@ def stop_job(name: str) -> bool:
     _, survivors = psutil.wait_procs(survivors, timeout=5)
     if survivors:
         raise RuntimeError("برخی فرایندهای وظیفه متوقف نشدند؛ وضعیت وظیفه را بررسی کنید")
-    if owned is not None:
+    if owned_running:
         owned.wait(timeout=5)
     return True
