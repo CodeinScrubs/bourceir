@@ -188,11 +188,12 @@ def test_recycled_pid_is_not_mistaken_for_our_job(monkeypatch):
 
     monkeypatch.setattr(jobs.psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(jobs.psutil, "Process", lambda pid: Process())
-    assert jobs._is_alive(12, 100.0)
-    assert not jobs._is_alive(12, 100.1)
-    assert not jobs._is_alive(12, None)
+    assert jobs._job_process({'pid': 12, 'created_at': 100.0}) is not None
+    assert jobs._job_process({'pid': 12, 'created_at': 100.1}) is None
+    with pytest.raises(ValueError):
+        jobs._job_process({'pid': 12, 'created_at': None})
     monkeypatch.setattr(Process, "cmdline", lambda self: [sys.executable, "-c", "pass", "brs.py"])
-    assert not jobs._is_alive(12, 100.0)
+    assert jobs._job_process({'pid': 12, 'created_at': 100.0}) is None
 
 
 @pytest.mark.parametrize("bad", [

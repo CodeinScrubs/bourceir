@@ -40,8 +40,13 @@ def _radar_state(private_root, worker, at):
     except (KeyError, ValueError, TypeError, OverflowError):
         output['heartbeat'] = 'invalid'
         return output
-    output.update(heartbeat_at=stamp.isoformat(), heartbeat_age_seconds=age,
-                  heartbeat_fresh=0 <= age <= 180)
+    fresh = 0 <= age <= 180
+    if output['worker'] == 'running' and 'started_at' in worker:
+        try:
+            fresh = fresh and datetime.fromisoformat(worker['started_at']) <= stamp
+        except (TypeError, ValueError, OverflowError):
+            fresh = False
+    output.update(heartbeat_at=stamp.isoformat(), heartbeat_age_seconds=age, heartbeat_fresh=fresh)
     if isinstance(heartbeat.get('status'), str):
         output['recorded_status'] = heartbeat['status']
     if is_canonical_iso_date(heartbeat.get('price_session_date')):

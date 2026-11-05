@@ -44,11 +44,13 @@ def page_broker():
         st.info('هنوز اسنپ‌شات سبد وارد نشده است. فایل‌های خصوصی را از بخش بالا وارد کن.')
         return
     quote_job = jobs.job_status('broker-quotes')
-    if st.button('به‌روزرسانی قیمت عمومی دارایی‌ها', disabled=quote_job['running']):
+    if st.button('به‌روزرسانی قیمت عمومی دارایی‌ها', disabled=quote_job['running'] is not False):
         jobs.start_job('broker-quotes', ['broker-refresh-quotes'])
         st.rerun()
     if quote_job['running']:
         st.info('قیمت عمومی دارایی‌ها در پس‌زمینه دریافت می‌شود؛ پس از پایان، صفحه را تازه کن.')
+    elif quote_job['running'] is None:
+        st.warning('وضعیت دریافت قیمت عمومی دارایی‌ها نامعلوم است.')
     if quote_job['started_at']:
         with st.expander('گزارش آخرین دریافت قیمت عمومی'):
             st.code('\n'.join(quote_job['log_tail']) or 'هنوز خروجی ثبت نشده است.', language=None)

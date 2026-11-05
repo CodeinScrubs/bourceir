@@ -84,6 +84,16 @@ def _public_fields(payload):
     return True
 
 
+def pagination_claims(payload, *, page):
+    """Check the source's total and page count against the requested page."""
+    total, pages = payload.get('Total'), payload.get('Page')
+    letters = payload['Letters']
+    if (type(total) is not int or total < 0 or type(pages) is not int or pages < 0
+            or len(letters) > total or not letters and total > 0 and page <= pages):
+        raise NewsDecodeError('pagination', 'pagination_claims_invalid')
+    return total, pages
+
+
 def parse_news_body(body, *, page):
     """Never sort source rows, substitute sent time, or claim complete publication coverage."""
     if type(page) is not int or not 1 <= page <= 100 or not isinstance(body, bytes) or len(body) > MAX_BYTES:
@@ -101,11 +111,7 @@ def parse_news_body(body, *, page):
     if (not isinstance(payload, dict) or payload.get('IsAttacker') is not False
             or not isinstance(payload.get('Letters'), list) or len(payload['Letters']) > MAX_ROWS):
         raise NewsDecodeError('schema', 'native_schema_invalid')
-    total, pages = payload.get('Total'), payload.get('Page')
-    if (type(total) is not int or total < 0 or type(pages) is not int or pages < 0
-            or len(payload['Letters']) > total
-            or not payload['Letters'] and total > 0 and page <= pages):
-        raise NewsDecodeError('pagination', 'pagination_claims_invalid')
+    total, pages = pagination_claims(payload, page=page)
     letters, invalid = [], 0
     for item in payload['Letters']:
         normalized = None

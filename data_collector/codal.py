@@ -20,7 +20,7 @@ import requests
 
 from config import settings
 from core.codal_documents import is_verification_page, pdf_has_valid_ending, public_document_url, visible_document
-from core.codal_news import NewsDecodeError, native_evidence, normalize_letter, parse_news_body
+from core.codal_news import NewsDecodeError, native_evidence, normalize_letter, pagination_claims, parse_news_body
 from core.text import normalize_symbol
 from core.timeutils import now_tehran_iso
 
@@ -265,11 +265,17 @@ class CodalProvider:
         if symbol_fa:
             url += f"&Symbol={quote(normalize_symbol(symbol_fa))}"
         try:
-            response = self.session.get(url, timeout=self.timeout)
+            response = self.session.get(url, timeout=self.timeout, allow_redirects=False)
             response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError('پاسخ کامل فهرست کدال دریافت نشد')
             payload = response.json()
             if not isinstance(payload, dict) or not isinstance(payload.get('Letters'), list):
                 raise ValueError('ساختار پاسخ کدال معتبر نیست')
+            if payload.get('IsAttacker', False) is not False:
+                raise ValueError('تأیید انسانی لازم است یا وضعیت آن نامعلوم است')
+            if 'Total' in payload or 'Page' in payload:
+                pagination_claims(payload, page=page)
             letters = payload['Letters']
         except Exception as e:
             logger.error("خطا در دریافت اطلاعیه‌های کدال (صفحه %s): %s", page, e)

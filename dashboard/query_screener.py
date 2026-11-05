@@ -44,11 +44,14 @@ def page_query_screener():
         if ticks:
             args+=['--verify-trades','--max-trade-days',str(budget)]
         status=jobs.job_status('market-query')
-        if st.button('ثبت پرسش و ساخت گزارش',type='primary',disabled=status['running'] or not valid_dates or limits[0]==limits[1]):
+        if st.button('ثبت پرسش و ساخت گزارش',type='primary',
+                     disabled=status['running'] is not False or not valid_dates or limits[0]==limits[1]):
             jobs.start_job('market-query',args)
             st.rerun()
         if status['running']:
             st.info('پرسش در پس‌زمینه در حال بررسی است؛ بستن صفحه آن را متوقف نمی‌کند.')
+        elif status['running'] is None:
+            st.warning('وضعیت کار پیشین نامعلوم است. ساخت گزارش تازه تا احراز وضعیت متوقف است.')
         if status['log_tail']:
             st.code('\n'.join(status['log_tail']),language=None)
     root=settings.DATA_DIR/'private'/'market-queries'
@@ -99,6 +102,7 @@ def page_query_screener():
                 close_raw='آخرین: ریال',ref_price_raw='مرجع: ریال',event_confirmed='رخداد اثبات شد',evidence='نوع شاهد')),hide_index=True,width='stretch')
         else:
             st.info('برای این نماد در بازه پرسش کندل محفوظی وجود ندارد؛ نبود داده، صفر رخداد نیست.')
-    if st.button('ادامه تطبیق آرشیو همین پرسش (۱۰۰ روز-نماد)',disabled=jobs.job_status('market-query')['running']):
+    if st.button('ادامه تطبیق آرشیو همین پرسش (۱۰۰ روز-نماد)',
+                 disabled=jobs.job_status('market-query')['running'] is not False):
         jobs.start_job('market-query',['query','--resume',str(folder),'--verify-trades','--max-trade-days','100'])
         st.rerun()

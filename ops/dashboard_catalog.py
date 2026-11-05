@@ -146,11 +146,19 @@ def contained(root, relative):
     root = Path(root).resolve()
     relative = Path(relative)
     windows = PureWindowsPath(str(relative))
-    if relative.is_absolute() or windows.drive or windows.root or '..' in relative.parts or '..' in windows.parts:
+    parts = (*relative.parts, *windows.parts)
+    if relative.is_absolute() or windows.drive or windows.root or '..' in parts:
         raise ValueError('مسیر باید نسبی و داخل کتابخانه باشد')
-    path = (root / relative).resolve()
+    if any(part.startswith('.') or ':' in part for part in parts):
+        raise ValueError('مسیر پنهان یا نام فایل نامعتبر است')
+    try:
+        path = (root / relative).resolve()
+    except RuntimeError as exc:
+        raise ValueError('پیوند مسیر کتابخانه قابل حل نیست') from exc
     if not path.is_relative_to(root):
         raise ValueError('پیوند فایل از کتابخانه خارج است')
+    if any(part.startswith('.') for part in path.relative_to(root).parts):
+        raise ValueError('مسیر پنهان در کتابخانه قابل دسترسی نیست')
     return path
 
 
@@ -167,7 +175,7 @@ def list_library(root, relative='', *, query='', offset=0, limit=100):
     for child in current.iterdir():
         try:
             checked = contained(root, child.relative_to(root))
-            if child.is_symlink() or checked != child.absolute() or child.name.startswith('.'):
+            if child.is_symlink() or checked != child.absolute():
                 skipped += 1
                 continue
             directory = checked.is_dir()
@@ -188,7 +196,7 @@ def list_library(root, relative='', *, query='', offset=0, limit=100):
 
 def read_library_file(root, relative):
     path = contained(root, relative)
-    if not path.is_file() or path.suffix.lower() not in REPORT_EXTENSIONS or path.name.startswith('.'):
+    if not path.is_file() or path.suffix.lower() not in REPORT_EXTENSIONS:
         raise ValueError('این فایل گزارش قابل نمایش نیست')
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError('این فایل بیش از ۱۶ مگابایت است؛ آن را از پوشه محلی باز کن')
@@ -240,13 +248,14 @@ def document_catalog(base_dir):
     paths = [base/'README.md', base/'workbench-guide.md', *sorted((base/'docs').rglob('*.md'))]
     result = []
     for path in paths:
-        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(base):
-            continue
         try:
-            with path.open('r', encoding='utf-8-sig') as stream:
+            checked = contained(base, path.relative_to(base))
+            if checked != path or not checked.is_file():
+                continue
+            with checked.open('r', encoding='utf-8-sig') as stream:
                 head = stream.read(8192)
             title = next((line.lstrip('# ').strip() for line in head.splitlines() if line.strip()), path.stem)
             result.append(dict(relative=path.relative_to(base).as_posix(), title=title))
-        except (OSError, UnicodeError):
+        except (OSError, ValueError):
             continue
     return result

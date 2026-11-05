@@ -331,7 +331,7 @@ def test_current_holdout_command_does_not_accept_the_dip_rule(db):
     with pytest.raises(ValueError, match='روش نهایی'):
         run_research(db, unseal_holdout=True, holdout_strategy=DipRule().name, holdout_horizon=1)
 
-def test_stop_job_handles_a_child_that_ignores_termination(monkeypatch):
+def test_stop_job_handles_a_child_that_ignores_termination(tmp_path, monkeypatch):
     from ops import jobs
 
     class ResistantChild:
@@ -344,11 +344,11 @@ def test_stop_job_handles_a_child_that_ignores_termination(monkeypatch):
             self.running = False
     child = ResistantChild()
     parent = SimpleNamespace(children=lambda recursive: [child], terminate=lambda: None, wait=lambda timeout: 0, kill=lambda: None)
-    owned = SimpleNamespace(poll=lambda: None)
+    owned = SimpleNamespace(pid=1, poll=lambda: None)
+    monkeypatch.setattr(jobs, 'JOBS_DIR', tmp_path / 'jobs')
     monkeypatch.setattr(jobs, '_OWNED_PROCESSES', {'audit': owned})
     monkeypatch.setattr(jobs, '_read_state', lambda name: {'pid': 1, 'created_at': 1})
-    monkeypatch.setattr(jobs, '_is_alive', lambda *args: True)
-    monkeypatch.setattr(jobs.psutil, 'Process', lambda pid: parent)
+    monkeypatch.setattr(jobs, '_job_process', lambda state: parent)
     monkeypatch.setattr(jobs.psutil, 'wait_procs', lambda procs, timeout: ([], [p for p in procs if getattr(p, 'running', False)]))
     monkeypatch.setattr(owned, 'wait', lambda timeout: 0, raising=False)
     assert jobs.stop_job('audit')

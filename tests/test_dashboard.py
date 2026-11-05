@@ -53,6 +53,17 @@ def test_dashboard_pages_on_empty_database(dashboard_db):
     assert any("هنوز داده‌ای ثبت نشده" in w.value for w in at.warning)
 
 
+def test_alert_controls_stay_disabled_when_a_worker_record_is_damaged(dashboard_db):
+    jobs.JOBS_DIR.mkdir(parents=True)
+    (jobs.JOBS_DIR / 'live.json').write_text('["damaged record"]', encoding='utf-8')
+    app = AppTest.from_file(DASHBOARD, default_timeout=60)
+    app.query_params['page'] = 'alerts'
+    app.run()
+    assert not app.exception
+    assert app.button(key='start-live').disabled
+    assert any('وضعیت وظیفه نامعلوم' in warning.value for warning in app.warning)
+
+
 def test_home_and_symbol_detail_display_unknown_daily_lock(dashboard_db):
     with DatabaseManager(db_path=dashboard_db) as db:
         sid = db.upsert_symbol(dict(symbol_fa='آزمون', ins_code='123', instrument_type_code=300))

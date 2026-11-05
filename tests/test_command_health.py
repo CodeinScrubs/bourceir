@@ -46,6 +46,18 @@ def test_missing_and_fresh_heartbeat_are_distinct_from_verified_market_data(setu
     assert result['source_freshness_verified'] is False and result['signal_accepted'] is False
 
 
+def test_recent_heartbeat_from_before_worker_start_is_not_current(setup):
+    private, at = setup
+    beat = at - timedelta(seconds=30)
+    started = at - timedelta(seconds=10)
+    write(private/'opportunity-radar/heartbeat.json', dict(heartbeat_at=beat.isoformat(), status='collecting'))
+    result = command_health(private, radar_worker={'running': True, 'started_at': started.isoformat()},
+                            live_worker={'running': False}, at=at)
+    assert result['radar']['worker'] == 'running'
+    assert result['radar']['heartbeat_fresh'] is False
+    assert result['radar']['heartbeat_at'] == beat.isoformat()
+
+
 def test_feature_store_checks_metadata_and_containment_without_claiming_integrity(setup, monkeypatch):
     from features.daily import FEATURE_SET_VERSION
 

@@ -100,7 +100,7 @@ def _guides():
 
 
 def _enter_library(relative):
-    st.session_state['hub-library-relative'] = relative
+    st.session_state['hub-library-relative'] = '' if relative == '.' else relative
     st.session_state.pop('hub-library-open-file', None)
     st.session_state['hub-library-filter'] = ''
 
@@ -163,9 +163,9 @@ def page_reports():
             if st.button('خواندن این گزارش', key='hub-library-read'):
                 st.session_state['hub-library-open-file'] = (root_name, chosen)
     opened = st.session_state.get('hub-library-open-file')
-    if opened and opened[0] == root_name and Path(opened[1]).parent.as_posix() == (relative or '.'):
+    if chosen and opened == (root_name, chosen):
         try:
-            name, body = read_library_file(root, opened[1])
+            name, body = read_library_file(root, chosen)
             st.subheader(name)
             st.download_button('دریافت فایل گزارش', body, file_name=name, key='hub-report-download')
             preview, value = report_preview(name, body)

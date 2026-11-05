@@ -49,6 +49,17 @@ def test_old_collecting_heartbeat_does_not_display_active_collection(monkeypatch
     assert not any('دریافت در حال انجام است' in item.value for item in app.info)
 
 
+def test_previous_run_heartbeat_cannot_show_collection_for_the_new_run(monkeypatch):
+    monkeypatch.setattr(panel, 'status', lambda: dict(active=True, protocol={'id': 'new-run'}, latest=None,
+        heartbeat=dict(run_id='previous-run', status='collecting', heartbeat_at=NOW.isoformat())))
+    monkeypatch.setattr(panel.jobs, 'job_status', lambda _: dict(running=True))
+    monkeypatch.setattr(panel, 'now_tehran', lambda: NOW)
+    app = AppTest.from_string('from dashboard.opportunity_radar import radar_view\nradar_view()').run()
+    assert not app.exception
+    assert not any('دریافت در حال انجام است' in item.value for item in app.info)
+    assert any('ضربان فرایند کهنه یا نامعلوم' in item.value for item in app.warning)
+
+
 def source_row(status='stale_session', *, last_observed_date='2026-10-24', date='2026-10-25', code='123'):
     return dict(symbol='آزمون',ins_code=code,status=status,last_observed_date=last_observed_date,date=date,
                 reasons={key:None for key in REASONS})

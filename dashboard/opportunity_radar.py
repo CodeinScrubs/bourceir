@@ -60,11 +60,11 @@ def page_opportunity_radar():
                'این شاخص حقوق واقعی افزایش سرمایه و سود نقدی را تأیید نمی‌کند.')
     worker=jobs.job_status('opportunity-radar')
     new_run=st.checkbox('پس از تغییر کد، نسخه تازه ثبت شود و سابقه قبلی حفظ شود',value=False)
-    if st.button('شروع پایش سراسری',disabled=worker['running']):
+    if st.button('شروع پایش سراسری',disabled=worker['running'] is not False):
         args=['radar','watch']+(['--new-run'] if new_run else [])
         if jobs.start_job('opportunity-radar',args):
             st.rerun()
-    if st.button('توقف پایش سراسری',disabled=not worker['running']):
+    if st.button('توقف پایش سراسری',disabled=worker['running'] is not True):
         jobs.stop_job('opportunity-radar')
         st.rerun()
     st.caption('دریافت قیمت پس از ۱۳:۱۵؛ کدال هر ۱۰ دقیقه در بازهٔ ۸:۳۰ تا ۱۵ روز کاری و هر ساعت خارج آن. '
@@ -75,8 +75,11 @@ def page_opportunity_radar():
 @st.fragment(run_every=30)
 def radar_view():
     worker=jobs.job_status('opportunity-radar')
-    st.caption('وضعیت فعلی فرایند پایش: '+('در حال اجرا' if worker['running'] else 'متوقف'))
-    if not worker['running']:
+    labels = {True: 'در حال اجرا', False: 'متوقف', None: 'نامعلوم'}
+    st.caption('وضعیت فعلی فرایند پایش: ' + labels[worker['running']])
+    if worker['running'] is None:
+        st.warning('هویت فرایند پایش احراز نشده و وضعیت دریافت تازه نامعلوم است.')
+    elif not worker['running']:
         st.warning('پایش پس‌زمینه فعال نیست؛ گزارش محفوظ به معنی دریافت تازه نیست.')
     try:
         data=status()
@@ -87,6 +90,10 @@ def radar_view():
         st.info('هنوز نسخه‌ای ثبت نشده است. شروع پایش، داده عمومی را در پایگاه مستقل ثبت می‌کند.')
         return
     heartbeat=data.get('heartbeat') or {}
+    active_run = (data.get('protocol') or {}).get('id')
+    if heartbeat and active_run and heartbeat.get('run_id') != active_run:
+        st.caption('آخرین ضربان به اجرای فعلی تعلق ندارد. منتظر اولین ضربان این اجرا هستیم.')
+        heartbeat = {}
     health=runtime_health(worker,heartbeat,checked_at=now_tehran())
     st.caption('وضعیت ثبت‌شده در آخرین ضربان: '+str(heartbeat.get('status','نامعلوم'))+' — '
                +(to_jalali(health['heartbeat_at'],with_time=True) if health['heartbeat_at'] else 'زمان نامعتبر یا نامعلوم'))
