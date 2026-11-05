@@ -3,7 +3,7 @@
 داشبورد فارسی BRS — دستیار نوسان‌گیری بورس و فرابورس
 
 اجرا: فایل START.bat را دوبار کلیک کنید (یا: streamlit run app.py)
-همه کارها (به‌روزرسانی داده، پایش زنده، اطلاعیه‌ها) با دکمه انجام می‌شود؛ نیازی به خط فرمان نیست.
+کارهای روزمره از صفحه‌های داشبورد در دسترس‌اند؛ ابزارهای تخصصی نیز راهنما و مسیر دسترسی یکجا دارند.
 """
 
 import sys
@@ -25,7 +25,9 @@ from dashboard.broker import page_broker  # noqa: E402
 from dashboard.capital_capacity import page_capital_capacity  # noqa: E402
 from dashboard.flow_lab import interval_panel, page_flow_lab  # noqa: E402
 from dashboard.forward_observations import page_forward_observations  # noqa: E402
+from dashboard.hub import page_monitoring, page_reports, page_tools  # noqa: E402
 from dashboard.market_review import page_market_review  # noqa: E402
+from dashboard.navigation import BY_LABEL, launchpad, sidebar_navigation  # noqa: E402
 from dashboard.operator_status import operator_panel  # noqa: E402
 from dashboard.opportunity_radar import page_opportunity_radar  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
@@ -39,7 +41,7 @@ from features.labels_fa import FEATURE_LABELS_FA, format_feature  # noqa: E402
 from features.store import load_manifest, load_symbol_features  # noqa: E402
 from ops import jobs  # noqa: E402
 
-st.set_page_config(page_title="BRS — دستیار نوسان‌گیری بورس", page_icon="📈", layout="wide")
+st.set_page_config(page_title="BRS — مرکز فرمان بورس", page_icon="📈", layout="wide")
 
 # ─── راست‌چین و فونت فارسی ───
 st.markdown(
@@ -56,6 +58,11 @@ st.markdown(
     [data-testid="stDataFrame"], .vega-embed { direction: ltr; }
     .brs-card { padding: .8rem 1rem; border-radius: .6rem; border: 1px solid rgba(128,128,128,.25); margin-bottom: .6rem; }
     .brs-muted { opacity: .7; font-size: .9rem; }
+    .brs-hub-hero { background: linear-gradient(115deg,#172e4d,#0e192c); color:#edf7ff;
+        border:1px solid #305275; border-radius:1rem; padding:1.4rem 1.7rem; margin:.3rem 0 1rem; }
+    .brs-hub-hero b { font-size:1.7rem; font-weight:800; }
+    .brs-hub-hero p { margin:.3rem 0 0; color:#bcd4eb; }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] { margin-bottom:.4rem; }
     @media (max-width: 640px) {
         [data-testid="stSidebar"][aria-expanded="true"] {
             position: fixed !important; right: 0 !important; left: auto !important;
@@ -227,7 +234,8 @@ def job_panel(name: str, args: list, start_label: str, help_text: str, stoppable
 # ═══════════════════════════════════════════════
 
 def page_home() -> None:
-    st.title("📈 دستیار نوسان‌گیری BRS")
+    st.title("📈 BRS — مرکز فرمان")
+    launchpad()
     now = now_tehran()
     with ro_db() as db:
         open_now = is_market_open(now) and db.is_trading_day(now.date().isoformat())
@@ -802,12 +810,15 @@ PAGES = {
     "🏦 حساب و تطبیق فارابی": page_broker,
     "📊 بررسی نماد": page_symbol,
     "📡 دیده‌بان زنده": page_live,
+    '🔔 مرکز پایش و هشدار': lambda: page_monitoring(job_panel),
     "📰 اطلاعیه‌های کدال": page_codal,
     "🔬 پژوهش": page_research,
     '💸 هزینه و ظرفیت سرمایه': page_capital_capacity,
     '🎲 آزمایش احتمال و بازده': lambda: page_probability(job_panel),
     "📚 مطالعه رشد نمادها": page_stock_study,
     '🔎 پرسش‌گر بازار': page_query_screener,
+    '🗂️ گزارش‌ها و آرشیو': page_reports,
+    '🧰 همه ابزارها': page_tools,
     "🩺 سلامت سامانه": page_health,
     "ℹ️ راهنما": page_guide,
 }
@@ -815,10 +826,13 @@ PAGES = {
 with st.sidebar:
     st.markdown(f"### 📈 BRS\n<span class='brs-muted'>نسخه {to_fa_digits(settings.VERSION)} — سهام بورس و فرابورس</span>",
                 unsafe_allow_html=True)
-    choice = st.radio("منو", list(PAGES), label_visibility="collapsed")
+    choice = sidebar_navigation(PAGES)
     st.divider()
     if st.button("🔄 تازه‌سازی صفحه", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
+if choice != '🏠 خانه':
+    selected_page = BY_LABEL[choice]
+    st.caption(selected_page.group + ' / ' + selected_page.description)
 PAGES[choice]()
