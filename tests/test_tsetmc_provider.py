@@ -55,6 +55,25 @@ def test_universe_keeps_only_bourse_and_farabourse_stocks(market_watch_rows):
     assert khazamia["market"] == "farabourse" and khazamia["instrument_type_code"] == 303
 
 
+def test_instrument_info_uses_native_instrument_id_and_checks_requested_code():
+    info = dict(insCode=FOOLAD_INS, lVal18AFC='فولاد', flow=1, yVal='300',
+                cIsin='IRO1FOLD0008', instrumentID='IRO1FOLD0001')
+    provider = TsetmcProvider(session=FakeSession({'GetInstrumentInfo': {'instrumentInfo':info}}))
+    assert provider.get_instrument_info(FOOLAD_INS)['tse_code'] == 'IRO1FOLD0001'
+    info['insCode'] = '12345'
+    assert provider.get_instrument_info(FOOLAD_INS) is None
+    info.update(insCode=FOOLAD_INS, instrumentID=None)
+    assert provider.get_instrument_info(FOOLAD_INS) is None
+
+
+@pytest.mark.parametrize('change', [dict(yVal=300.5), dict(yVal='unknown'), dict(yVal=True), dict(flow=[]),
+                                   dict(sector=[]), dict(staticThreshold='unavailable')])
+def test_instrument_info_rejects_malformed_scope_or_metadata(change):
+    info = dict(insCode=FOOLAD_INS, lVal18AFC='فولاد', flow=1, yVal='300', instrumentID='IRO1FOLD0001') | change
+    provider = TsetmcProvider(session=FakeSession({'GetInstrumentInfo': {'instrumentInfo': info}}))
+    assert provider.get_instrument_info(FOOLAD_INS) is None
+
+
 def test_base_market_can_be_enabled(monkeypatch, market_watch_rows):
     from config import settings
 

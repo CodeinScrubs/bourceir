@@ -58,6 +58,9 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
     positions = []
     for row in rows:
         quote = quotes.get(row['symbol_fa'])
+        cost_state = 'combined_with_bonus' if 'bonus_share' in row else 'positive_broker_cost'
+        if row['buy_total_rial'] <= 0 or row['broker_net_average_rial'] <= 0:
+            cost_state = 'requires_history_reconciliation'
         item = {**row, 'weight_pct': row['value_rial'] / total * 100 if total else None,
                 'archive_date': quote.get('date') if quote else None,
                 'archive_last_rial': quote.get('close_raw') if quote else None,
@@ -66,9 +69,7 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                 'research_scope_eligible': (None if not quote or quote.get('instrument_type_code') is None else
                     quote['instrument_type_code'] in (300, 303) and not row['symbol_fa'][-1:].isdigit()),
                 'archive_session_current': bool(quote and current_daily_row(quote.get('date'), calendar=calendar)),
-                'broker_cost_state': ('requires_history_reconciliation'
-                    if row['buy_total_rial'] <= 0 or row['broker_net_average_rial'] <= 0
-                    else 'positive_broker_cost'),
+                'broker_cost_state': cost_state,
                 'economic_return_pct': None}
         if not quote or quote.get('close_raw') is None:
             item['price_check'] = 'missing_archive'
@@ -87,6 +88,8 @@ def reconcile_account(portfolio, turnover=None, fills=None, *, market_rows=(), b
                   price_checks=dict(Counter(x['price_check'] for x in positions)),
                   actual_history_complete=False, trade_recommendations_enabled=False,
                   total_account_return=None, cash_available_rial=summary['buying_power_rial'])
+    if 'buy_total_check' in portfolio:
+        report['buy_total_check'] = portfolio['buy_total_check']
     report['accounting_review'] = dict(
         nonpositive_cost_symbols=[p['symbol_fa'] for p in positions
                                   if p['broker_cost_state'] == 'requires_history_reconciliation'],

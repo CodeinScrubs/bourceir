@@ -237,6 +237,8 @@ def test_environment_rejects_wrong_python_and_launcher_wires_guard_before_stream
     setup = (settings.BASE_DIR/'SETUP.bat').read_text(encoding='utf-8')
     assert launch.index('-m ops.environment --check') < launch.index('-m streamlit run')
     assert launch.index('setlocal') < launch.index('set "PYTHONUTF8=1"') < launch.index('-m ops.environment --check')
+    assert '--server.address=127.0.0.1 --server.port=8501 --server.headless=false' in launch
+    assert 'timeout /t' not in launch and 'exit /b %BRS_START_EXIT%' in launch
     assert '-m ops.environment --record' in setup
 
 

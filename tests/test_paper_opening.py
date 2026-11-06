@@ -79,6 +79,28 @@ def test_copy_transfers_quantities_not_purchases_and_zero_cost_is_not_profit(mir
     assert db.conn.execute('SELECT count(*) FROM broker_baselines').fetchone()[0] == 0
 
 
+def test_bonus_shares_stay_in_source_and_out_of_paper_inventory(mirror, db):
+    repo, clock, _ = mirror
+    payload = source_data(clock[0])
+    payload['format'] = 'farabi-dom-v2'
+    payload['rows'][0] = ['آزمونالف\nسهام جایزه', '10\n30', '0\n-', '700', '0\n-', '(0%) 1000',
+                          '9912\n29736', '(+∞%)\n+9912\n(+∞%)\n+29736']
+    payload['rows'][1] = ['آزمونب\nسهام جایزه', '0\n20', '0\n-', '0', '0\n-', '(0%) 500',
+                          '0\n9912', '(0%)\n0\n(+∞%)\n+9912']
+    for field in ('net_assets_rial', 'portfolio_value_rial', 'broker_pnl_rial'):
+        payload['summary'][field] -= 9912
+    data = json.dumps(payload, ensure_ascii=False).encode()
+    source = import_report(BrokerRepository(db), data, 'bonus-test-dom.json')
+    key = repo.create_from_broker(source, mode='manual')
+    report = repo.report(key)
+    assert [row['bonus_share']['quantity'] for row in report['opening']['source']['rows'][:2]] == [30, 20]
+    assert len(report['ledger']['positions']) == 1
+    assert report['ledger']['positions'][first_lot(report)]['quantity'] == 10
+    assert [row['symbol_fa'] for row in report['opening']['passive']] == ['آزمونح']
+    assert report['equity_rial'] == pytest.approx(11308)
+    assert report['events'] == []
+
+
 def test_shared_cash_cannot_spend_stock_value_or_locked_cash(mirror):
     repo, _, _ = mirror
     key = create(mirror)

@@ -6,10 +6,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from backtest.bonus_shares import BonusCapitalization, BonusRelease, BonusShareBook
+from backtest.cash_dividends import CashDividend, DividendPayment
+from backtest.corporate_actions import BonusDividendBook, DatedCashDividendBook
 from backtest.portfolio import PortfolioConfig, replay_portfolio
+from backtest.prepared import prepare_portfolio_prices
 from config import settings
 from research.portfolio_run import select_from_past
 from research.walkforward import TimeFold, purged_training, time_folds
+from tests.test_daily_publications import observation
 
 
 def history(n=12, symbols=('a', 'b', 'c')):
@@ -38,6 +43,238 @@ def test_shared_cash_and_slots_prevent_overallocation():
     for (_, symbol), events in result.executions.groupby(['date', 'symbol']):
         assert events.quantity.sum() <= 50 and (events.quantity * events.price_rial).sum() <= 5000
     assert result.metrics['total_return'] < 0 and result.metrics['fees_rial'] > 0
+
+
+def test_dated_zero_activity_resolves_only_the_exact_entry_and_keeps_cash():
+    code = '12345'
+    prices, calendar = history(5, (code,))
+    missing = prices.loc[prices.date.ne(calendar[1])]
+    selections = picks(calendar[:2], (code,)).iloc[:1]
+    native = dict(insCode=code, dEven=20240102, qTotTran5J=0, qTotCap=0, zTotTran=0)
+    proof = observation(code=code, day=calendar[1], native=native) | dict(http_status=200)
+    unknown = replay_portfolio(missing, selections, calendar, config())
+    assert unknown.metrics['total_return'] is None
+    verified = replay_portfolio(missing, selections, calendar, config(), no_trade_entry_observations=[proof])
+    assert verified.metrics['total_return'] == 0 and verified.executions.empty
+    assert verified.metrics['observed_no_trade_entries'] == 1
+    assert verified.decisions.loc[verified.decisions.status.eq('observed_no_trade_entry'), 'evidence_sha256'].tolist() == [proof['body_sha256']]
+    assert len(verified.equity) == len(calendar)
+
+    conflict = replay_portfolio(prices, selections, calendar, config(), no_trade_entry_observations=[proof])
+    assert conflict.metrics['total_return'] is None
+    assert conflict.decisions.iloc[-1].status == 'conflicting_no_trade_entry'
+    wrong_day = observation(code=code, day=calendar[2], native=native) | dict(http_status=200)
+    with pytest.raises(ValueError, match='هویت یا تاریخ'):
+        replay_portfolio(missing, selections, calendar, config(), no_trade_entry_observations=[wrong_day])
+
+
+def flat_publication(code, day, *, mark=100, reference=100):
+    native = dict(insCode=code, dEven=int(day.replace('-', '')), qTotTran5J=0, qTotCap=0, zTotTran=0,
+                  pClosing=mark, priceYesterday=reference)
+    stamp = '2024-02-01T14:00:00+03:30'
+    return observation(code=code, day=day, native=native) | dict(http_status=200, requested_at=stamp, received_at=stamp)
+
+
+def test_continuous_flat_marks_defer_exit_preserve_cash_and_apply_action_on_reopening():
+    code = '12345'
+    prices, calendar = history(6, (code,))
+    missing = prices.loc[~prices.date.isin(calendar[2:4])].copy()
+    after = missing.date.ge(calendar[4])
+    fields = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw']
+    missing.loc[after, fields] *= .5
+    missing.loc[after, 'volume'] *= 4
+    missing.loc[after, 'value'] *= 2
+    before = missing.copy(deep=True)
+    selections = picks(calendar[:1], (code,))
+    proofs = [flat_publication(code, day) for day in calendar[2:4]]
+    assert replay_portfolio(missing, selections, calendar, config()).metrics['total_return'] is None
+
+    result = replay_portfolio(missing, selections, calendar, config(), no_trade_valuation_observations=proofs)
+    buy, sell = result.executions.to_dict('records')
+    assert (buy['date'], sell['date'], sell['quantity']) == (calendar[1], calendar[4], 2 * buy['quantity'])
+    assert result.metrics['status'] == 'complete' and result.metrics['corporate_action_events'] == 1
+    assert result.metrics['observed_no_trade_marks'] == result.metrics['observed_no_trade_exit_delays'] == 2
+    assert result.equity.iloc[1:4].cash_rial.nunique() == result.equity.iloc[1:4].equity_rial.nunique() == 1
+    assert result.equity.iloc[1:4].stale_positions.eq(0).all()
+    assert result.decisions.loc[result.decisions.status.eq('observed_no_trade_exit_delayed'), 'evidence_sha256'].tolist() == [
+        proof['body_sha256'] for proof in proofs]
+    pd.testing.assert_frame_equal(missing, before)
+    economic = replay_portfolio(missing, selections, calendar, config(), no_trade_valuation_observations=proofs,
+                                require_explicit_corporate_actions=True)
+    assert economic.executions.side.tolist() == ['buy'] and economic.metrics['total_return'] is None
+    assert economic.equity.iloc[-1].cash_rial == result.equity.iloc[1].cash_rial
+    blocked = economic.decisions.iloc[-1]
+    assert blocked.status == 'unaccounted_reference_change' and blocked.date == calendar[4]
+    assert blocked.previous_official_rial == 100 and blocked.reference_rial == 50
+
+
+@pytest.mark.parametrize('failure', ['gap_before_due', 'different_mark', 'raw_collision'])
+def test_unproven_held_sessions_remain_unknown(failure):
+    code = '12345'
+    prices, calendar = history(6, (code,))
+    missing = prices.loc[~prices.date.isin(calendar[2:4])]
+    proofs = [flat_publication(code, calendar[3])]
+    status = 'missing_held_mark'
+    if failure == 'different_mark':
+        proofs.append(flat_publication(code, calendar[2], mark=101, reference=101))
+        status = 'discontinuous_no_trade_valuation'
+    elif failure == 'raw_collision':
+        missing = prices
+        proofs.append(flat_publication(code, calendar[2]))
+        status = 'conflicting_no_trade_valuation'
+    result = replay_portfolio(missing, picks(calendar[:1], (code,)), calendar, config(horizon=2),
+                              no_trade_valuation_observations=proofs)
+    assert result.metrics['total_return'] is None and result.metrics['max_drawdown'] is None
+    assert result.decisions.iloc[-1].status == status and result.decisions.iloc[-1].date == calendar[2]
+    assert result.executions.side.tolist() == ['buy']
+
+
+def test_flat_receipts_support_unfilled_entry_and_open_terminal_mark_separately():
+    code = '12345'
+    prices, calendar = history(4, (code,))
+    proofs = [flat_publication(code, day) for day in calendar[2:]]
+    missing = prices.loc[prices.date.lt(calendar[2])]
+    entry = replay_portfolio(missing, picks(calendar[1:2], (code,)), calendar, config(),
+                             no_trade_valuation_observations=proofs)
+    assert entry.metrics['observed_no_trade_entries'] == 1 and entry.executions.empty
+    assert entry.metrics['total_return'] == 0
+
+    held = replay_portfolio(missing, picks(calendar[:1], (code,)), calendar, config(),
+                            no_trade_valuation_observations=proofs)
+    assert held.executions.side.tolist() == ['buy']
+    assert held.metrics['open_positions'] == 1 and held.metrics['observed_no_trade_exit_delays'] == 2
+    assert held.metrics['final_equity_rial'] > held.equity.iloc[-1].cash_rial
+    assert held.assumptions['terminal_value_is_marked_nav']
+
+
+def test_flat_mark_also_delays_a_loss_floor_sale():
+    code, other = '12345', '67890'
+    prices, calendar = history(7, (code, other))
+    loss = prices.symbol.eq(other) & prices.date.ge(calendar[2])
+    fields = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw']
+    prices.loc[loss, fields + ['value']] *= .6
+    prices.loc[loss & prices.date.gt(calendar[2]), 'ref_price_raw'] = 60
+    gaps = prices.symbol.eq(code) & prices.date.isin(calendar[3:5])
+    result = replay_portfolio(prices.loc[~gaps], picks(calendar[:1], (code, other)), calendar, config(horizon=5),
+        loss_floor_exit=True, no_trade_valuation_observations=[flat_publication(code, day) for day in calendar[3:5]])
+    assert result.metrics['risk_exit_request_date'] == calendar[2]
+    assert result.metrics['observed_no_trade_exit_delays'] == 2
+    sells = result.executions.loc[result.executions.side.eq('sell')]
+    assert dict(zip(sells.symbol, sells.date)) == {other: calendar[3], code: calendar[5]}
+    assert sells.exit_kind.eq('loss_floor').all() and result.metrics['risk_exit_fully_liquidated']
+
+
+def test_flat_mark_preserves_non_cash_fraction_after_whole_shares_exit():
+    code = '12345'
+    prices, calendar = history(5, (code,))
+    after = prices.date.ge(calendar[2])
+    fields = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw']
+    prices.loc[after, fields] *= .8
+    prices.loc[after, 'volume'] *= 2
+    prices.loc[after, 'value'] *= 1.6
+    result = replay_portfolio(prices.loc[prices.date.ne(calendar[3])], picks(calendar[:1], (code,)), calendar, config(),
+        no_trade_valuation_observations=[flat_publication(code, calendar[3], mark=80, reference=80)])
+    assert result.executions.side.tolist() == ['buy', 'sell'] and result.metrics['open_positions'] == 0
+    assert result.metrics['observed_no_trade_marks'] == 1 and result.metrics['observed_no_trade_exit_delays'] == 0
+    assert result.metrics['noncash_receivable_rial'] == pytest.approx(.25 * 80 * (1 - settings.FEES['sell']))
+    assert result.equity.loc[result.equity.date.eq(calendar[3]), 'stale_fractional_exposures'].item() == 0
+
+
+@pytest.mark.parametrize('combined', [False, True])
+def test_cash_ex_on_zero_activity_day_is_booked_once_and_never_funds_a_trade(combined):
+    code = '12345'
+    prices, dates = history(7, (code,))
+    cols = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'value']
+    prices.loc[prices.date.ge(dates[4]), cols] *= .9
+    missing = prices.loc[~prices.date.isin(dates[2:4])]
+    proofs = [flat_publication(code, dates[2]), flat_publication(code, dates[3], mark=90, reference=90)]
+    event = CashDividend('dps', code, dates[2], dates[3], '10', 'a' * 64)
+    payment = DividendPayment('receipt', event.event_id, dates[5], '10', 'b' * 64)
+    cash = DatedCashDividendBook([event], [payment], previous_price_sessions={event.event_id: dates[1]})
+    books = {'bonus_shares': BonusDividendBook([], dividends=cash)} if combined else {'cash_dividends': cash}
+    result = replay_portfolio(missing, picks(dates[:1], (code,)), dates, config(),
+                              no_trade_valuation_observations=proofs, **books)
+    buy, sell = result.executions.to_dict('records')
+    assert (buy['date'], sell['date'], sell['quantity']) == (dates[1], dates[4], buy['quantity'])
+    assert result.metrics['corporate_action_events'] == result.metrics['observed_no_trade_cash_ex_marks'] == 1
+    assert result.metrics['observed_no_trade_exit_delays'] == 2
+    assert result.equity.iloc[3].cash_rial == result.equity.iloc[2].cash_rial
+    assert result.equity.iloc[3].cash_dividend_receivable_face_rial == buy['quantity'] * 10
+    assert np.isnan(result.equity.iloc[3].equity_rial)
+    assert result.equity.iloc[5].cash_rial - result.equity.iloc[4].cash_rial == pytest.approx(buy['quantity'] * 10)
+    assert [row['kind'] for row in result.metrics['cash_dividend_ledger']] == ['receivable_created', 'cash_received']
+    assert result.metrics['total_return'] is not None and result.metrics['max_drawdown'] is None
+
+
+@pytest.mark.parametrize('bad_source', ['amount', 'previous_price_session'])
+def test_cash_ex_with_nonmatching_source_leaves_claim_and_sale_unknown(bad_source):
+    code = '12345'
+    prices, dates = history(6, (code,))
+    event = CashDividend('dps', code, dates[2], dates[3], '11' if bad_source == 'amount' else '10', 'a' * 64)
+    predecessor = dates[0] if bad_source == 'previous_price_session' else dates[1]
+    cash = DatedCashDividendBook([event], previous_price_sessions={event.event_id: predecessor})
+    missing = prices.loc[~prices.date.isin(dates[2:4])]
+    proofs = [flat_publication(code, dates[2]), flat_publication(code, dates[3], mark=90, reference=90)]
+    result = replay_portfolio(missing, picks(dates[:1], (code,)), dates, config(),
+                              no_trade_valuation_observations=proofs, cash_dividends=cash)
+    assert result.metrics['status'] == 'invalid_data' and result.metrics['total_return'] is None
+    assert result.executions.side.tolist() == ['buy'] and not result.metrics['cash_dividend_claims']
+    decision = result.decisions.iloc[-1]
+    assert decision.status == 'unknown_corporate_entitlement' and decision.date == dates[3]
+    assert decision.evidence_sha256 == proofs[-1]['body_sha256']
+
+
+def test_bonus_credits_on_nontrading_days_remain_separate_from_original_lot_and_cash():
+    code = '12345'
+    prices, dates = history(7, (code,))
+    cols = ['open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw', 'value']
+    prices.loc[prices.date.ge(dates[3]), cols] *= .5
+    missing = prices.loc[~prices.date.isin(dates[[2, 4]])]
+    proofs = [flat_publication(code, dates[2]), flat_publication(code, dates[4], mark=50, reference=50)]
+    event = BonusCapitalization('bonus', code, dates[2], dates[3], 1, 1, dates[1],
+                                '100', '50', 'a' * 64, '2024-02-01T14:00:00+03:30')
+    release = BonusRelease('credit', event.event_id, dates[4], 1, 1, 'b' * 64, '2024-02-01T14:00:00+03:30')
+    result = replay_portfolio(missing, picks(dates[:1], (code,)), dates, config(),
+                              no_trade_valuation_observations=proofs, bonus_shares=BonusShareBook([event], [release]))
+    buy, original_sale, bonus_sale = result.executions.to_dict('records')
+    assert original_sale['date'] == dates[3] and bonus_sale['date'] == dates[5]
+    assert original_sale['quantity'] == bonus_sale['quantity'] == buy['quantity']
+    assert not original_sale['credit_disposal'] and bonus_sale['credit_disposal']
+    assert result.equity.iloc[4].cash_rial == result.equity.iloc[3].cash_rial
+    assert result.equity.iloc[4].stale_positions == 0
+    assert result.metrics['observed_no_trade_marks'] == 2 and result.metrics['corporate_action_events'] == 1
+
+
+def test_observed_mark_does_not_overwrite_a_conflicting_previous_raw_price():
+    code = '12345'
+    prices, dates = history(5, (code,))
+    prepared = prepare_portfolio_prices(prices.loc[prices.date.ne(dates[2])])
+    day = dates[3]
+    incorrect = dict(prepared.sessions[day][code], previous_official=99)
+    prepared = replace(prepared, sessions=dict(prepared.sessions) | {day: {code: incorrect}})
+    result = replay_portfolio(prepared, picks(dates[:1], (code,)), dates, config(),
+                              no_trade_valuation_observations=[flat_publication(code, dates[2])])
+    assert result.metrics['total_return'] is None and result.executions.side.tolist() == ['buy']
+    assert result.decisions.iloc[-1].status == 'conflicting_valuation_predecessor'
+
+
+def test_flat_valuation_requires_native_flat_mark_full_day_and_development_window(monkeypatch):
+    code = '12345'
+    prices, calendar = history(5, (code,))
+    selections = picks(calendar[:1], (code,))
+    with pytest.raises(ValueError, match='شاهد روز کامل'):
+        replay_portfolio(prices, selections, calendar, config(),
+            no_trade_valuation_observations=[flat_publication(code, calendar[2], mark=101)])
+    proof = flat_publication(code, calendar[2])
+    same_day = proof | dict(requested_at='2024-01-03T14:00:00+03:30', received_at='2024-01-03T14:00:00+03:30')
+    with pytest.raises(ValueError, match='شاهد روز کامل'):
+        replay_portfolio(prices, selections, calendar, config(), no_trade_valuation_observations=[same_day])
+    with pytest.raises(ValueError, match='حق‌تقدم'):
+        replay_portfolio(prices, selections, calendar, config(), subscription_rights=object(),
+                         no_trade_valuation_observations=[proof])
+    monkeypatch.setitem(settings.RESEARCH_CONFIG, 'holdout_start', calendar[-1])
+    with pytest.raises(ValueError, match='پیش از مهروموم'):
+        replay_portfolio(prices, selections, calendar, config(), no_trade_valuation_observations=[proof])
 
 
 def test_cash_from_sales_cannot_fund_buys_on_same_day():

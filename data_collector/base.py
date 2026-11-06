@@ -69,6 +69,10 @@ class BaseDataProvider(ABC):
         """بایت وضعیت روز درخواستی؛ هویت/تاریخ بومی و معنای زمان باید جدا بررسی شوند."""
         raise NotImplementedError
 
+    def get_development_index_history(self, index: str, start: str, end_exclusive: str) -> Optional[Dict[str, Any]]:
+        """Closing index levels in an explicit development window, with a source receipt."""
+        raise NotImplementedError
+
     @abstractmethod
     def test_connection(self) -> bool:
         """بررسی برقراری ارتباط با منبع داده."""
@@ -120,6 +124,10 @@ class BaseDataProvider(ABC):
 
     def get_dated_daily_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:
         """پاسخ بومی کندل روز صریح؛ تطبیق تاریخ و هویت در بدنه هنوز لازم است."""
+        raise NotImplementedError
+
+    def get_market_day_observation(self, trade_date: str) -> Optional[Dict[str, Any]]:
+        """Dated market-wide publication for descriptive activity coverage."""
         raise NotImplementedError
 
     def get_dated_history_observation(self, ins_code: str, trade_date: str) -> Optional[Dict[str, Any]]:

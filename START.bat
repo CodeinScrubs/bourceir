@@ -22,19 +22,13 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-rem اشغال بودن پورت هویت سرویس را ثابت نمی‌کند؛ سرویس نامعلوم را باز نکنید.
-netstat -ano | findstr /R /C:":8501 .*LISTENING" > nul
-if %errorlevel%==0 (
-    echo [BRS] Port 8501 is already in use; the service identity was not verified.
-    echo If BRS is already open, use its existing tab. Otherwise free the port and retry.
-    exit /b 1
-)
-
 set PYTHONIOENCODING=utf-8
 echo ==============================================================
-echo   داشبورد BRS در حال اجراست. مرورگر چند ثانیه دیگر باز می شود.
+echo   مرورگر پس از راه‌اندازی سرویس محلی BRS باز می‌شود.
 echo   برای خاموش کردن، این پنجره را ببندید.   ^(close this window to stop^)
 echo ==============================================================
-start "" cmd /c "timeout /t 5 > nul & start "" http://127.0.0.1:8501"
-venv\Scripts\python.exe -m streamlit run dashboard/app.py
+venv\Scripts\python.exe -m streamlit run dashboard/app.py --server.address=127.0.0.1 --server.port=8501 --server.headless=false --browser.serverAddress=127.0.0.1 --browser.serverPort=8501
+set "BRS_START_EXIT=%errorlevel%"
+if not "%BRS_START_EXIT%"=="0" echo [BRS] Dashboard startup or runtime failed. See the message above.
 pause
+exit /b %BRS_START_EXIT%
