@@ -7,14 +7,20 @@ import numpy as np
 import pandas as pd
 
 from backtest.fractions import SyntheticFractionBook
+from backtest.observed_valuation import ObservedValuation, ValuationGap
 from backtest.prepared import PRICE_SNAPSHOT_VERSION, PreparedPortfolioPrices, prepare_portfolio_prices
 from config import settings
+from core.daily_publications import parse_publication
+from core.instrument_history import receipt_time
+from core.no_trade_valuation import parse_no_trade_publication
 from core.risk import finite_number
-from core.timeutils import is_canonical_iso_date
+from core.timeutils import TEHRAN_TZ, is_canonical_iso_date
 
 PORTFOLIO_VERSION = "portfolio-v8"
 RISK_EXIT_VERSION = "portfolio-risk-floor-exit-v2"
 ENTRY_ALLOCATION_VERSION = "portfolio-entry-allocation-v1"
+ENTRY_NO_TRADE_VERSION = "portfolio-entry-no-trade-v1"
+NO_TRADE_VALUATION_VERSION = "portfolio-no-trade-valuation-v2"
 
 
 @dataclass(frozen=True)
@@ -102,10 +108,41 @@ def _checked_window(prices, selections, calendar, start, end):
     return days
 
 
+def _no_trade_proofs(observations, calendar, *, valuation=False):
+    """Bind retrospective zero activity to an exact session and numeric instrument code."""
+    if observations is None:
+        return {}
+    if not isinstance(observations, (tuple, list)):
+        raise ValueError('فهرست رسیدهای بومی عدم معامله لازم است')
+    sessions = set(calendar)
+    cutoff = settings.RESEARCH_CONFIG['holdout_start']
+    proofs = {}
+    for observation in observations:
+        if not isinstance(observation, dict):
+            raise ValueError('رسید بومی عدم معامله نامعتبر است')
+        code, day = observation.get('ins_code'), observation.get('requested_date')
+        if (not isinstance(code, str) or not is_canonical_iso_date(day) or day >= cutoff or day not in sessions
+                or type(observation.get('http_status')) is not int or observation['http_status'] != 200
+                or (code, day) in proofs):
+            raise ValueError('شناسه، تاریخ، پاسخ HTTP یا تکرار رسید عدم معامله نامعتبر است')
+        proof = (parse_no_trade_publication(observation, code, day) if valuation else
+                 parse_publication(observation, code, day, 'price'))
+        received_day = receipt_time(observation['received_at']).astimezone(TEHRAN_TZ).date().isoformat()
+        expected = 'observed_flat_mark' if valuation else 'observed_zero_activity'
+        if proof['status'] != expected or received_day <= day:
+            if valuation:
+                raise ValueError('ارزش بدون معامله به شاهد روز کامل با قیمت پایانی و مرجع یکسان نیاز دارد')
+            raise ValueError('عدم معامله باید از پاسخ روز کامل با حجم، تعداد و ارزش صفر تأیید شود')
+        proofs[code, day] = proof if valuation else observation['body_sha256']
+    return proofs
+
+
 def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections: pd.DataFrame, calendar,
                      config: PortfolioConfig, start: str | None = None, end: str | None = None,
                      dip_rule=None, *, cash_dividends=None, bonus_shares=None, subscription_rights=None,
-                     loss_floor_exit=False, entry_allocation_fraction=None) -> PortfolioResult:
+                     loss_floor_exit=False, entry_allocation_fraction=None,
+                     no_trade_entry_observations=None, no_trade_valuation_observations=None,
+                     require_explicit_corporate_actions=False) -> PortfolioResult:
     """Decisions t -> next session; shared cash, slots, partial fills and delayed exits.
 
     Purchases precede sales in daily bookkeeping, so same-day sale proceeds cannot fund an earlier
@@ -115,6 +152,17 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
     """
     calendar = _calendar(calendar)
     days = _checked_window(prices, selections, calendar, start, end)
+    if type(require_explicit_corporate_actions) is not bool:
+        raise ValueError('الزام دفتر صریح اقدام شرکتی باید بولی باشد')
+    strict_valuation = no_trade_valuation_observations is not None
+    if strict_valuation and days[-1] >= settings.RESEARCH_CONFIG['holdout_start']:
+        raise ValueError('ارزش بدون معامله فقط برای پژوهش پیش از مهروموم تعریف شده است')
+    if strict_valuation and subscription_rights is not None:
+        raise ValueError('ارزش بدون معامله همراه دفتر حق‌تقدم به قرارداد مستقلی نیاز دارد')
+    no_trade_entries = _no_trade_proofs(no_trade_entry_observations, calendar)
+    no_trade_marks = _no_trade_proofs(no_trade_valuation_observations, calendar, valuation=True)
+    for key, proof in no_trade_marks.items():
+        no_trade_entries.setdefault(key, proof['body_sha256'])
     if type(loss_floor_exit) is not bool:
         raise ValueError('گزینه خروج پس از حد زیان باید بولی صریح باشد')
     if entry_allocation_fraction is not None:
@@ -153,6 +201,8 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
     if dip_rule is not None and not prepared.has_open:
         raise ValueError('قیمت گشایش برای مدل DIP لازم است')
     share_book = bonus_shares if bonus_shares is not None else subscription_rights
+    valuation = ObservedValuation(no_trade_marks) if strict_valuation else None
+    valuation_dividends = cash_dividends if cash_dividends is not None else combined_dividends
     by_day = prepared.sessions
     order = selections.sort_values(["date", "rank", "symbol"]) if "rank" in selections else selections.sort_values(["date", "symbol"])
     selected = {d: g["symbol"].tolist() for d, g in order.groupby("date")}
@@ -196,10 +246,28 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
 
     for day in days:
         session, used = by_day.get(day, {}), {}
+        valuation_session, flat_marks = session, {}
         index = day_position[day]
+        if valuation is not None:
+            exposed = ({pos['symbol'] for pos in positions.values()} | share_book.pending_symbols
+                       if share_book is not None else set(positions) | set(fractions.exposures))
+            if valuation_dividends is not None:
+                exposed.update(event.symbol for event in valuation_dividends.by_ex_date.get(day, ())
+                               if valuation_dividends.eligible.get(event.event_id))
+            try:
+                valuation_session, flat_marks = valuation.session(
+                    session, day, calendar[index-1] if index else None, exposed, valuation_dividends)
+            except ValuationGap as error:
+                note(day, error.symbol, error.status, **error.evidence)
+                invalid = True
+                curve.append(dict(date=day, equity_rial=np.nan, cash_rial=cash, positions=position_count(),
+                                  stale_positions=0, stale_fractional_exposures=0))
+                break
+            for symbol, proof in flat_marks.items():
+                note(day, symbol, 'observed_no_trade_mark', **proof)
         if cash_dividends is not None:
             try:
-                cash_dividends.begin_day(day, session)
+                cash_dividends.begin_day(day, valuation_session)
             except ValueError as error:
                 note(day, '', 'unknown_corporate_entitlement', reason=str(error))
                 invalid = True
@@ -207,15 +275,17 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
                                   stale_positions=0, stale_fractional_exposures=0))
                 break
         if share_book is not None:
+            issue_symbol = ''
             try:
                 if subscription_rights is None:
-                    share_book.begin_day(day, session, positions)
+                    share_book.begin_day(day, valuation_session, positions)
                 else:
                     cash_delta, offset_income = subscription_rights.begin_day(day, session, positions, cash)
                     cash += cash_delta
                     realized += offset_income
                 for symbol in sorted({p['symbol'] for p in positions.values()} | share_book.pending_symbols):
-                    row = session.get(symbol)
+                    issue_symbol = symbol
+                    row = valuation_session.get(symbol)
                     if row is None:
                         continue
                     if not row['mark_valid'] or not math.isfinite(row['action']):
@@ -227,19 +297,25 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
                         if pos['symbol'] == symbol and day >= pos.get('valuation_not_before', day):
                             pos['mark'], pos['mark_date'] = row['mark'], day
             except ValueError as error:
-                note(day, '', 'unknown_corporate_entitlement', reason=str(error))
+                note(day, issue_symbol, 'unknown_corporate_entitlement', reason=str(error))
                 invalid = True
         # مسیر قدیمی فقط با نبود دفتر جایزه، تعداد مصنوعی و کسر نمایشی را می‌سازد.
         legacy_symbols = sorted(set(positions) | set(fractions.exposures)) if share_book is None else []
         for symbol in legacy_symbols:
             pos = positions.get(symbol)
-            row = session.get(symbol)
+            row = valuation_session.get(symbol)
             if row is None:
                 continue
             factor = row["action"]
             known_mark = row['mark_valid']
             if not known_mark or not math.isfinite(factor) or factor <= 0:
                 note(day, symbol, "unknown_open_position")
+                invalid = True
+                break
+            if (require_explicit_corporate_actions and cash_dividends is None
+                    and row['ref_price_raw'] != row['previous_official']):
+                note(day, symbol, 'unaccounted_reference_change', previous_official_rial=row['previous_official'],
+                     reference_rial=row['ref_price_raw'])
                 invalid = True
                 break
             # مسیر نقدی، حتی شکاف یک‌ریالی را بدون شاهد نادیده نمی‌گیرد؛ تحمل مدل قدیمی محفوظ است.
@@ -289,6 +365,14 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
                      decision_date=decision['date'])
                 continue
             row = session.get(symbol)
+            evidence_sha = no_trade_entries.get((symbol, day))
+            if evidence_sha is not None:
+                if row is not None and (row['volume'] != 0 or row['value'] != 0):
+                    note(day, symbol, 'conflicting_no_trade_entry', decision_date=decision['date'], evidence_sha256=evidence_sha)
+                    invalid = True
+                    break
+                note(day, symbol, 'observed_no_trade_entry', decision_date=decision['date'], evidence_sha256=evidence_sha)
+                continue
             if row is None:
                 note(day, symbol, "no_session", decision_date=decision["date"])
                 # An absent bar may be a halt or missing data. Neither the
@@ -358,6 +442,10 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
                 continue
             lot_dip = None if pos.get('credit_only') or risk_exit_active else dip_rule
             if lot_dip is None and index < pos["due"] and not risk_exit_active:
+                continue
+            if symbol in flat_marks:
+                if not config.stress or index >= pos['due'] or risk_exit_active:
+                    note(day, symbol, 'observed_no_trade_exit_delayed', evidence_sha256=flat_marks[symbol]['evidence_sha256'])
                 continue
             row = session.get(symbol)
             if row is None:
@@ -579,8 +667,25 @@ def replay_portfolio(prices: pd.DataFrame | PreparedPortfolioPrices, selections:
         fractional_valuation='current_observed_mark_and_subsequent_reference_factors; noncash, no settlement assumed',
         mark_basis="last_observed_official_close_net_sell_fee", shorting=False, queue_position_proven=False,
         historical_same_day_resale_permissions_verified=False,
-        limitations=["historical universe incomplete", "synthetic corporate actions are not actual entitlements",
-                     "halting days retain stale marks", "daily volume is not proof of own fills", "no intraday stop execution"])
+         limitations=["historical universe incomplete", "synthetic corporate actions are not actual entitlements",
+                      ("official flat mark does not establish a liquidating price" if strict_valuation
+                       else "halting days retain stale marks"),
+                      "daily volume is not proof of own fills", "no intraday stop execution"])
+    if no_trade_entry_observations is not None or strict_valuation:
+        assumptions['entry_no_trade_version'] = ENTRY_NO_TRADE_VERSION
+        assumptions['entry_no_trade_evidence_count'] = len(no_trade_entries)
+        metrics['observed_no_trade_entries'] = sum(row['status'] == 'observed_no_trade_entry' for row in decisions)
+    if strict_valuation:
+        assumptions.update(no_trade_valuation_version=NO_TRADE_VALUATION_VERSION,
+            no_trade_valuation_evidence_count=len(no_trade_marks),
+            missing_exit_bar_policy='delay on a continuous dated official flat mark; otherwise unknown',
+            missing_held_bar_policy='dated no-activity mark must be continuous or match explicit cash ex accounting',
+            terminal_value_is_marked_nav=True)
+        metrics.update(observed_no_trade_marks=sum(row['status'] == 'observed_no_trade_mark' for row in decisions),
+            observed_no_trade_exit_delays=sum(row['status'] == 'observed_no_trade_exit_delayed' for row in decisions),
+            observed_no_trade_cash_ex_marks=sum(row.get('declared_cash_ex', False) for row in decisions))
+    if require_explicit_corporate_actions:
+        assumptions['unaccounted_reference_change_policy'] = 'stop before using synthetic units or cash'
     if entry_allocation_fraction is not None:
         known = (equity_frame.equity_rial.notna() & equity_frame.equity_rial.gt(0)
             & equity_frame.stale_positions.eq(0)

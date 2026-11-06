@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -106,6 +107,22 @@ class TsetmcProvider(BaseDataProvider):
             return None
         receipt = {key: value for key, value in observation.items() if key != 'content'}
         return dict(receipt=receipt, projection=data)
+
+    def get_development_index_history(self, index: str, start: str, end_exclusive: str) -> Optional[Dict[str, Any]]:
+        from core.market_index import MAX_BYTES, index_history_request, project_index_history
+
+        code, url = index_history_request(index, start, end_exclusive)
+        observation = self._get_quote_context_json(code, url, max_bytes=MAX_BYTES)
+        if observation is None:
+            return None
+        try:
+            projection = project_index_history(observation['content'], index, start, end_exclusive,
+                                               received_at=observation['received_at'])
+        except ValueError as exc:
+            logger.warning('Malformed index history: %s', exc)
+            return None
+        receipt = {key: value for key, value in observation.items() if key != 'content'}
+        return dict(receipt=receipt, projection=projection)
 
     def __init__(self, session: Optional[requests.Session] = None, *, realtime=False):
         if type(realtime) is not bool:
@@ -344,27 +361,45 @@ class TsetmcProvider(BaseDataProvider):
                     query_symbol=request['query_symbol'])
 
     def get_instrument_info(self, ins_code: str) -> Optional[Dict[str, Any]]:
-        data = self._get_json(f"{BASE_URL}/Instrument/GetInstrumentInfo/{ins_code}")
+        if type(ins_code) not in (str, int) or not re.fullmatch(r'[1-9][0-9]{0,29}', str(ins_code)):
+            return None
+        code = str(ins_code)
+        data = self._get_json(f"{BASE_URL}/Instrument/GetInstrumentInfo/{code}")
         info = (data or {}).get("instrumentInfo")
-        if not info:
+        if not isinstance(info, dict) or type(info.get('insCode')) not in (str, int) or str(info['insCode']) != code:
+            return None
+        # cIsin and instrumentID can identify different entities in the same response.
+        instrument_id = info.get('instrumentID')
+        if not isinstance(instrument_id, str) or not re.fullmatch(r'IR[A-Z0-9]{10}', instrument_id):
             return None
         flow = info.get("flow")
+        instrument_type = info.get('yVal')
+        sector = info.get('sector')
+        limits = info.get('staticThreshold')
+        board = info.get('cgrValCot')
+        if ((flow is not None and type(flow) is not int)
+                or (instrument_type is not None and (type(instrument_type) not in (int, str)
+                    or not re.fullmatch(r'[0-9]{1,3}', str(instrument_type))))
+                or (sector is not None and not isinstance(sector, dict))
+                or (limits is not None and not isinstance(limits, dict))):
+            return None
+        sector_code = (sector or {}).get('cSecVal')
         return {
             "symbol_fa": normalize_symbol(info.get("lVal18AFC", "")),
             "name_fa": normalize_fa(info.get("lVal30", "")),
-            "ins_code": str(info.get("insCode")),
-            "tse_code": info.get("cIsin"),
+            "ins_code": code,
+            "tse_code": instrument_id,
             "market": FLOW_TO_MARKET.get(flow, f"flow_{flow}"),
-            "board_code": (info.get("cgrValCot") or "").strip() or None,
-            "instrument_type_code": int(info["yVal"]) if info.get("yVal") else None,
+            "board_code": (board.strip() or None) if isinstance(board, str) else None,
+            "instrument_type_code": int(instrument_type) if instrument_type is not None else None,
             "flow": flow,
-            "sector_code": ((info.get("sector") or {}).get("cSecVal") or "").strip() or None,
-            "sector_name": normalize_fa((info.get("sector") or {}).get("lSecVal") or "") or None,
+            "sector_code": (sector_code.strip() or None) if isinstance(sector_code, str) else None,
+            "sector_name": normalize_fa((sector or {}).get("lSecVal")) or None,
             "shares_outstanding": info.get("zTitad"),
             "base_volume": info.get("baseVol"),
             "instrument_type": "stock",
-            "price_limit_up": (info.get("staticThreshold") or {}).get("psGelStaMax"),
-            "price_limit_down": (info.get("staticThreshold") or {}).get("psGelStaMin"),
+            "price_limit_up": (limits or {}).get("psGelStaMax"),
+            "price_limit_down": (limits or {}).get("psGelStaMin"),
         }
 
     # ═══════════════════════════════════════════════
@@ -378,6 +413,12 @@ class TsetmcProvider(BaseDataProvider):
             return None
         return dict(source=self.name, price_unit='Rial', ins_code=code, requested_date=trade_date,
                     url=url, received_at=now_tehran_iso(), payload=payload)
+
+    def get_market_day_observation(self, trade_date: str) -> Optional[Dict[str, Any]]:
+        from core.market_day import MAX_BYTES, market_day_request
+
+        observation = self._get_quote_context_json('', market_day_request(trade_date), max_bytes=MAX_BYTES)
+        return dict(observation, requested_date=trade_date) if observation is not None else None
 
     def get_symbol_history(self, ins_code: str, last_n: int = 0) -> Optional[pd.DataFrame]:
         data = self._get_json(f"{BASE_URL}/ClosingPrice/GetClosingPriceDailyList/{ins_code}/{int(last_n)}")

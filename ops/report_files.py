@@ -1,5 +1,6 @@
 """گزارش JSON خصوصی و اتمی؛ ورودی خود یا فایل دیتابیس را بازنویسی نمی‌کند."""
 
+import hashlib
 import json
 import math
 import os
@@ -82,8 +83,8 @@ def write_private_report(path, payload, *, forbidden_paths=()):
     return write_json_report(target, payload, forbidden_paths=forbidden_paths)
 
 
-def read_private_report(path, *, max_bytes=16 * 1024 * 1024):
-    """خواندن UTF-8 مستقل از locale؛ کلید تکراری و عدد نامتناهی مبهم پذیرفته نمی‌شود."""
+def read_private_report(path, *, max_bytes=16 * 1024 * 1024, include_sha256=False):
+    """خواندن گزارش و در صورت درخواست، هش همان بایت‌های اعتبارسنجی‌شده."""
     if type(max_bytes) is not int or max_bytes < 1:
         raise ValueError('سقف اندازه گزارش باید عدد صحیح مثبت باشد')
     target = private_report_path(path, forbidden_paths=(settings.DB_PATH,))
@@ -118,4 +119,6 @@ def read_private_report(path, *, max_bytes=16 * 1024 * 1024):
             stack.extend(value)
         elif isinstance(value, float) and not math.isfinite(value):
             nonfinite(value)
+    if include_sha256:
+        return report, hashlib.sha256(body).hexdigest()
     return report

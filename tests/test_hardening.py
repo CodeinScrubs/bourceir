@@ -25,6 +25,7 @@ def _watch_row(symbol, ins, qtc=1.0, **kw):
 
 def _info(symbol, ins, y_val, flow=1):
     return {"instrumentInfo": {"insCode": ins, "lVal18AFC": symbol, "lVal30": f"شرکت {symbol}",
+                               "instrumentID": f"IRXS{int(ins):08d}",
                                "yVal": str(y_val), "flow": flow, "cgrValCot": "N1"}}
 
 

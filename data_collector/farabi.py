@@ -19,6 +19,8 @@ NS = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_XML_BYTES = 64 * 1024 * 1024
 PARSER_VERSION = 'farabi-v3'
+BONUS_FORMAT = 'farabi-dom-v2'
+BONUS_LABEL = 'سهام جایزه'
 
 
 def _display_text(value):
@@ -28,7 +30,7 @@ def _display_text(value):
 
 def _performance(value):
     text = _display_text(value)
-    percent = r'([+-]?(?:\d+(?:\.\d+)?|∞)|-)'
+    percent = r'([+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|[+-]?∞|-)'
     amount = r'([+-]?[\d,]+)'
     match = re.fullmatch(r'\(' + percent + r'%\)\s*' + amount, text)
     if match:
@@ -42,7 +44,8 @@ def _performance(value):
 def import_report(repository, data: bytes, filename: str, captured_at=None):
     """Validate source bytes at the collection boundary, then persist through a repository."""
     parsed = parse_portfolio(data) if filename.lower().endswith('.json') else parse_export(data, captured_at)
-    return repository.store_report(data, filename, parsed, parser_version=PARSER_VERSION)
+    parser_version = 'farabi-v4' if parsed.get('source_format') == BONUS_FORMAT else PARSER_VERSION
+    return repository.store_report(data, filename, parsed, parser_version=parser_version)
 
 
 def number(value, *, integer=False, optional=False):
@@ -73,13 +76,39 @@ def _timestamp(value):
     return timestamp.astimezone(TEHRAN_TZ).isoformat()
 
 
+def _split_portfolio_row(values, *, allow_bonus):
+    symbol, *labels = (line.strip() for line in values[0].strip().split('\n'))
+    if not labels:
+        return values, None
+    if not allow_bonus or labels != [BONUS_LABEL]:
+        raise ValueError('برچسب ردیف سبد نامعتبر است')
+    primary, extra = list(values), {}
+    primary[0] = symbol
+    for column in (1, 2, 4, 6):
+        parts = [line.strip() for line in _display_text(values[column]).split('\n')]
+        if len(parts) != 2:
+            raise ValueError('ستون‌های سهام جایزه تغییر کرده‌اند')
+        primary[column], extra[column] = parts
+    pnl = _display_text(values[7]).split()
+    if extra[2] != '-' or extra[4] != '-' or len(pnl) != 4:
+        raise ValueError('ستون‌های سهام جایزه تغییر کرده‌اند')
+    primary[7] = ' '.join(pnl[:2])
+    pct, amount = _performance(' '.join(pnl[2:]))
+    bonus = dict(quantity=number(extra[1], integer=True), value_rial=number(extra[6], integer=True),
+                 broker_pnl_rial=number(amount, integer=True), broker_return_pct=number(pct, optional=True))
+    if bonus['quantity'] <= 0 or bonus['value_rial'] < 0:
+        raise ValueError('تعداد یا ارزش سهام جایزه نامعتبر است')
+    return primary, bonus
+
+
 def parse_portfolio(data: bytes):
     if len(data) > MAX_FILE_BYTES:
         raise ValueError('فایل بیش از حد بزرگ است')
     payload = json.loads(data)
     if not isinstance(payload, dict):
         raise ValueError('اسنپ‌شات باید شیء JSON با قالب فارابی باشد')
-    if payload.get('format') != 'farabi-dom-v1' or payload.get('kind') != 'portfolio' or payload.get('currency') != 'IRR':
+    source_format = payload.get('format')
+    if source_format not in ('farabi-dom-v1', BONUS_FORMAT) or payload.get('kind') != 'portfolio' or payload.get('currency') != 'IRR':
         raise ValueError('قالب اسنپ‌شات یا واحد ریال تأیید نشد')
     if not isinstance(payload.get('source_url'), str):
         raise ValueError('آدرس منبع اسنپ‌شات نامعتبر است')
@@ -95,6 +124,7 @@ def parse_portfolio(data: bytes):
     for values in payload.get('rows', []):
         if not isinstance(values, list) or len(values) != 8 or not all(isinstance(v, str) for v in values):
             raise ValueError('تعداد ستون‌های ردیف سبد نامعتبر است')
+        values, bonus = _split_portfolio_row(values, allow_bonus=source_format == BONUS_FORMAT)
         symbol = normalize_symbol(values[0])
         if not symbol or symbol in seen:
             raise ValueError('نماد خالی یا تکراری در برداشت سبد')
@@ -106,8 +136,11 @@ def parse_portfolio(data: bytes):
                    breakeven_rial=number(values[4]), last_price_rial=number(quote_amount, integer=True),
                    value_rial=number(values[6], integer=True), broker_pnl_rial=number(pnl_amount, integer=True),
                    broker_return_pct=number(pnl_pct, optional=True))
-        if row['quantity'] <= 0 or min(row['buy_total_rial'], row['value_rial'], row['last_price_rial']) < 0:
+        if (row['quantity'] < 0 or (row['quantity'] == 0 and (bonus is None or row['value_rial'] != 0))
+                or min(row['buy_total_rial'], row['value_rial'], row['last_price_rial']) < 0):
             raise ValueError('موجودی یا ارزش دارایی نامعتبر است')
+        if bonus is not None:
+            row['bonus_share'] = bonus
         rows.append(row)
     expected = number(payload.get('expected_positions'), integer=True)
     if expected <= 0 or len(rows) != expected:
@@ -116,12 +149,23 @@ def parse_portfolio(data: bytes):
     keys = ['net_assets_rial', 'portfolio_value_rial', 'cash_rial', 'buying_power_rial', 'blocked_rial',
             'buy_total_rial', 'broker_pnl_rial']
     summary = {key: number(source_summary.get(key), integer=True) for key in keys}
-    if min(summary[k] for k in ('net_assets_rial', 'portfolio_value_rial', 'buying_power_rial', 'blocked_rial')) < 0:
+    if min(summary[k] for k in ('net_assets_rial', 'portfolio_value_rial', 'buying_power_rial', 'blocked_rial', 'buy_total_rial')) < 0:
         raise ValueError('ارزش منفی در خلاصه حساب')
     summary['broker_return_pct'] = number(source_summary.get('broker_return_pct'), optional=True)
     # Each displayed row is rounded to whole rial independently of the total.
     differences = {key: sum(r[field] for r in rows) - summary[key] for key, field in (
-        ('portfolio_value_rial', 'value_rial'), ('buy_total_rial', 'buy_total_rial'), ('broker_pnl_rial', 'broker_pnl_rial'))}
+        ('portfolio_value_rial', 'value_rial'), ('broker_pnl_rial', 'broker_pnl_rial'))}
+    displayed_cost = sum(row['buy_total_rial'] for row in rows)
+    buy_total_check = None
+    if any('bonus_share' in row for row in rows):
+        # The table combines ordinary and bonus buy costs on those rows. The summary uses ordinary shares.
+        ordinary_cost = sum(row['buy_total_rial'] for row in rows if 'bonus_share' not in row)
+        if not ordinary_cost - expected <= summary['buy_total_rial'] <= displayed_cost + expected:
+            raise ValueError('جمع خرید خلاصه خارج از حدود قابل تطبیق ستون سبد است')
+        buy_total_check = dict(status='bounds_only', displayed_cost_rial=displayed_cost,
+                               cost_on_rows_without_bonus_rial=ordinary_cost)
+    else:
+        differences['buy_total_rial'] = displayed_cost - summary['buy_total_rial']
     if any(abs(diff) > expected for diff in differences.values()):
         raise ValueError('جمع ردیف‌های سبد با خلاصه فارابی سازگار نیست')
     if abs(summary['net_assets_rial'] - summary['portfolio_value_rial'] - summary['cash_rial']) > 1:
@@ -134,9 +178,14 @@ def parse_portfolio(data: bytes):
             raise ValueError('تاریخ جلسه بازار نامعتبر است') from exc
         if parsed_date > datetime.fromisoformat(captured_at).date():
             raise ValueError('تاریخ بازار از زمان برداشت جلوتر است')
-    return dict(kind='portfolio', captured_at=captured_at, rows=rows, summary=summary,
-                market_date=market_date, expected_positions=expected, rounding_differences_rial=differences,
-                rounding_tolerance_rial=expected, actual_history_complete=False)
+    result = dict(kind='portfolio', captured_at=captured_at, rows=rows, summary=summary,
+                  market_date=market_date, expected_positions=expected, rounding_differences_rial=differences,
+                  rounding_tolerance_rial=expected, actual_history_complete=False)
+    if source_format == BONUS_FORMAT:
+        result['source_format'] = source_format
+    if buy_total_check is not None:
+        result['buy_total_check'] = buy_total_check
+    return result
 
 
 def _xml(raw):

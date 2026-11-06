@@ -71,6 +71,55 @@ def test_capture_keeps_negative_adjusted_cost_and_unknown_infinite_return(captur
     assert parsed['captured_at'].endswith('+03:30')
 
 
+def add_bonus_lines(capture):
+    capture['format'] = 'farabi-dom-v2'
+    capture['rows'][0] = ['فولاد\nسهام جایزه', '۲\n۵', '-100\n-', '150', '-101\n-',
+                          '(0%) 1,000', '1,990\n4,950', '(+∞%)\n+1,990\n(+۱٬۲۳۴٫۵۰٪)\n+۴٬۹۵۰']
+
+
+def test_bonus_share_is_separate_and_broker_buy_cost_scope_survives_import(db, capture):
+    add_bonus_lines(capture)
+    capture['rows'][0][2] = '5\n-'
+    data = encoded(capture)
+    repo = BrokerRepository(db)
+    key = import_report(repo, data, 'portfolio-dom.json')
+    assert import_report(repo, data, 'portfolio-dom.json') == key
+    saved = repo.latest('portfolio')
+    assert saved['parser_version'] == 'farabi-v4'
+    first = saved['rows'][0]
+    assert first['symbol_fa'] == 'فولاد' and first['quantity'] == 2 and first['value_rial'] == 1990
+    assert first['bonus_share'] == dict(quantity=5, value_rial=4950, broker_pnl_rial=4950, broker_return_pct=1234.5)
+    report = broker_report(db)
+    assert report['positions'][0]['bonus_share'] == first['bonus_share']
+    assert report['positions'][0]['broker_cost_state'] == 'combined_with_bonus'
+    assert report['buy_total_check'] == dict(status='bounds_only', displayed_cost_rial=2150, cost_on_rows_without_bonus_rial=2000)
+    assert 'buy_total_rial' not in report['rounding_differences_rial']
+    assert report['summary']['buy_total_rial'] == 2000 and not report['actual_history_complete']
+
+
+@pytest.mark.parametrize('changes', [
+    {'format': 'farabi-dom-v1'},
+    {'summary': {'buy_total_rial': 1997}},
+    {'summary': {'buy_total_rial': 2153}},
+    {'summary': {'broker_pnl_rial': 5940}},
+    {'row': (0, 'فولاد\nبرچسب ناشناخته')},
+    {'row': (1, '2\n0')},
+    {'row': (4, '-101\n0')},
+    {'row': (7, '(+∞%)\n+1,990\n(+1,23%)\n+4,950')},
+])
+def test_bonus_portfolio_rejects_invalid_shape_or_unreconciled_controls(capture, changes):
+    add_bonus_lines(capture)
+    if 'format' in changes:
+        capture['format'] = changes['format']
+    if 'summary' in changes:
+        capture['summary'].update(changes['summary'])
+    if 'row' in changes:
+        column, value = changes['row']
+        capture['rows'][0][column] = value
+    with pytest.raises(ValueError):
+        parse_portfolio(encoded(capture))
+
+
 def test_zero_broker_cost_never_proves_recovered_capital_or_economic_profit(capture):
     report = reconcile_account(parse_portfolio(encoded(capture)))
     first = next(p for p in report['positions'] if p['symbol_fa'] == 'فولاد')

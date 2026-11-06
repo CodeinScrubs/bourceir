@@ -93,9 +93,23 @@ def page_broker():
         'بازده فارابی (٪)': positions['broker_return_pct'],
         'وضعیت هزینه گزارش‌شده': positions['broker_cost_state'].map({
             'requires_history_reconciliation': 'صفر/منفی؛ نیازمند تطبیق سابقه',
+            'combined_with_bonus': 'جمع خرید شامل سهام جایزه است',
             'positive_broker_cost': 'مثبت؛ تأیید بازده اقتصادی نیست'}),
     })
+    bonus_rows = [
+        {'نماد': row['symbol_fa'], 'تعداد': bonus['quantity'],
+         'ارزش گزارش‌شده (تومان)': bonus['value_rial'] / 10, 'سود/زیان گزارش‌شده (تومان)': bonus['broker_pnl_rial'] / 10}
+        for row in report['positions'] if (bonus := row.get('bonus_share')) is not None
+    ]
+    if bonus_rows:
+        view['جمع خرید شامل جایزه'] = ['بله' if 'bonus_share' in row else 'خیر' for row in report['positions']]
     st.dataframe(view, hide_index=True)
+    if bonus_rows:
+        with st.expander('سهام جایزه در انتظار تبدیل', expanded=True):
+            st.caption('تعداد، ارزش و سود/زیان سهام جایزه جدا از موجودی عادی نگهداری می‌شوند.')
+            st.dataframe(pd.DataFrame(bonus_rows), hide_index=True)
+            st.info('در ردیف‌های دارای سهام جایزه، ستون جمع خرید فارابی مبلغ ترکیبی است. '
+                    'تطبیق جمع خرید با خلاصه در حد بازهٔ ممکن انجام شده و بهای خرید سهم عادی در آن ردیف‌ها جداگانه معلوم نیست.')
     st.bar_chart(positions.set_index('symbol_fa')['weight_pct'].head(10), x_label='نماد', y_label='وزن سبد (٪)')
     equal = report['price_checks'].get('matched', 0) + report['price_checks'].get('price_equal_date_unverified', 0)
     missing = report['price_checks'].get('missing_archive', 0)

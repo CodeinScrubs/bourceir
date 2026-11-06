@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import {capturePortfolio, captureReports, numeric, optionalPercent, parseAccountTotals, performance, portfolioHeaders, verifySnapshot, writeCaptureStatus} from '../scripts/farabi_capture.mjs';
+import {captureConnectedPortfolio, capturePortfolio, captureReports, numeric, optionalPercent, parseAccountTotals, performance, portfolioHeaders, verifySnapshot, writeCaptureStatus} from '../scripts/farabi_capture.mjs';
 
 // Synthetic fixtures remain under tests and never enter the market/account databases.
 function snapshot() {
@@ -38,7 +38,8 @@ test('unknown percentages and localized performance are parsed without inventing
   assert.equal(optionalPercent('(−۱۲٫۵٪)'), -12.5);
   assert.deepEqual(performance('\u2066(−۱۲٫۵٪) −۱٬۰۰۰\u2069'), {pct:-12.5, amount:-1000});
   assert.deepEqual(performance('+۱٬۰۰۰ (+∞٪)'), {pct:null, amount:1000});
-  for (const value of ['(+∞%) garbage','unknown','(+1..2%)']) assert.throws(() => optionalPercent(value));
+  assert.deepEqual(performance('(+۱٬۲۳۴٫۵۰٪) +۱٬۰۰۰'), {pct:1234.5, amount:1000});
+  for (const value of ['(+∞%) garbage','unknown','(+1..2%)','(+1,23%)']) assert.throws(() => optionalPercent(value));
 });
 
 test('localized rows remain reconciled and zero table costs never bypass controls', () => {
@@ -53,7 +54,7 @@ test('localized rows remain reconciled and zero table costs never bypass control
 
 function simulatedTab({infinite=false, rounded=false, initialTop=800, stuck=false, changed=false}={}) {
   let top = initialTop, upCalls = 0, summaryCalls = 0;
-  const chain = {click:async () => {}, waitFor:async () => {}, locator:() => chain, getByText:() => chain};
+  const chain = {click:async () => {}, isVisible:async () => true, waitFor:async () => {}};
   const totals = {expected:'60', value:'6,000', cash:['10','ریال'], net:[rounded ? '6,011' : '6,010','ریال'],
     power:['10'], blocked:['0'], cost:infinite ? '0' : '6,000', pnl:infinite ? '6,000' : '0', pct:infinite ? '(−∞٪)' : '(۰٪)'};
   return {url:async () => 'https://farabixo.irfarabi.com/',
@@ -64,7 +65,7 @@ function simulatedTab({infinite=false, rounded=false, initialTop=800, stuck=fals
           summaryCalls++;
           return {...totals, power:changed && summaryCalls > 2 ? ['9'] : totals.power};
         }
-        if (!code.includes('const table =')) return true;
+        if (!code.includes('const tables =')) return true;
         const start = Math.floor(top / 20);
         return {headers:portfolioHeaders, rows:Array.from({length:Math.min(4,60-start)}, (_, i) =>
           ['S'+(start+i),'1','100',infinite ? '0' : '100','100','(۰٪) ۱۰۰','۱۰۰',infinite ? '(+∞٪) +۱۰۰' : '(۰٪) +۰']),
@@ -76,6 +77,34 @@ function simulatedTab({infinite=false, rounded=false, initialTop=800, stuck=fals
     },
     upCalls:() => upCalls};
 }
+
+test('connected capture refuses foreign, non-securities and virtual portfolio views before using the DOM', async () => {
+  for (const url of ['https://other.example/', 'https://farabixo.irfarabi.com/orders-history',
+    'https://farabixo.irfarabi.com/?virtualPortfolio=true', 'https://other@farabixo.irfarabi.com/']) {
+    await assert.rejects(captureConnectedPortfolio({url:async () => url}), /real Farabi securities view/);
+  }
+});
+
+test('bonus lines require their exact label and preserve the ordinary totals and buy-cost bounds', () => {
+  const report = {...snapshot(), format:'farabi-dom-v2'};
+  report.rows[0] = ['A\nسهام جایزه','1\n5','1\n-','250','1\n-','(0%) 1','100\n500','(0%)\n+0\n(+1,234.50%)\n+500'];
+  assert.doesNotThrow(() => verifySnapshot(report));
+  for (const mutate of [
+    s => s.format = 'farabi-dom-v1',
+    s => s.rows[0][0] = 'A\nUnknown',
+    s => s.rows[0][1] = '1\n0',
+    s => s.rows[0][6] = '100\n500\n600',
+    s => s.rows[0][7] = '(0%)\n+0\n(+1,23%)\n+500',
+    s => {s.summary.portfolio_value_rial += 500; s.summary.net_assets_rial += 500;},
+    s => s.summary.broker_pnl_rial += 500,
+    s => s.summary.buy_total_rial = 197,
+    s => s.summary.buy_total_rial = 453,
+  ]) {
+    const invalid = structuredClone(report);
+    mutate(invalid);
+    assert.throws(() => verifySnapshot(invalid));
+  }
+});
 
 test('capture rewinds repeatedly before collecting and supports infinite summary return', async () => {
   const tab = simulatedTab({infinite:true});

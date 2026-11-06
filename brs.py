@@ -20,6 +20,7 @@ import argparse
 import logging
 import sys
 import time
+from contextlib import closing
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -718,6 +719,44 @@ def cmd_backup(args) -> int:
     return 0
 
 
+def cmd_farabi_industry_candles(args) -> int:
+    from data_collector.tsetmc import TsetmcProvider
+    from ops.farabi_industry_candles import run_batch
+
+    try:
+        output, summary = run_batch(TsetmcProvider, args.date, retry=args.retry, inventory_only=args.inventory_only,
+            progress=lambda done,total,counts: print(f'{done}/{total} {counts}', flush=True))
+    except (ValueError, RuntimeError) as exc:
+        print(str(exc))
+        return 2
+    print(f"{summary['active_symbols']} نماد فعال و {summary['bars']} کندل — {output}", flush=True)
+    incomplete = summary['candle_status'].keys() - {'reconciled', 'not_reported_in_day_list'}
+    if not summary['activity_window_requests_observed'] or summary['categories'] != summary['observed_categories']:
+        return 2
+    return 2 if incomplete and not args.inventory_only else 0
+
+
+def cmd_minute_candles(args) -> int:
+    from data_collector.tsetmc import TsetmcProvider
+    from database.db import DatabaseManager
+    from ops.minute_candles import export_minute_session
+
+    with DatabaseManager(read_only=True) as db:
+        symbol = db.get_symbol(args.symbol)
+    try:
+        with closing(TsetmcProvider()) as provider:
+            folder, report = export_minute_session(provider, symbol, args.date, refresh=args.refresh)
+    except ValueError as exc:
+        print(str(exc))
+        return 2
+    print(f"ممیزی {report['symbol']} در {report['date']} — {folder / 'audit.json'}")
+    if report['status'] != 'reconciled':
+        print(f"خروجی کندل ساخته نشد — {report['status']}")
+        return 2
+    print(f"{report['bar_count']} کندل با آمار روزانه بورس تطبیق یافت — {folder / report['csv_file']}")
+    return 0
+
+
 def cmd_query(args) -> int:
     import json
     from datetime import timedelta
@@ -1031,6 +1070,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('rights-mark', help='ارزش‌گذاری فرضی سهم و حق‌تقدم با ورودی صریح؛ بدون سفارش')
     p.add_argument('--spec', required=True, help='فایل JSON شامل فرض‌ها، قیمت‌ها و تاریخ‌های صریح')
     p.set_defaults(func=cmd_rights_mark)
+
+    p = sub.add_parser('minute-candles', help='خروجی کندل یک‌دقیقه یک جلسه بسته از ریزمعاملات و تطبیق با آمار روز بورس')
+    p.add_argument('--symbol', required=True, help='نماد یا شناسه یکتای سهام عادی در BRS')
+    p.add_argument('--date', default='دیروز', help='دیروز، تاریخ میلادی YYYY-MM-DD یا شمسی YYYY/MM/DD')
+    p.add_argument('--refresh', action='store_true', help='دریافت دوباره ریزمعاملات به جای استفاده از نسخه بایگانی')
+    p.set_defaults(func=cmd_minute_candles)
+
+    p = sub.add_parser('farabi-industry-candles', help='فهرست فعالیت ۳۰روزه و کندل یک‌دقیقه‌ای دسته‌های برداشت‌شده فارابی')
+    p.add_argument('--date', default='دیروز', help='روز هدف شمسی یا میلادی')
+    p.add_argument('--retry', action='store_true', help='تلاش مجدد برای دریافت‌های قبلی بدون کندل معتبر')
+    p.add_argument('--inventory-only', action='store_true', help='فهرست و گزارش پوشش بدون درخواست ریزمعاملات تازه')
+    p.set_defaults(func=cmd_farabi_industry_candles)
 
     p = sub.add_parser('query',help='پرسش توصیفی ارزش شرکت و ترتیب منفی به مثبت؛ بدون سیگنال')
     p.add_argument('--spec',default=None,help='قرارداد JSON با شرط‌های مجاز؛ کد اجرا نمی‌شود')

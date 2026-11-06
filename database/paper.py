@@ -126,6 +126,8 @@ class PaperRepository:
             key, created = protocol['id'], protocol['created_at']
             positions, passive, opening_ideas = {}, [], []
             for row in rows:
+                if row['quantity'] == 0 and 'bonus_share' in row:
+                    continue  # A bonus-only row remains in the audited source, outside the copied inventory.
                 symbol = normalize_symbol(row['symbol_fa'])
                 quantity = integer(row['quantity'])
                 finite_number(row['value_rial'], positive=False)

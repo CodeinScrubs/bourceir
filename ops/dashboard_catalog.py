@@ -14,6 +14,8 @@ PREVIEW_BYTES = 256 * 1024
 REPORT_EXTENSIONS = frozenset({'.html', '.htm', '.json', '.md', '.txt', '.csv', '.pdf', '.xlsx', '.zip', '.png', '.jpg', '.jpeg'})
 COLLECTION_LABELS = {
     'market-reviews': 'گزارش جلسات بازار', 'market-queries': 'پرسش‌های بازار و ارزش شرکت',
+    'minute-candles': 'کندل‌های یک‌دقیقه‌ای تطبیق‌شده',
+    'farabi-industry-candles': 'صنایع فارابی و کندل‌های یک‌دقیقه‌ای',
     'stock-studies': 'مطالعه رشد نمادها', 'opportunity-radar': 'رادار فرصت‌ها و دفتر مشاهده',
     'farabi': 'گزارش‌های حساب فارابی', 'farabi-board': 'پایش صف و حجم فارابی',
     'farabi-timing': 'ثبت مشاهده و زمان‌بندی فارابی', 'daily-publications': 'رسید انتشار قیمت و حقیقی حقوقی',
@@ -63,7 +65,8 @@ COMMAND_PAGES = {
     'trader-readiness': 'health', 'research-recheck': 'health', 'recover-prices': 'health',
     'research-probability': 'probability', 'research-uncertainty': 'probability', 'research-review': 'research',
     'intraday-audit': 'health', 'universe': 'home', 'stock-study': 'growth', 'rights-mark': 'tools',
-    'query': 'query', 'archive-site': 'tools', 'catalog-sources': 'tools', 'live': 'live',
+    'query': 'query', 'minute-candles': 'reports', 'farabi-industry-candles': 'reports',
+    'archive-site': 'tools', 'catalog-sources': 'tools', 'live': 'live',
     'backup': 'health', 'codal': 'codal', 'codal-document': 'codal', 'codal-tables': 'codal',
     'codal-financial-cells': 'codal', 'codal-normalize': 'codal', 'codal-operating': 'codal',
 }
@@ -88,6 +91,8 @@ TOOL_SEARCH_TERMS = (
     (('recovery', 'recover', 'recheck'), 'بازیابی بازبینی اصلاح داده'),
     (('source', 'health', 'doctor', 'readiness'), 'منبع سلامت آمادگی کیفیت داده'),
     (('trade_archive',), 'آرشیو ریز معاملات'),
+    (('minute-candles', 'minute_candles'), 'کندل یک دقیقه یک‌دقیقه ریزمعاملات OHLCV'),
+    (('farabi-industry-candles', 'farabi_industry_candles'), 'صنایع دسته نماد فعال اوراق صندوق فارابی کندل'),
 )
 
 
