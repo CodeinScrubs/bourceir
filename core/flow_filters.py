@@ -36,9 +36,22 @@ def _divide(a, b):
     return (a / b.where(b > 0)).replace([np.inf, -np.inf], np.nan)
 
 
-def _one_symbol(prices, clients):
-    p = prices.sort_values('date').reset_index(drop=True)
-    c = p[['date']].merge(clients, on='date', how='left', validate='one_to_one')
+def _shift(values, symbols, sessions):
+    return values.groupby(symbols, sort=False).shift(sessions)
+
+
+def _rolling(values, symbols, sessions, aggregate, *, lag=0):
+    """Keep each recorded-session window inside its symbol, including missing rows."""
+    if lag:
+        values = _shift(values, symbols, lag)
+    result = getattr(values.groupby(symbols, sort=False).rolling(sessions, min_periods=sessions), aggregate)()
+    return result.droplevel(0).reindex(values.index)
+
+
+def _aligned_metrics(prices, clients):
+    p = prices.sort_values(['symbol', 'date']).reset_index(drop=True)
+    c = p[['symbol', 'date']].merge(clients, on=['symbol', 'date'], how='left', validate='one_to_one')
+    symbols = p.symbol
     out = p[['symbol', 'date']].copy()
     volume, value = _number(p, 'volume'), _number(p, 'value')
     volume, value = volume.where(volume >= 0), value.where(value >= 0)
@@ -66,27 +79,27 @@ def _one_symbol(prices, clients):
     coherent = (total_buy - volume).abs() <= np.maximum(1.0, volume * 1e-6)
     out['legal_buy_fraction'] = _divide(legal, total_buy).where(coherent)
     for n in (3, 5):
-        out[f'per_capita_buy_mean_{n}d_rial'] = buy_cap.rolling(n, min_periods=n).mean()
+        out[f'per_capita_buy_mean_{n}d_rial'] = _rolling(buy_cap, symbols, n, 'mean')
         # This is a different statistic: counts are participant-days, not unique people.
         out[f'per_capita_buy_pooled_{n}d_rial'] = _divide(
-            buy_value.rolling(n, min_periods=n).sum(), buy_count.where(buy_value.notna()).rolling(n, min_periods=n).sum())
-    out['per_capita_buy_prior_20d_ratio'] = _divide(buy_cap, buy_cap.shift(1).rolling(20, min_periods=20).mean())
+            _rolling(buy_value, symbols, n, 'sum'), _rolling(buy_count.where(buy_value.notna()), symbols, n, 'sum'))
+    out['per_capita_buy_prior_20d_ratio'] = _divide(buy_cap, _rolling(buy_cap, symbols, 20, 'mean', lag=1))
     for n in (20, 30):
-        prior = volume.shift(1).rolling(n, min_periods=n).mean()
+        prior = _rolling(volume, symbols, n, 'mean', lag=1)
         comparable = volume_comparability(p, n)
         out[f'volume_prior_{n}d_mean'] = prior
         out[f'volume_comparable_{n}d'] = comparable
         # شکاف مرجع نوع اقدام شرکتی را ثابت نمی‌کند؛ تعداد سهم را از آن حدس نمی‌زنیم.
         out[f'volume_ratio_{n}d'] = _divide(volume, prior).where(comparable)
-    out['value_prior_20d_mean_rial'] = value.shift(1).rolling(20, min_periods=20).mean()
+    out['value_prior_20d_mean_rial'] = _rolling(value, symbols, 20, 'mean', lag=1)
     # Normalize each raw high/last to a causal return index. Never compare pre/post-action raw prices.
     ret = market_rules.pit_daily_returns(p)
-    index = (1 + ret.fillna(0)).cumprod()
-    previous = index.shift(1).fillna(1.0)
+    index = (1 + ret.fillna(0)).groupby(symbols, sort=False).cumprod()
+    previous = index.groupby(symbols, sort=False).shift(1).fillna(1.0)
     high_index = (_divide(high, ref) * previous).where(range_known & ret.notna())
     last_index = (_divide(last, ref) * previous).where(range_known & ret.notna())
-    ceiling = high_index.shift(1).rolling(60, min_periods=60).max()
-    path_known = ret.rolling(61, min_periods=61).count() == 61
+    ceiling = _rolling(high_index, symbols, 60, 'max', lag=1)
+    path_known = _rolling(ret, symbols, 61, 'count') == 61
     out['breakout_60d'] = (last_index > ceiling).astype('boolean').where(path_known & ceiling.notna() & last_index.notna())
     return out
 
@@ -103,10 +116,7 @@ def flow_metrics(prices: pd.DataFrame, clients: pd.DataFrame) -> pd.DataFrame:
             raise ValueError('ورودی فیلتر به نماد/تاریخ یکتا نیاز دارد')
     if prices.empty:
         return pd.DataFrame(columns=keys)
-    groups = {symbol: group.drop(columns='symbol') for symbol, group in clients.groupby('symbol', sort=False)}
-    rows = [_one_symbol(group, groups.get(symbol, pd.DataFrame(columns=['date'])))
-            for symbol, group in prices.groupby('symbol', sort=True)]
-    return pd.concat(rows, ignore_index=True)
+    return _aligned_metrics(prices, clients)
 
 
 def filter_conditions(metrics: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -207,41 +217,41 @@ def flow_metrics_v4(prices, clients, *, calendar=None):
     out['cross_section_observed_rows'] = n
     out['cross_section_unknown_prior_value'] = missing
     out['last_to_official'] = _divide(_number(out, 'close_raw'), _number(out, 'close_final_raw'))
-    rows = []
-    for _, group in out.groupby('symbol', sort=False):
-        group = group.copy()
-        ret = market_rules.pit_daily_returns(group)
-        locks = market_rules.lock_flags(group)
-        # نبود مرجع/بازه معتبر را «قفل نیست» معرفی نمی‌کنیم.
-        valid = market_rules.lock_inputs_known(group)
-        valid &= _number(group, 'close_raw').between(_number(group, 'low_raw'), _number(group, 'high_raw'))
-        group['not_locked_up'] = (~locks.locked_up).astype('boolean').where(valid)
-        surge = ((group.volume_ratio_30d >= 2.5) & (group.buyer_power_value >= 1.8)
-                 & (ret > 0)).astype('boolean')
-        surge = surge.where(group.volume_ratio_30d.notna() & group.buyer_power_value.notna() & ret.notna())
-        variants = []
-        positions = group.date.map(session_position)
-        for length in (2, 3, 4):
-            contiguous = (positions - positions.shift(length + 1)).eq(length + 1)
-            # ردیف غایب، تعطیلی یا نبود حرکت را اثبات نمی‌کند؛ پس از شکاف، الگو معلوم نیست.
-            continuity = pd.Series(True, index=group.index, dtype='boolean').where(contiguous)
-            conditions = [surge.shift(length + 1), continuity]
-            for lag in range(1, length + 1):
-                negative = (ret.shift(lag) < 0).astype('boolean').where(ret.shift(lag).notna())
-                below = (group.volume.shift(lag) < group.volume_prior_20d_mean.shift(lag)).astype('boolean')
-                below = below.where(group.volume.shift(lag).notna() & group.volume_prior_20d_mean.shift(lag).notna()
-                                    & group.volume_comparable_20d.shift(lag).eq(True))
-                # هر روز اصلاح نسبت به روز قبلی حجم کمتری دارد، شامل روز جهش.
-                declining = (group.volume.shift(lag) < group.volume.shift(lag + 1)).astype('boolean')
-                declining = declining.where(group.volume.shift(lag).notna() & group.volume.shift(lag + 1).notna())
-                conditions.extend((negative, below, declining))
-            combined = pd.Series(True, index=group.index, dtype='boolean')
-            for condition in conditions:
-                combined &= condition.astype('boolean')
-            variants.append(combined)
-        group['prior_surge_pullback'] = variants[0] | variants[1] | variants[2]
-        rows.append(group)
-    out = pd.concat(rows, ignore_index=True)
+    symbols = out.symbol
+    ret = market_rules.pit_daily_returns(out)
+    locks = market_rules.lock_flags(out)
+    # نبود مرجع/بازه معتبر را «قفل نیست» معرفی نمی‌کنیم.
+    valid = market_rules.lock_inputs_known(out)
+    valid &= _number(out, 'close_raw').between(_number(out, 'low_raw'), _number(out, 'high_raw'))
+    out['not_locked_up'] = (~locks.locked_up).astype('boolean').where(valid)
+    surge = ((out.volume_ratio_30d >= 2.5) & (out.buyer_power_value >= 1.8)
+             & (ret > 0)).astype('boolean')
+    surge = surge.where(out.volume_ratio_30d.notna() & out.buyer_power_value.notna() & ret.notna())
+    variants = []
+    positions = out.date.map(session_position)
+    for length in (2, 3, 4):
+        contiguous = (positions - _shift(positions, symbols, length + 1)).eq(length + 1)
+        # ردیف غایب، تعطیلی یا نبود حرکت را اثبات نمی‌کند؛ پس از شکاف، الگو معلوم نیست.
+        continuity = pd.Series(True, index=out.index, dtype='boolean').where(contiguous)
+        conditions = [_shift(surge, symbols, length + 1), continuity]
+        for lag in range(1, length + 1):
+            previous_return = _shift(ret, symbols, lag)
+            volume = _shift(out.volume, symbols, lag)
+            prior_mean = _shift(out.volume_prior_20d_mean, symbols, lag)
+            previous_volume = _shift(out.volume, symbols, lag + 1)
+            comparable = _shift(out.volume_comparable_20d, symbols, lag)
+            negative = (previous_return < 0).astype('boolean').where(previous_return.notna())
+            below = (volume < prior_mean).astype('boolean')
+            below = below.where(volume.notna() & prior_mean.notna() & comparable.eq(True))
+            # هر روز اصلاح نسبت به روز قبلی حجم کمتری دارد، شامل روز جهش.
+            declining = (volume < previous_volume).astype('boolean')
+            declining = declining.where(volume.notna() & previous_volume.notna())
+            conditions.extend((negative, below, declining))
+        combined = pd.Series(True, index=out.index, dtype='boolean')
+        for condition in conditions:
+            combined &= condition.astype('boolean')
+        variants.append(combined)
+    out['prior_surge_pullback'] = variants[0] | variants[1] | variants[2]
     # پایگاه روزانه فعلی این ستون را ندارد؛ هیچ پیوندی به symbols.base_volume امروز انجام نمی‌دهیم.
     historical = raw[['symbol', 'date']].copy()
     historical['historical_base_volume'] = (_number(raw, 'base_volume')
