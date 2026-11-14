@@ -44,6 +44,11 @@ jobs:
     - name: Lint (ruff)
       run: ruff check .
 
+    - name: Install locked optional CPU ML and RL profile
+      run: |
+        pip install --require-hashes -r requirements-training.lock.txt -c requirements.lock.txt
+        pip check
+
     - name: Check displayed and package versions agree
       run: python -c "import tomllib; from pathlib import Path; from config import settings; assert settings.VERSION == tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version']"
 
@@ -54,6 +59,24 @@ jobs:
 
     - name: Check read-only capture validation
       run: node --test tests/farabi_capture.test.mjs tests/board_alerts.test.mjs tests/board_pressure_alerts.test.mjs tests/board_inbrowser_loader.test.mjs tests/farabi_timing.test.mjs tests/farabi_timing_probe.test.mjs tests/farabi_timing_collector.test.mjs tests/farabi_preflight_audit.test.mjs tests/clock_compare_cua.test.mjs tests/clock_display_probe.test.mjs
+
+    - name: Verify Windows timing guards without desktop input
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $checks = @(
+          'manual_timing_clock.tests.ps1', 'manual_timing_launcher.tests.ps1',
+          'run_manual_timing_faults.ps1', 'run_manual_timing_deadlines.ps1',
+          'run_manual_timing_refinements.ps1', 'run_manual_timing_reviews.ps1',
+          'run_manual_timing_rereviews.ps1', 'run_manual_timing_rereview_hardening.ps1',
+          'run_manual_timing_third_review.ps1', 'run_manual_timing_fourth_review.ps1',
+          'run_manual_timing_boundary_checks.ps1', 'run_manual_timing_build_tests.ps1',
+          'run_manual_timing_paths.ps1'
+        )
+        foreach ($check in $checks) {
+          & powershell.exe -NoProfile -File (Join-Path 'tests' $check)
+          if ($LASTEXITCODE -ne 0) { throw "Timing guard failed: $check" }
+        }
 
     - name: Run Pytest test suite (offline)
       run: python -m pytest tests/ -m "not network" -v

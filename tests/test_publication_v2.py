@@ -5,6 +5,7 @@ import json
 import shutil
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,9 +21,12 @@ from data_collector.publication_compat import (
     POST_BOOK_V2_CODE,
     PRE_0750_COMPAT_FIX_V2_CODE,
     PRE_0750_V2_CODE,
+    PRE_0752_V2_CODE,
     PRE_BOOK_V2_CODE,
     PRE_DATE_CIRCUIT_V2_CODE,
+    PRE_HISTORY_PROTECTION_V2_CODE,
     PRE_HISTORY_QUALITY_V2_CODE,
+    PRE_LATEST_SESSION_V2_CODE,
     archive_contract,
 )
 from tests.test_daily_publications import DAY, NOW, Provider, observation, task
@@ -124,6 +128,39 @@ def test_exact_release_producers_replay_but_unknown_versions_and_code_fail_close
             archive_contract(daily.VERSION, modified)
     with pytest.raises(ValueError, match='incompatible'):
         archive_contract('unknown', recorded)
+
+
+@pytest.mark.parametrize('producer', [PRE_LATEST_SESSION_V2_CODE, PRE_HISTORY_PROTECTION_V2_CODE, PRE_0752_V2_CODE])
+def test_exact_pre_latest_session_identity_is_supported_but_other_producers_are_rejected(producer):
+    recorded = dict(producer)
+    assert set(archive_contract(daily.VERSION, recorded)) == set(recorded)
+    for key in ('data_collector/scheduler.py', 'data_collector/tsetmc.py', 'database/db.py'):
+        with pytest.raises(ValueError, match='Unknown or incompatible'):
+            archive_contract(daily.VERSION, recorded | {key: '0' * 64})
+
+
+def test_pre_0752_byte_archive_replays_after_release_without_retagging(tmp_path, monkeypatch):
+    previous_root = tmp_path/'previous-runtime'
+    overrides = {'data_collector/publication_compat.py': 'publication_compat.py.txt',
+                 'config/default.yaml': 'default.yaml.txt'}
+    fixture = Path(__file__).parent/'fixtures/native-pre0752'
+    for name in daily.CODE_FILES:
+        target = previous_root/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        origin = fixture/overrides[name] if name in overrides else settings.BASE_DIR/name
+        body = origin.read_bytes().replace(b'\r\n', b'\n')
+        assert hashlib.sha256(body).hexdigest() == PRE_0752_V2_CODE[name]
+        target.write_bytes(body)
+    with monkeypatch.context() as earlier:
+        earlier.setattr(settings, 'BASE_DIR', previous_root)
+        archive = daily.DailyPublicationArchive(tmp_path/'archives', [task()])
+        archive.capture(Provider())
+        folder = Path(archive.finish(dict(database_writes=False)))
+    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.iterdir() if p.is_file()}
+    review = daily.review_archive(folder)
+    assert review['byte_replay_verified']
+    assert before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.iterdir() if p.is_file()}
+    assert PRE_0752_V2_CODE != daily._code()
 
 
 @pytest.mark.parametrize('recorded', [PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE])

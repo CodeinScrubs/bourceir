@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from config import settings
-from core.capital_actions import primary_capital_registration
+from core.capital_actions import LEGACY_VERSION, primary_capital_registration
 from core.text import to_fa_digits
 from ops.capital_actions import create_capital_study, review_capital_study
 from ops.codal_documents import capture_codal_document
@@ -52,6 +52,12 @@ def notice(**changes):
 
 def facts(text=TEXT, metadata=None):
     return primary_capital_registration(text, notice() if metadata is None else metadata, end_exclusive=CUTOFF)
+
+
+def test_registration_uses_primary_symbol_before_display_label():
+    body = TEXT.replace('نماد: آزمون', 'نماد: آزمون(نام نمایشی)')
+    assert facts(body)['status'] == 'supported_primary_fact'
+    assert facts(body.replace('نماد: آزمون(', 'نماد: دیگر('))['status'] == 'unsupported_primary_text'
 
 
 def test_declared_million_rial_is_exact_but_capital_ratio_does_not_prove_share_credit_or_cash_zero():
@@ -190,6 +196,19 @@ def rehash(folder, name):
     data = json.loads((folder/'manifest.json').read_bytes())
     data[name+'_sha256'] = hashlib.sha256((folder/(name+'.json')).read_bytes()).hexdigest()
     (folder/'manifest.json').write_text(json.dumps(data), encoding='utf-8')
+
+
+def test_original_study_replays_with_original_parser_version(source):
+    folder = Path(create_capital_study(**source)['folder'])
+    plan = json.loads((folder/'plan.json').read_bytes())
+    result = json.loads((folder/'result.json').read_bytes())
+    del plan['facts_version']
+    legacy = primary_capital_registration(TEXT, notice(), end_exclusive=plan['cutoff'], version=LEGACY_VERSION)
+    result['facts'] = legacy
+    for name, payload in (('plan', plan), ('result', result)):
+        (folder/f'{name}.json').write_text(json.dumps(payload), encoding='utf-8')
+        rehash(folder, name)
+    assert review_capital_study(folder)['facts'] == legacy
 
 
 @pytest.mark.parametrize('kind', ['amount', 'entitlement', 'time', 'code', 'missing_input', 'path', 'cutoff'])

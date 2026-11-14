@@ -19,6 +19,14 @@ def command_center_panel():
         st.warning('وضعیت پایش محلی قابل بررسی نیست: '+str(error))
         return
     st.subheader('وضعیت پایش')
+    readiness = report['research_readiness']
+    gate_labels = {'absent': 'گزارش آمادگی ثبت نشده', 'invalid': 'گزارش آمادگی قابل اعتبارسنجی نیست',
+                   'stale': 'گزارش آمادگی به بررسی تازه نیاز دارد', 'blocked': 'پیش‌نیازهای پژوهش هنوز کامل نیست',
+                   'research_only': 'قرارداد مهندسی پژوهش بررسی شده است'}
+    st.warning(gate_labels[readiness['state']] + '؛ استفادهٔ معاملاتی و سودآوری تأیید نشده است.')
+    if readiness['generated_at']:
+        st.caption('زمان گزارش آمادگی: ' + to_jalali(readiness['generated_at'], with_time=True) +
+                   '؛ وضعیت فعلی دیتابیس در این نشانگر دوباره محاسبه نشده است. جزئیات در «سلامت سامانه».')
     st.caption('وضعیت فرایندهای ثبت‌شده در داشبورد است؛ اجراهای دستی مستقل ممکن است در این بخش دیده نشوند.')
     radar = report['radar']
     columns = st.columns(3)

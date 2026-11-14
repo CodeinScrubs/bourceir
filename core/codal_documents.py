@@ -9,6 +9,8 @@ CODAL_BASE = 'https://codal.ir/'
 PUBLIC_HOSTS = frozenset({'codal.ir', 'www.codal.ir'})
 REPORT_ONLY_PATHS = frozenset({'interimstatement.aspx', 'monthlyactivity.aspx', 'extraassembly.aspx', 'assembly.aspx'})
 PUBLIC_PATHS = frozenset({'decision.aspx', 'attachment.aspx', 'downloadfile.aspx', *REPORT_ONLY_PATHS})
+# The parentheses are a display label. The issuer and primary symbol precede it.
+ISSUER_PATTERN = r'شرکت (.+?) - نماد:\s*([^()]+?)(?:\s*\([^()]+\))?\s*'
 
 
 def public_document_url(value, *, base=CODAL_BASE):

@@ -212,6 +212,58 @@ def test_symbol_chart_modes_and_evidence_panel_do_not_infer_economic_events(dash
     assert next(r for r in at.radio if r.label == 'نوع قیمت نمودار').value == 'قیمت خام روز'
 
 
+def test_symbol_levels_show_raw_rial_ranges_and_refresh_when_symbol_changes(dashboard_db):
+    from tests.test_price_levels import cyclical_prices
+
+    prices = cyclical_prices()
+    with DatabaseManager(db_path=dashboard_db) as db:
+        first = db.upsert_symbol(dict(symbol_fa='فولاد', ins_code='11', instrument_type_code=300))
+        second = db.upsert_symbol(dict(symbol_fa='فزر', ins_code='12', instrument_type_code=303))
+        db.upsert_daily_prices_df(first, prices)
+        db.upsert_daily_prices_df(second, prices.tail(15))
+    app = AppTest.from_file(DASHBOARD, default_timeout=60)
+    app.query_params['page'] = 'symbol'
+    app.run()
+    assert not app.exception
+    assert any('سطوح بعدی حمایت و مقاومت' in h.value for h in app.subheader)
+    assert any('سطح‌ها به تاریخ آخرین داده مربوط‌اند' in w.value for w in app.warning)
+    table = next(item.value for item in app.dataframe if 'نوع ناحیه' in item.value)
+    assert list(table['نوع ناحیه']) == ['حمایت', 'مقاومت']
+    assert all(table['از (ریال)'].le(table['تا (ریال)']))
+    next(r for r in app.radio if r.label == 'بازه نمودار').set_value('۳ سال').run()
+    assert not app.exception
+    assert next(item.value for item in app.dataframe if 'نوع ناحیه' in item.value).equals(table)
+    app.selectbox[0].set_value('فزر').run()
+    assert not app.exception
+    assert any('کندل هم‌مبنا' in item.value for item in app.info)
+    assert not any('نوع ناحیه' in item.value for item in app.dataframe)
+
+
+def test_symbol_levels_use_only_completed_session_by_tehran_clock(dashboard_db):
+    from datetime import datetime
+
+    from core.timeutils import TEHRAN_TZ
+    from dashboard.price_levels import load_price_map
+    from tests.test_price_levels import cyclical_prices
+
+    prices = cyclical_prices()
+    with DatabaseManager(db_path=dashboard_db) as db:
+        sid = db.upsert_symbol(dict(symbol_fa='فزر', ins_code='12', instrument_type_code=303))
+        db.upsert_daily_prices_df(sid, prices)
+    before = datetime(2024, 2, 24, 13, 59, tzinfo=TEHRAN_TZ)
+    after = before.replace(hour=14, minute=0)
+    prior, expected_prior = load_price_map(str(dashboard_db), 'فزر', before)
+    current, expected_current = load_price_map(str(dashboard_db), 'فزر', after)
+    assert prior.date == expected_prior == '2024-02-21'
+    assert current.date == expected_current == '2024-02-24'
+    with DatabaseManager(db_path=dashboard_db) as db, db.conn:
+        db.conn.execute("UPDATE daily_prices SET price_unit='Toman' WHERE symbol_id=? AND date=?",
+                        (sid, expected_current))
+    load_price_map.clear()
+    inconsistent, _ = load_price_map(str(dashboard_db), 'فزر', after)
+    assert inconsistent.state == 'invalid_latest'
+
+
 def test_flow_lab_explains_incomplete_original_filter(dashboard_db, closing_price_daily):
     db = DatabaseManager(db_path=dashboard_db)
     provider = TsetmcProvider(session=FakeSession({'GetClosingPriceDailyList': {'closingPriceDaily': closing_price_daily}}))

@@ -10,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 from config import settings
-from core.capital_actions import MAX_TEXT_CHARS, primary_capital_registration
+from core.capital_actions import LEGACY_VERSION, MAX_TEXT_CHARS, primary_capital_registration
+from core.capital_actions import VERSION as FACTS_VERSION
 from core.codal_documents import public_document_url
 from core.timeutils import TEHRAN_TZ, is_canonical_iso_date, now_tehran_iso
 from ops.codal_documents import load_codal_document, read_codal_document_file, read_codal_document_files
@@ -77,7 +78,8 @@ def create_capital_study(*, notice_path, document, root=None, end_exclusive=None
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((settings.BASE_DIR / name).read_bytes().replace(b'\r\n', b'\n'))
         code[name] = _sha(target)
-    plan = dict(version=VERSION, study_id=folder.name, registered_at=now_tehran_iso(), cutoff=cutoff,
+    plan = dict(version=VERSION, facts_version=FACTS_VERSION, study_id=folder.name,
+                registered_at=now_tehran_iso(), cutoff=cutoff,
                 inputs=inputs, code=code, source_document_snapshot=manifest['snapshot_id'],
                 database_read=False, network_requested=False, feature_eligible=False, accepted_for_signals=False)
     plan_hash = _sha(write_private_report(folder / 'plan.json', plan))
@@ -124,8 +126,10 @@ def review_capital_study(folder):
                        *(prefix + name for name in source['source_files_sha256'])}
     if set(plan['inputs']) != expected_inputs or plan['source_document_snapshot'] != source['snapshot_id']:
         raise ValueError('فهرست ورودی‌ها یا پیوند سند کامل نیست')
+    facts_version = plan.get('facts_version', LEGACY_VERSION)
     if (set(result) != {'version', 'created_at', 'available_at', 'facts'} or result['version'] != VERSION
-            or result['facts'] != primary_capital_registration(text, notice, end_exclusive=plan['cutoff'])
+            or result['facts'] != primary_capital_registration(
+                text, notice, end_exclusive=plan['cutoff'], version=facts_version)
             or _clock(result['created_at']) < _clock(plan['registered_at'])
             or _clock(result['available_at']) < max(_clock(result['created_at']), _clock(source['available_at']))):
         raise ValueError('بازحساب نتیجه یا زمان دسترسی مطالعه برابر نیست')

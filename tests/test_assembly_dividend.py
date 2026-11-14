@@ -53,6 +53,13 @@ def test_visible_browser_table_without_english_ids_preserves_the_explicit_unit()
     assert fact(body)['dps_rial'] == '120'
 
 
+@pytest.mark.parametrize('declared_symbol,expected', [('آزمون دیگر', None), ('آزمون', '120')])
+def test_parenthetical_symbol_label_does_not_replace_primary_identity(declared_symbol, expected):
+    meta = notice() | {'company_name': 'نمونه آزمایشی'}
+    body = text().replace('شرکت نمونه - نماد: آزمون', f'شرکت نمونه آزمایشی - نماد: {declared_symbol}(نام نمایشی)')
+    assert fact(body, meta)['dps_rial'] == expected
+
+
 @pytest.mark.parametrize('amount,expected', [('۰', '0'), ('۰٫۰۰', '0.00'), ('۱,۲۳۴٫۵۰', '1234.50')])
 def test_explicit_zero_and_decimal_are_known_but_blank_is_not(amount, expected):
     assert fact(text(amount=amount))['dps_rial'] == expected

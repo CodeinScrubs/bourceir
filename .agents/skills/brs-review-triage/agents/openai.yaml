@@ -1,0 +1,4 @@
+interface:
+  display_name: "BRS Review Triage"
+  short_description: "Turn external reviews into bounded, useful fixes"
+  default_prompt: "Use $brs-review-triage to check this review against BRS evidence and prioritize the next useful action."

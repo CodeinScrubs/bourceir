@@ -407,12 +407,94 @@ def test_selected_symbol_update_refreshes_its_session_without_touching_other_sym
     assert db.get_daily_prices_df('نمونه').empty
 
 
-def test_native_failure_blocks_automatic_feature_publication(monkeypatch):
+@pytest.mark.parametrize('timestamp,holiday,expected', [
+    ('2024-01-06T09:00:00+03:30', None, '2024-01-03'),
+    ('2024-01-03T10:00:00+03:30', None, '2024-01-02'),
+    ('2024-01-03T14:00:00+03:30', None, '2024-01-03'),
+    ('2024-01-03T14:00:00+03:30', '2024-01-03', '2024-01-02'),
+])
+def test_latest_closed_native_session_precedes_history_and_respects_calendar(db, monkeypatch, timestamp, holiday, expected):
+    register(db)
+    register(db, code='2', symbol='نمونه')
+    at = datetime.fromisoformat(timestamp)
+    monkeypatch.setattr('data_collector.scheduler.now_tehran', lambda: at)
+    monkeypatch.setattr('data_collector.scheduler.now_tehran_iso', lambda: timestamp)
+    monkeypatch.setattr('data_collector.daily_publications.now_tehran_iso', lambda: timestamp)
+    if holiday:
+        db.insert_market_calendar(holiday, False, 'test closure')
+    provider = Provider(lambda source: dict(source, requested_at=timestamp, received_at=timestamp))
+    collector = DataCollector(db=db, provider=provider, codal=SimpleNamespace(get_latest=lambda **_: []))
+    def history(*args, **kwargs):
+        assert provider.calls == [(FOOLAD_INS, expected, 'price')]
+        return dict(status='success')
+    collector.collect_history = history
+    collector.collect_client_types = lambda *a, **k: dict(status='success')
+    reports = collector.update_all(symbols=['آزمون'])
+    key = 'session_candles' if expected == at.date().isoformat() else 'completed_session_candles'
+    assert reports[key]['status'] == 'success' and reports[key]['market_date'] == expected
+    assert provider.calls == [(FOOLAD_INS, expected, 'price')]
+    assert db.get_last_daily_date(db.get_symbol_id('آزمون')) == expected
+    assert db.get_daily_prices_df('نمونه').empty
+
+
+def test_latest_closed_session_failure_remains_unknown_instead_of_requesting_an_undated_watch(db):
+    register(db)
+    provider = Provider(lambda source: dict(source, content=b'{}', response_bytes=2,
+                                           body_sha256=hashlib.sha256(b'{}').hexdigest()))
+    report = DataCollector(db=db, provider=provider).collect_completed_session_candles(['آزمون'])
+    assert report['status'] == 'failed' and report['rows_inserted'] == 0
+    assert provider.calls == [(FOOLAD_INS, DAY, 'price')]
+    assert db.get_daily_prices_df('آزمون').empty
+
+
+def test_bulk_history_cannot_overwrite_the_native_session_just_received(db):
+    register(db)
+    provider = Provider()
+    stale = dict(parse_publication(observation(native=price()), FOOLAD_INS, DAY, 'price')['row'])
+    for field in ('open_raw', 'high_raw', 'low_raw', 'close_raw', 'close_final_raw', 'ref_price_raw'):
+        stale[field] *= 2
+    stale['value'] *= 2
+    provider.get_symbol_history = lambda *a, **k: pd.DataFrame([dict(stale, date='2024-01-02'), stale])
+    collector = DataCollector(db=db, provider=provider, codal=SimpleNamespace(get_latest=lambda **_: []))
+    collector.collect_client_types = lambda *a, **k: dict(status='success')
+    reports = collector.update_all(symbols=['آزمون'])
+    rows = db.get_daily_prices_df('آزمون').set_index('date')
+    assert rows.loc[DAY, 'close_raw'] == 100
+    assert rows.loc['2024-01-02', 'close_raw'] == 200
+    assert reports['history']['native_protected_from'] == DAY
+    assert reports['history']['rows_deferred_to_native'] == 1
+
+
+def test_history_with_only_native_stage_dates_is_deferred_without_inventing_an_old_row(db):
+    register(db)
+    provider = Provider()
+    row = parse_publication(observation(), FOOLAD_INS, DAY, 'price')['row']
+    provider.get_symbol_history = lambda *a, **k: pd.DataFrame([row])
+    collector = DataCollector(db=db, provider=provider)
+    report = collector.collect_history(['آزمون'], end_exclusive=DAY)
+    assert report['status'] == 'success' and report['rows_inserted'] == 0
+    assert report['rows_deferred_to_native'] == 1 and db.get_daily_prices_df('آزمون').empty
+
+
+def test_native_history_cutoff_does_not_hide_a_malformed_source_date(db):
+    register(db)
+    provider = Provider()
+    row = parse_publication(observation(), FOOLAD_INS, DAY, 'price')['row']
+    provider.get_symbol_history = lambda *a, **k: pd.DataFrame([dict(row, date='not-a-date')])
+    collector = DataCollector(db=db, provider=provider)
+    report = collector.collect_history(['آزمون'], end_exclusive=DAY)
+    assert report['status'] == 'failed' and db.get_daily_prices_df('آزمون').empty
+    with pytest.raises(ValueError):
+        collector.collect_history(['آزمون'], end_exclusive='not-a-date')
+
+
+@pytest.mark.parametrize('stage', ['session_candles', 'completed_session_candles'])
+def test_native_failure_blocks_automatic_feature_publication(monkeypatch, stage):
     import brs
     from data_collector import scheduler
     calls = []
     reports = {key: dict(status='success') for key in ('universe', 'history', 'client_types', 'codal')}
-    reports['session_candles'] = dict(status='partial', native_date_and_identity_required=True)
+    reports[stage] = dict(status='partial', native_date_and_identity_required=True)
     collector = SimpleNamespace(db=SimpleNamespace(close=lambda: calls.append('close')), update_all=lambda **_: reports)
     monkeypatch.setattr(scheduler, 'DataCollector', lambda **_: collector)
     monkeypatch.setattr(brs, '_build_features', lambda _: calls.append('features'))

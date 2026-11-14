@@ -18,6 +18,17 @@ const raw=()=>({url:'https://farabixo.irfarabi.com/?isin=TEST00000001',title:'آ
   identity:'آزمون - شرکت آزمون - فرابورس',volume:'حجم معاملات\n1,000,000',last_trade:'زمان آخرین معامله\n1405/7/28 09:59:59',
   limits:'100\nبازه مجاز روزانه\n110',depth:Array.from({length:5},(_,i)=>['1',`${99-i}\n10`,`${100+i}\n${1000+i}`,'1'])});
 
+test('قالب خنثیِ مشاهده‌شدهٔ عنوان فارابی با علامت لوزی خوانده می‌شود',()=>{
+  for(const title of ['آزمون 100 ◆ 0%','آزمون ۱۰۰ ◆ ۰%'])
+    assert.equal(parseBoard({...raw(),title},at).last_price,100);
+});
+
+test('پذیرش علامت لوزی، هویت و تاریخ و قالب کامل عنوان را دور نمی‌زند',()=>{
+  for(const title of ['دیگر 100 ◆ 0%','آزمون 100 ♦ 0%','آزمون 100 ◆ 0%%','آزمون 100 ◆ 0% اضافی'])
+    assert.throws(()=>parseBoard({...raw(),title},at));
+  assert.throws(()=>parseBoard({...raw(),title:'آزمون 100 ◆ 0%',last_trade:'زمان آخرین معامله 1405/7/27 09:59:59'},at),/امروز/);
+});
+
 test('تابلوی باز با تاریخ نامعلوم، انتظار ورود یا دریافت معتبر معرفی نمی‌شود',()=>{
   assert.equal(boardFeedState(0,[]).feed_state,'awaiting_board');
   const invalid=boardFeedState(1,[{ok:false,error:'تاریخ جلسه در تابلو معلوم نیست'}]);
@@ -213,12 +224,13 @@ test('حجم خلاصه‌شده دقیق فرض نمی‌شود؛ حجم روز
   assert.equal(q.volume,1000000);assert.equal(q.last_price,100);
 });
 
-async function archiveFixture({badResult=false,legacy=false,previous=false}={}) {
+async function archiveFixture({badResult=false,legacy=false,previous=false,preDiamond=false,diamond=false}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'brs-board-test-'));
   const code={};const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
   const engineFile=legacy?'core/board_alerts.mjs':previous?'core/board_alerts_v2.mjs':'core/board_alerts_v3.mjs';
   for(const name of [engineFile,'data_collector/farabi_board.mjs','scripts/farabi_watch.mjs','dashboard/board_watch.html']){
-    const source=name==='scripts/farabi_watch.mjs'&&legacy?'tests/fixtures/board-archives/farabi_watch_v1.txt':
+    const source=name==='data_collector/farabi_board.mjs'&&(legacy||previous||preDiamond)?'data_collector/farabi_board_v1.mjs':
+      name==='scripts/farabi_watch.mjs'&&legacy?'tests/fixtures/board-archives/farabi_watch_v1.txt':
       name==='scripts/farabi_watch.mjs'&&previous?'tests/fixtures/board-archives/farabi_watch_v2.txt':name;
     const bytes=await fs.readFile(new URL('../'+source,import.meta.url));code[name]=hash(bytes);
     await fs.mkdir(path.dirname(path.join(dir,'code',name)),{recursive:true});await fs.writeFile(path.join(dir,'code',name),bytes);
@@ -232,6 +244,7 @@ async function archiveFixture({badResult=false,legacy=false,previous=false}={}) 
   const engine=new Engine();
   for(let i=0;i<2;i++){
     const input=raw();input.depth[0][2]=`100\n${i?1000000:59000000}`;input.volume='حجم معاملات\n'+(i?'4,000,000':'1,000,000');
+    if(diamond)input.title='آزمون 100 ◆ 0%';
     const received=tehranNow(new Date(new Date(at).getTime()+i*500));
     const observation=add('dom_observation',{raw:input,received_at:received,monotonic_ms:i*500});
     const q=parseBoard(input,received),result=engine.observe(q,i*500),stored=structuredClone(result);
@@ -259,6 +272,16 @@ test('قفل گذرای ویندوز نوشتن اتمی را به فایل نا
 test('دفتر آفلاین با بایت/کد محفوظ و بازاجرای هشدار بررسی می‌شود',async()=>{
   const dir=await archiveFixture();try{const r=await reviewArchive(dir);assert.equal(r.alerts,3);assert.equal(r.complete,true);assert.equal(r.accepted_for_signals,false);}
   finally{await removeFixture(dir);}
+});
+
+test('نسخهٔ دقیق پیش از تغییر عنوان با مفسر محفوظ دوباره خوانده می‌شود',async()=>{
+  const dir=await archiveFixture({preDiamond:true});
+  try{assert.equal((await reviewArchive(dir)).alerts,3);}finally{await removeFixture(dir);}
+});
+
+test('قالب جدید به آرشیو با مفسر قدیمی و زنجیرهٔ بازهش‌شده تحمیل نمی‌شود',async()=>{
+  const dir=await archiveFixture({preDiamond:true,diamond:true});
+  try{await assert.rejects(reviewArchive(dir),/قیمت عنوان/);}finally{await removeFixture(dir);}
 });
 test('دفتر نسخه قبل با موتور قدیمی و کد دقیق شناخته‌شده بازخوانی می‌شود',async()=>{
   const dir=await archiveFixture({legacy:true});try{

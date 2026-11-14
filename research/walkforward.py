@@ -16,6 +16,13 @@ class TimeFold:
     test_end_exclusive: str
     embargo_sessions: int
 
+    def __post_init__(self):
+        dates = (self.train_start, self.train_end_exclusive, self.test_start, self.test_end_exclusive)
+        if (not all(is_canonical_iso_date(day) for day in dates)
+                or not self.train_start < self.train_end_exclusive <= self.test_start < self.test_end_exclusive
+                or type(self.embargo_sessions) is not int or self.embargo_sessions < 0):
+            raise ValueError('Canonical ordered temporal boundaries and a nonnegative session embargo are required')
+
 
 def preceding_price_observations(prices: pd.DataFrame, before: str) -> pd.DataFrame:
     """Return each symbol's latest actual prior bar, independently of source row order."""
@@ -31,8 +38,10 @@ def preceding_price_observations(prices: pd.DataFrame, before: str) -> pd.DataFr
 
 
 def time_folds(calendar, *, min_train_sessions=504, test_sessions=252, embargo_sessions=6, end_exclusive):
-    days = np.asarray(calendar).astype(str)
-    if not len(days) or list(days) != sorted(set(days)):
+    days = np.asarray(calendar)
+    if (days.ndim != 1 or not len(days) or not is_canonical_iso_date(end_exclusive)
+            or any(not is_canonical_iso_date(day) for day in days)
+            or list(days) != sorted(set(days))):
         raise ValueError("تقویم یکتا و مرتب لازم است")
     for value in (min_train_sessions, test_sessions, embargo_sessions):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -61,8 +70,20 @@ def purged_training(panel: pd.DataFrame, fold: TimeFold, horizon: int) -> pd.Dat
     A halted/locked position's actual exit may be months later than the nominal horizon, so purge
     uses actual exit dates. Entry-blocked labels are known idle cash if their entry date is known.
     """
+    if type(horizon) is not int or horizon < 1:
+        raise ValueError('A positive integer realized-label horizon is required')
     status, exit_date = f"label_status_{horizon}d", f"exit_date_{horizon}d"
+    if (not isinstance(panel, pd.DataFrame) or panel.columns.duplicated().any()
+            or not {'date', 'entry_date', status, exit_date} <= set(panel)
+            or not panel.date.map(is_canonical_iso_date).all()):
+        raise ValueError('Canonical decision dates and explicit realized-label columns are required')
+    # A nonempty malformed date (e.g. "0") sorts before a real ISO boundary.
+    # It is unknown evidence, never a mature label. Do not coerce it to a date.
+    entry = panel.entry_date.where(panel.entry_date.map(is_canonical_iso_date), '')
+    exit_at = panel[exit_date].where(panel[exit_date].map(is_canonical_iso_date), '')
     within = (panel["date"] >= fold.train_start) & (panel["date"] < fold.train_end_exclusive)
-    complete = (panel[status] == "complete") & (panel[exit_date] != "") & (panel[exit_date] < fold.train_end_exclusive)
-    blocked = (panel[status] == "entry_blocked") & (panel["entry_date"] != "") & (panel["entry_date"] < fold.train_end_exclusive)
+    entry_known = entry.gt(panel.date) & entry.lt(fold.train_end_exclusive)
+    complete = ((panel[status] == 'complete') & entry_known & exit_at.ne('')
+                & exit_at.ge(entry) & exit_at.lt(fold.train_end_exclusive))
+    blocked = (panel[status] == 'entry_blocked') & entry_known
     return panel.loc[within & (complete | blocked)].copy()

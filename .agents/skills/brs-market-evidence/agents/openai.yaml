@@ -1,0 +1,4 @@
+interface:
+  display_name: "BRS Market Evidence"
+  short_description: "Collect and reconcile dated market evidence"
+  default_prompt: "Use $brs-market-evidence to resolve this market data or corporate action question with a bounded source budget."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "BRS Economic Research"
+  short_description: "Evaluate one trading hypothesis after real costs"
+  default_prompt: "Use $brs-economic-research to find the next decisive experiment for this hypothesis using existing BRS studies."

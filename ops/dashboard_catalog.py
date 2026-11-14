@@ -33,6 +33,7 @@ COLLECTION_LABELS = {
     'codal-tables': 'جدول‌های تولید و فروش کدال', 'codal-monthly-normalized': 'گزارش ماهانه با واحد مشخص',
     'codal-operating': 'عملکرد فروش و نرخ محصولات', 'codal-financial-scope': 'شواهد صورت مالی',
     'research': 'پژوهش روش‌های معاملاتی', 'research-exports': 'بسته‌های داده پژوهش',
+    'strategy-suites': 'ماتریس مشترک بکتست قواعد',
     'instrument-history': 'مشخصات تاریخی نماد', 'instrument-states': 'وضعیت تاریخی نماد',
     'source-health': 'سلامت و محدودیت منابع', 'reviews': 'ممیزی‌ها و بررسی‌ها',
 }
@@ -59,6 +60,7 @@ COMMAND_PAGES = {
     'market-review': 'market', 'broker-import': 'broker', 'broker-report': 'broker',
     'broker-refresh-quotes': 'broker', 'update': 'home', 'features': 'health',
     'research': 'research', 'research-dip': 'research', 'research-portfolio': 'research',
+    'strategy-suite': 'research',
     'research-flow': 'research', 'dip-diagnostics': 'reports', 'capital-study': 'capital',
     'capital-review': 'capital', 'instrument-history': 'health', 'instrument-history-review': 'health',
     'dividend-source': 'health', 'dividend-source-review': 'health', 'research-preflight': 'health',

@@ -31,6 +31,7 @@ from dashboard.navigation import BY_LABEL, launchpad, sidebar_navigation  # noqa
 from dashboard.operator_status import operator_panel  # noqa: E402
 from dashboard.opportunity_radar import page_opportunity_radar  # noqa: E402
 from dashboard.paper import page_paper  # noqa: E402
+from dashboard.price_levels import price_levels_panel  # noqa: E402
 from dashboard.probability import page_probability  # noqa: E402
 from dashboard.query_screener import page_query_screener  # noqa: E402
 from dashboard.stock_study import page_stock_study  # noqa: E402
@@ -364,6 +365,8 @@ def page_symbol() -> None:
         st.info("آخرین روز: الگوی تک‌قیمتی نزولی — تقریب روزانه صف فروش")
     st.caption('پرچم روزانه از تک‌قیمتی بودن معاملات نسبت به مرجع به دست می‌آید؛ سقف/کف مجاز تاریخی '
                'و وضعیت صف پایان جلسه را اثبات نمی‌کند. نبود پرچم نیز اثبات امکان خروج نیست.')
+
+    price_levels_panel(settings.DB_PATH, symbol)
 
     chart_mode = st.radio('نوع قیمت نمودار', ['تعدیل نمایشی بر مبنای مرجع', 'قیمت خام روز'], horizontal=True)
     # تعدیل روی کل تاریخچه، پیش از برش بازه نمودار؛ مصرف آن در فیچر ممنوع است.

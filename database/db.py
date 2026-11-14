@@ -423,7 +423,7 @@ class DatabaseManager:
 
     def get_daily_prices_df(self, symbol_fa: str, start_date: Optional[str] = None,
                             end_date: Optional[str] = None, raw_only: bool = True,
-                            source: str = PRICE_SOURCE) -> pd.DataFrame:
+                            source: str = PRICE_SOURCE, *, include_price_unit: bool = False) -> pd.DataFrame:
         """
         سابقه قیمت روزانه یک نماد. با raw_only=True (پیش‌فرض) ستون‌های تعدیل‌شده برگردانده نمی‌شوند
         تا به‌اشتباه وارد فیچرها نشوند (قانون ۱۰ AGENTS.md).
@@ -435,6 +435,8 @@ class DatabaseManager:
                 "volume, value, trade_count")
         if not raw_only:
             cols += ", adj_close, adjustment_factor"
+        if include_price_unit:
+            cols += ", price_unit"
         query = f"SELECT {cols} FROM daily_prices WHERE symbol_id = ? AND source = ?"
         params: List[Any] = [sym_id, source]
         if start_date:
