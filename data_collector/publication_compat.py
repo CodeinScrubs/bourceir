@@ -82,6 +82,12 @@ PRE_0752_V2_CODE = dict(PRE_HISTORY_PROTECTION_V2_CODE) | {
     'data_collector/scheduler.py': '508085dad5125421c357fbbc24aa1e785e824013ee2836325ce05e70502c3578',
     'data_collector/publication_compat.py': '9047edf4c76c8455f2d337ee1c23f3a71546df548deb59538c47b762d49f6203',
 }
+# Exact 0.7.52 release producer, recorded before the 0.7.53 version bump.
+# The flow-filter batching change does not alter this native byte decoder.
+PRE_0753_V2_CODE = dict(PRE_0752_V2_CODE) | {
+    'data_collector/publication_compat.py': 'a60dc03af4c598d37ead981c811c6224e076014f129d3b9c947b47e11adf64ea',
+    'config/default.yaml': '5e826ea3d9f4e173edf76f6dff7c7f64a5c38953b7945279747bd5b4c68c4d36',
+}
 # This exact replacement only adds bounded retries to local state writes;
 # checked_transport_evidence and the native archive decoder are unchanged.
 WINDOWS_RETRY_COOLDOWN_SHA256 = '163e43c2bd2f6bc2488c6242e6e489a206636ab7b0578141194c4d0df58e0bb1'
@@ -105,7 +111,7 @@ def archive_contract(version, recorded_code):
     elif version == archive.VERSION and recorded_code in (
             PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE, PRE_DATE_CIRCUIT_V2_CODE,
             PRE_HISTORY_QUALITY_V2_CODE, PRE_0750_V2_CODE, PRE_0750_COMPAT_FIX_V2_CODE,
-            PRE_LATEST_SESSION_V2_CODE, PRE_HISTORY_PROTECTION_V2_CODE, PRE_0752_V2_CODE):
+            PRE_LATEST_SESSION_V2_CODE, PRE_HISTORY_PROTECTION_V2_CODE, PRE_0752_V2_CODE, PRE_0753_V2_CODE):
         decoder_ast = PRE_BOOK_V2_AST
         extra_files = ('core/source_cooldown.py', 'data_collector/source_cooldown.py')
     else:
