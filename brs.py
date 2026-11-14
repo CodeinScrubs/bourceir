@@ -89,6 +89,61 @@ def _print_report(title: str, report: dict) -> None:
         print(f"   - {err}")
 
 
+def cmd_strategy_suite(args) -> int:
+    import json
+
+    from research.strategy_catalog import catalogue
+    from research.strategy_suite import SuitePlan, preflight_suite, review_suite, run_suite
+
+    if args.reexecute and not args.review:
+        raise ValueError('--reexecute requires --review')
+    if args.review:
+        folder = Path(args.review).resolve()
+        if not folder.is_relative_to((settings.DATA_DIR / 'private').resolve()):
+            raise ValueError('Study review must remain in data/private')
+        version = json.loads((folder/'protocol.json').read_bytes()).get('version')
+        if version == 'saved-decisions-native-execution-v1':
+            from research.strategy_execution import review_execution_followup
+            result = review_execution_followup(folder, reexecute=args.reexecute,
+                progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True))
+        else:
+            result = review_suite(folder, reexecute=args.reexecute,
+                progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if not result['invariant_failures'] else 2
+    if args.resolve_publications:
+        from research.strategy_execution import run_execution_followup
+        if not args.from_suite:
+            raise ValueError('--resolve-publications requires --from-suite')
+        result = run_execution_followup(args.from_suite, args.resolve_publications, root=args.root,
+            workers=args.workers, use_cache=not args.no_cache, allow_repeat=args.allow_repeat,
+            search_attempt_budget=args.search_attempt_budget,
+            case_names=args.case, fold_indices=args.fold, max_replays=args.max_replays,
+            progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True))
+        print(json.dumps({k: v for k, v in result.items() if k not in {'records', 'summary', 'publication_coverage',
+            'residual_requests'}}, ensure_ascii=False, indent=2))
+        return 0 if not result['invariant_failures'] else 2
+    if not args.run and not args.preflight:
+        inventory = catalogue()
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+        return 0
+    from database.db import DatabaseManager
+
+    plan = SuitePlan(start=args.start, end_exclusive=args.before,
+        initial_capital_rial=args.capital_rial, min_train_sessions=args.train_sessions,
+        test_sessions=args.test_sessions)
+    with DatabaseManager(read_only=True) as db:
+        if args.preflight:
+            result = preflight_suite(db, plan=plan, case_names=args.case, max_replays=args.max_replays)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 2 if result['blockers'] else 0
+        result = run_suite(db, plan=plan, root=args.root, case_names=args.case, max_replays=args.max_replays,
+            allow_repeat=args.allow_repeat, search_attempt_budget=args.search_attempt_budget,
+            progress=lambda value: print(json.dumps(value, ensure_ascii=False), flush=True))
+    print(json.dumps({k: v for k, v in result.items() if k not in {'records', 'summary'}}, ensure_ascii=False, indent=2))
+    return 0 if result['invariant_failures'] == 0 else 2
+
+
 def cmd_doctor(args) -> int:
     from ops.doctor import ERROR, format_report, run_doctor
     from ops.report_files import json_report_path, write_json_report
@@ -209,7 +264,7 @@ def cmd_update(args) -> int:
     try:
         print("📥 به‌روزرسانی داده‌ها آغاز شد...", flush=True)
         reports = collector.update_all(full=args.full, progress=_progress)
-        titles = {"universe": "جامعه سهام", "session_candles": "کندل تاریخ‌دار امروز", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
+        titles = {"universe": "جامعه سهام", "session_candles": "کندل تاریخ‌دار امروز", "completed_session_candles": "آخرین جلسه بسته‌شده", "history": "تاریخچه قیمت", "client_types": "حقیقی/حقوقی", "codal": "کدال"}
         for key, report in reports.items():
             _print_report(titles.get(key, key), report)
         complete = all(r.get("status") in {"success", "skipped"} for r in reports.values())
@@ -1001,6 +1056,29 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('dividend-source-review', help='بازحساب آفلاین منبع سود نقدی با مرز توسعه و تمام تلاش‌ها')
     p.add_argument('--study', required=True, help='پوشه خصوصی DIVIDENDS-...')
     p.set_defaults(func=cmd_dividend_source_review)
+
+    p = sub.add_parser('strategy-suite', help='فهرست قواعد و ماتریس بکتست توسعه با نقد مشترک؛ بدون سیگنال')
+    action = p.add_mutually_exclusive_group()
+    action.add_argument('--run', action='store_true', help='ثبت و اجرای قواعد موجود از یک برداشت خام تازه')
+    action.add_argument('--preflight', action='store_true', help='بررسی داده، تقویم و بودجه؛ بدون ساخت فیچر یا بک‌تست')
+    action.add_argument('--review', help='بررسی تمام رسیدها و شمار ثابت اجراها در پوشه SUITE')
+    action.add_argument('--resolve-publications', help='بازاجرای دفتر تصمیم محفوظ با بایت انتشار بومی تاریخ‌دار')
+    p.add_argument('--from-suite', help='مطالعه مبنای تصمیم‌ها؛ همراه --resolve-publications')
+    p.add_argument('--reexecute', action='store_true', help='همراه --review: ساخت دوباره فیچر و بازپخش کامل تک‌تک حساب‌ها')
+    p.add_argument('--root', default=None, help='پوشه خروجی مستقل داخل data/private')
+    p.add_argument('--start', default='2017-03-25')
+    p.add_argument('--before', default=settings.RESEARCH_CONFIG['holdout_start'])
+    p.add_argument('--capital-rial', type=float, default=6_700_000_000.)
+    p.add_argument('--train-sessions', type=int, default=504)
+    p.add_argument('--test-sessions', type=int, default=252)
+    p.add_argument('--case', action='append', default=None, help='زیرمجموعه صریح؛ بدون آن تمام ۳۳۰ پیکربندی اجرا می‌شود')
+    p.add_argument('--max-replays', type=int, default=10000, help='سقف صریح تعداد حساب‌ها: قاعده × برش × سناریو')
+    p.add_argument('--allow-repeat', action='store_true', help='بازاجرای صریح سیاست یکسانِ پایان‌یافته؛ اجرای ناتمام مجاز نمی‌شود')
+    p.add_argument('--search-attempt-budget', type=int, default=100000, help='سقف تجمعی تلاش‌های دفتر محلی جست‌وجو')
+    p.add_argument('--workers', type=int, default=1, help='۱ تا ۴ پردازش برای بازپخش شواهد بومی')
+    p.add_argument('--no-cache', action='store_true', help='بازپخش شواهد بومی بدون استفاده از checkpointها')
+    p.add_argument('--fold', action='append', type=int, default=None, help='شمارهٔ برش محفوظ برای بازپخش محدود شواهد بومی')
+    p.set_defaults(func=cmd_strategy_suite)
 
     p = sub.add_parser('research-preflight', help='بررسی فقط‌خواندنی قرارداد داده پیش از پژوهش؛ بدون بازکردن آزمون نهایی')
     p.add_argument('--before', default=None, help='پایان انحصاری میلادی؛ حداکثر مرز دوره مهر و موم')

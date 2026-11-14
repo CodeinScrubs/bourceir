@@ -33,6 +33,8 @@ def test_missing_and_fresh_heartbeat_are_distinct_from_verified_market_data(setu
     private, at = setup
     result = health(private, at)
     assert result['radar']['worker'] == 'running' and result['radar']['heartbeat'] == 'absent'
+    assert result['research_readiness']['state'] == 'absent'
+    assert result['research_readiness']['accepted_for_signals'] is False
     assert result['radar']['heartbeat_fresh'] is False
     assert result['board_state'] == 'absent' and result['codal_document_source'] == 'absent'
     assert result['feature_store']['state'] == 'absent'
@@ -56,6 +58,32 @@ def test_recent_heartbeat_from_before_worker_start_is_not_current(setup):
     assert result['radar']['worker'] == 'running'
     assert result['radar']['heartbeat_fresh'] is False
     assert result['radar']['heartbeat_at'] == beat.isoformat()
+
+
+@pytest.mark.parametrize('change,expected', [
+    ({}, 'blocked'),
+    ({'status': 'research_only'}, 'research_only'),
+    ({'generated_at': '2026-11-01T09:59:59+03:30'}, 'stale'),
+    ({'code': {}}, 'stale'),
+    ({'generated_at': '2026-11-02T10:00:01+03:30'}, 'invalid'),
+    ({'generated_at': '2026-11-02T10:00:00'}, 'invalid'),
+    ({'accepted_for_signals': True}, 'invalid'),
+    ({'profitability_proven': True}, 'invalid'),
+    ({'version': 'unsupported'}, 'invalid'),
+    ({'blockers': [None]}, 'invalid'),
+    ({'status': 'ready'}, 'invalid'),
+])
+def test_saved_research_gate_preserves_as_of_and_provenance_limits(setup, change, expected):
+    from ops.trader_readiness import VERSION, code_identity
+
+    private, at = setup
+    record = dict(version=VERSION, code=code_identity(), generated_at=at.isoformat(), status='blocked',
+                  accepted_for_signals=False, profitability_proven=False, blockers=['missing source evidence'])
+    write(private/'trader-readiness.json', record | change)
+    result = health(private, at)['research_readiness']
+    assert result['state'] == expected
+    assert result['accepted_for_signals'] is False and result['profitability_proven'] is False
+    assert result['current_database_rechecked'] is False
 
 
 def test_feature_store_checks_metadata_and_containment_without_claiming_integrity(setup, monkeypatch):
@@ -154,6 +182,7 @@ def test_home_panel_surfaces_stopped_workers_and_blocked_documents(setup, monkey
     assert {m.label:m.value for m in app.metric} == {'فرایند رادار':'فعال بودن احراز نشد', 'پایش عمومی':'فعال بودن احراز نشد',
                                                    'پایش تابلو فارابی':'شروع نشده'}
     assert any('گردآوری اسناد کدال' in item.value for item in app.warning)
+    assert any('گزارش آمادگی ثبت نشده' in item.value and 'سودآوری تأیید نشده' in item.value for item in app.warning)
     assert any('انبار فیچر' in item.value and 'ساخته نشده' in item.value for item in app.warning)
     assert any('تازگی قیمت و صف' in item.value for item in app.caption)
     assert any('اجراهای دستی مستقل' in item.value for item in app.caption)

@@ -48,7 +48,7 @@ def private_report_path(path, *, forbidden_paths=()):
     return target
 
 
-def write_json_report(path, payload, *, forbidden_paths=()):
+def write_json_report(path, payload, *, forbidden_paths=(), exclusive=False):
     target = json_report_path(path, forbidden_paths=forbidden_paths)
     body = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -61,8 +61,11 @@ def write_json_report(path, payload, *, forbidden_paths=()):
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())
-        _retry_windows_file_lock(lambda: os.replace(temporary, target))
-        temporary = None  # A successful atomic move leaves no source file to clean up.
+        if exclusive:
+            _retry_windows_file_lock(lambda: os.link(temporary, target))
+        else:
+            _retry_windows_file_lock(lambda: os.replace(temporary, target))
+            temporary = None  # A successful atomic move leaves no source file to clean up.
     except BaseException as error:
         primary_error = error
         raise
@@ -78,9 +81,9 @@ def write_json_report(path, payload, *, forbidden_paths=()):
     return target
 
 
-def write_private_report(path, payload, *, forbidden_paths=()):
+def write_private_report(path, payload, *, forbidden_paths=(), exclusive=False):
     target = private_report_path(path, forbidden_paths=forbidden_paths)
-    return write_json_report(target, payload, forbidden_paths=forbidden_paths)
+    return write_json_report(target, payload, forbidden_paths=forbidden_paths, exclusive=exclusive)
 
 
 def read_private_report(path, *, max_bytes=16 * 1024 * 1024, include_sha256=False):

@@ -68,6 +68,23 @@ def test_uncredited_shares_never_become_sellable_or_a_zero_valued_receivable():
     assert not modeled.metrics['profitability_proven'] and not modeled.metrics['accepted_for_signals']
 
 
+def test_known_bonus_is_not_discarded_when_reopening_trades_rise_more_than_six_percent():
+    prices, dates, event = market()
+    after = prices.date >= event.ex_date
+    prices.loc[after, ['open_raw', 'close_raw', 'close_final_raw', 'ref_price_raw']] = 88.
+    prices.loc[prices.date.eq(event.ex_date), 'ref_price_raw'] = 80.
+    prices.loc[after, 'low_raw'], prices.loc[after, 'high_raw'] = 87., 89.
+    prices.loc[after, 'value'] = 88000.
+    result = replay_bonus_share_portfolio(prices, pick(dates), dates, config(), events=[event])
+    # The legal/reference event is 100 -> 80; +10% reopening market movement
+    # does not invalidate it or justify omitting the pending bonus entitlement.
+    bought = int(result.executions.query("side == 'buy'").quantity.sum())
+    assert result.metrics['corporate_action_events'] == 1
+    assert units(result.metrics['pending_bonus_units']) == Fraction(bought, 4)
+    assert result.metrics['final_equity_rial'] is None
+    assert result.metrics['status'] == 'unvalued_bonus_path'
+
+
 def test_credit_after_sale_and_reentry_does_not_overwrite_new_position_and_shares_daily_capacity():
     prices, dates, event = market()
     result = replay_bonus_share_portfolio(prices, pick(dates, (0, 3)), dates, config(), events=[event],

@@ -181,6 +181,7 @@ def test_selected_update_collects_codal_for_each_selected_symbol(explicit):
     requested = []
     success = dict(status='success', errors=[])
     collector = DataCollector.__new__(DataCollector)
+    collector.provider = SimpleNamespace(supports_dated_publications=False)
     collector.symbols = None if explicit else ['کیان', 'دیگر']
     collector.collect_history = lambda *a, **k: success
     collector.collect_session_candles = lambda *a, **k: success

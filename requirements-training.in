@@ -1,0 +1,4 @@
+# Optional CPU training profile. Base computation versions remain unchanged.
+-c requirements.lock.txt
+gymnasium>=1.0,<2
+scikit-learn>=1.5,<2

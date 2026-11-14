@@ -59,6 +59,29 @@ PRE_0750_V2_CODE = dict(PRE_HISTORY_QUALITY_V2_CODE) | {
 PRE_0750_COMPAT_FIX_V2_CODE = dict(PRE_0750_V2_CODE) | {
     'config/default.yaml': 'f078cdb3e7202668756ac8935341773fdd16ed559bf51f84e000f1e59d75ee91',
 }
+# Exact identity of the native byte archives captured on 2026-11-10 before
+# prioritizing the latest closed session. This producer's native decoder and
+# transport-clock semantics are unchanged; archived producer code is not run.
+PRE_LATEST_SESSION_V2_CODE = dict(PRE_0750_V2_CODE) | {
+    'data_collector/base.py': '1163ac84dcaf666ad4c6daca54b89dd8efbc1c9d84b37b2e24c4045ad137bdb4',
+    'data_collector/tsetmc.py': 'c34b519b96253e17bc940a376a13c0473d59a5f260e8fec88f5842491c10a001',
+    'database/db.py': '8203605450082b9f3d01bf73eb3e6c1b205b87fb5597269c5979baac8a923f63',
+    'config/default.yaml': '9fb1542081ff6f5a06a5792b3c4e19cdcec5004103f7f4218a678284f6593386',
+    'data_collector/publication_compat.py': '53c37fae518911f2d6cbb42b081e449d1ef8ecba690398516ed4dd10816e8b21',
+}
+# Exact observed producer used for the final 2026-11-07/08/09 native recovery,
+# before bulk-history writes were restricted to dates before the native stage.
+PRE_HISTORY_PROTECTION_V2_CODE = dict(PRE_LATEST_SESSION_V2_CODE) | {
+    'data_collector/scheduler.py': '0ed1e57aba8223f0c96e978a5961367443286cb2f1ebb3d6868b9af013181146',
+    'data_collector/publication_compat.py': '044cef471d574b1eb97b102f9699dc6c6a544b823df1b62f05207352d25b72e1',
+}
+# Exact local producer immediately before the 0.7.52 release/version change.
+# Its pure numeric/date dependencies and decoding AST match PRE_BOOK_V2_AST.
+# Accept only this recorded generation; a version string alone grants nothing.
+PRE_0752_V2_CODE = dict(PRE_HISTORY_PROTECTION_V2_CODE) | {
+    'data_collector/scheduler.py': '508085dad5125421c357fbbc24aa1e785e824013ee2836325ce05e70502c3578',
+    'data_collector/publication_compat.py': '9047edf4c76c8455f2d337ee1c23f3a71546df548deb59538c47b762d49f6203',
+}
 # This exact replacement only adds bounded retries to local state writes;
 # checked_transport_evidence and the native archive decoder are unchanged.
 WINDOWS_RETRY_COOLDOWN_SHA256 = '163e43c2bd2f6bc2488c6242e6e489a206636ab7b0578141194c4d0df58e0bb1'
@@ -81,7 +104,8 @@ def archive_contract(version, recorded_code):
         decoder_ast, extra_files = LEGACY_AST, ()
     elif version == archive.VERSION and recorded_code in (
             PRE_BOOK_V2_CODE, POST_BOOK_V2_CODE, PRE_DATE_CIRCUIT_V2_CODE,
-            PRE_HISTORY_QUALITY_V2_CODE, PRE_0750_V2_CODE, PRE_0750_COMPAT_FIX_V2_CODE):
+            PRE_HISTORY_QUALITY_V2_CODE, PRE_0750_V2_CODE, PRE_0750_COMPAT_FIX_V2_CODE,
+            PRE_LATEST_SESSION_V2_CODE, PRE_HISTORY_PROTECTION_V2_CODE, PRE_0752_V2_CODE):
         decoder_ast = PRE_BOOK_V2_AST
         extra_files = ('core/source_cooldown.py', 'data_collector/source_cooldown.py')
     else:

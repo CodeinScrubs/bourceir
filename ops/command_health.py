@@ -113,6 +113,31 @@ def feature_store_state(data_root):
     return result
 
 
+def _research_readiness(private_root, at):
+    """Expose the saved research gate, without turning it into live approval."""
+    state, record = _optional_record(private_root / 'trader-readiness.json')
+    result = dict(state=state, generated_at=None, blockers=[], accepted_for_signals=False,
+                  profitability_proven=False, current_database_rechecked=False)
+    if state != 'present':
+        return result
+    try:
+        from ops.trader_readiness import VERSION, code_identity
+
+        stamp = datetime.fromisoformat(record['generated_at'])
+        age = (at-stamp).total_seconds()
+        blockers = record['blockers']
+        if (stamp.utcoffset() is None or age < 0 or record.get('version') != VERSION
+                or record.get('status') not in ('blocked', 'research_only')
+                or record.get('accepted_for_signals') is not False or record.get('profitability_proven') is not False
+                or not isinstance(blockers, list) or any(not isinstance(s, str) for s in blockers)):
+            raise ValueError('Unsupported research-readiness receipt')
+        result.update(generated_at=stamp.isoformat(), blockers=blockers,
+                      state='stale' if age > 86400 or record.get('code') != code_identity() else record['status'])
+    except (KeyError, TypeError, ValueError, OverflowError, OSError, ImportError):
+        result['state'] = 'invalid'
+    return result
+
+
 def command_health(private_root, *, radar_worker, live_worker, at=None):
     """Report process, recorded data and source stop separately; absence is not success."""
     at = at or now_tehran()
@@ -127,4 +152,5 @@ def command_health(private_root, *, radar_worker, live_worker, at=None):
                 board_state=board['state'], board_valid_extracts=valid_boards if board['state'] == 'current' else None,
                 codal_document_source=_document_source_state(private_root),
                 feature_store=feature_store_state(private_root.parent),
+                research_readiness=_research_readiness(private_root, at),
                 source_freshness_verified=False, signal_accepted=False, automatic_orders=False)

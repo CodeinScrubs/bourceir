@@ -23,7 +23,7 @@ class ObservedValuation:
         self.proofs = proofs
         self.last_marks = {}
 
-    def session(self, raw, day, previous_day, exposed, dividends):
+    def session(self, raw, day, previous_day, exposed, dividends, documented_capital=None):
         """Keep source-mark rows out of the execution and selection views."""
         valuation_rows = {}
         flat = {}
@@ -52,15 +52,22 @@ class ObservedValuation:
             view = dict(mark_valid=True, mark=mark, ref_price_raw=proof['reference_rial'],
                         previous_official=previous.price, previous_date=previous.raw_date, action=mark/previous.price)
             if mark != previous.price:
-                if dividends is None or (symbol, day) not in dividends.by_ex:
+                checker = (documented_capital if documented_capital is not None
+                           and (symbol, day) in documented_capital.by_ex else dividends)
+                if checker is None or (symbol, day) not in checker.by_ex:
                     raise ValuationGap(symbol, 'discontinuous_no_trade_valuation', evidence_sha256=sha)
                 try:
-                    dividends.check_action(symbol, day, view)
+                    checker.check_action(symbol, day, view)
                 except ValueError as error:
                     raise ValuationGap(symbol, 'unknown_corporate_entitlement',
                                        reason=str(error), evidence_sha256=sha) from error
             valuation_rows[symbol] = view
-            flat[symbol] = dict(evidence_sha256=sha, mark_rial=mark, declared_cash_ex=mark != previous.price)
+            capital_change = (mark != previous.price and documented_capital is not None
+                              and (symbol, day) in documented_capital.by_ex)
+            flat[symbol] = dict(evidence_sha256=sha, mark_rial=mark,
+                                declared_cash_ex=mark != previous.price and not capital_change)
+            if documented_capital is not None:
+                flat[symbol]['documented_capital_ex'] = capital_change
         self.last_marks.update((symbol, _Mark(day, row['mark'], day, row['mark']))
                                for symbol, row in raw.items() if row['mark_valid'])
         for symbol, mark in flat.items():

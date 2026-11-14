@@ -17,8 +17,9 @@ import pandas as pd
 
 from core.timeutils import is_canonical_iso_date
 from ops.report_files import private_report_path, write_private_report
+from research.search_budget import resampling_budget
 
-VERSION = 'paired-stationary-diagnostics-v4'
+VERSION = 'paired-stationary-diagnostics-v5'
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 
 
@@ -63,7 +64,7 @@ def _indices(rng, n, block_length):
 
 def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_lengths=(5, 10, 20),
                           replications=5000, seed=41, confidence=.95, min_sessions=60, trials_attempted=None,
-                          expected_sessions=None, family_comparisons=None):
+                          expected_sessions=None, family_comparisons=None, family_screen_only=False):
     """منحنی خالص هم‌تاریخ؛ جفت نامعلوم حذف نمی‌شود و تولید فاصله را متوقف می‌کند.
 
     خروجی میانگین حسابی اختلاف بازده روزانه است؛ CAGR یا احتمال سود آینده نیست.
@@ -87,8 +88,11 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
     if family_comparisons is not None and (type(family_comparisons) is not int or family_comparisons < 1
             or trials_attempted is None or family_comparisons < trials_attempted * len(blocks)):
         raise ValueError('The declared family must cover all attempted configurations and reported block variants')
-    minimum_family_p = None if family_comparisons is None else min(1., family_comparisons / (replications + 1))
-    resolution_adequate = None if minimum_family_p is None else minimum_family_p <= 1. - confidence
+    if type(family_screen_only) is not bool or (family_screen_only and family_comparisons is None):
+        raise ValueError('Family screening requires a declared comparison family and a boolean mode')
+    budget = resampling_budget(replications=replications, family_comparisons=family_comparisons, confidence=confidence)
+    minimum_family_p = budget['minimum_attainable_family_p_value']
+    resolution_adequate = budget['family_tail_resolution_adequate']
     frames = []
     for frame in (strategy, benchmark):
         if not {'date', 'equity_rial'} <= set(frame) or frame.empty:
@@ -137,8 +141,11 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
     if complete and np.ptp(difference) == 0:
         blockers.append('degenerate_daily_difference')
         complete = False
+    skipped_for_resolution = family_screen_only and resolution_adequate is False
+    if skipped_for_resolution:
+        blockers.append('resampling_skipped_for_inadequate_family_resolution')
     intervals = []
-    if complete:
+    if complete and not skipped_for_resolution:
         alpha = (1. - confidence) / 2.
         for block in blocks:
             rng = np.random.default_rng(np.random.SeedSequence([seed, block]))
@@ -167,6 +174,11 @@ def compare_equity_curves(strategy, benchmark, *, initial_capital_rial, block_le
                 family_comparisons=family_comparisons, historical_trial_count_verified=False,
                 minimum_attainable_family_p_value=minimum_family_p,
                 family_tail_resolution_adequate=resolution_adequate,
+                resampling_budget=budget, family_screen_only=family_screen_only,
+                bootstrap_replications_performed=len(intervals) * replications,
+                inference_status=('inconclusive_resolution' if skipped_for_resolution else
+                                  'diagnostic_only' if intervals else 'inconclusive_data'),
+                strategy_verdict=None,
                 p_value_method='one-sided mean <= 0; centered stationary bootstrap; plus-one Monte Carlo count',
                 blockers=blockers, selection_corrected=False, accepted_for_signals=False,
                 probability_of_future_profit=None, statistic='arithmetic mean of paired daily net return differences',
@@ -186,6 +198,8 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, default=41)
     parser.add_argument('--trials-attempted', type=int, default=None)
     parser.add_argument('--family-comparisons', type=int, default=None)
+    parser.add_argument('--family-screen-only', action='store_true',
+                        help='Skip resampling when the declared corrected tail is unreachable; remain inconclusive')
     parser.add_argument('--calendar', default=None, help='JSON array of expected development sessions for this fold')
     parser.add_argument('--output', default='data/private/uncertainty.json')
     args = parser.parse_args(argv)
@@ -203,7 +217,7 @@ def main(argv=None):
         report = compare_equity_curves(*curves, initial_capital_rial=args.initial_capital_rial,
                                       block_lengths=args.blocks, replications=args.replications, seed=args.seed,
                                       trials_attempted=args.trials_attempted, expected_sessions=calendar,
-                                      family_comparisons=args.family_comparisons)
+                                      family_comparisons=args.family_comparisons, family_screen_only=args.family_screen_only)
         report['input_sha256'] = dict(strategy=curves[0].attrs['input_sha256'], benchmark=curves[1].attrs['input_sha256'])
         if args.calendar:
             # هویت تقویم، محتوای تجزیه‌شده‌ای است که واقعاً در محاسبه بالا مصرف شد.

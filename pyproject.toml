@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brs-quant-engine"
-version = "0.7.51"
+version = "0.7.52"
 description = "سامانه هوشمند نوسان‌گیری درون‌روزی و کوتاه‌مدت سهام بورس و فرابورس تهران"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -13,6 +13,7 @@ authors = [{name = "BRS Trading Team"}]
 # فهرست کامل و نسخه‌های قفل‌شده: requirements.txt و requirements.lock.txt
 
 [project.optional-dependencies]
+training = ["gymnasium>=1.0,<2", "scikit-learn>=1.5,<2"]
 ml = [
     "scikit-learn>=1.5",
     "lightgbm>=4.5",

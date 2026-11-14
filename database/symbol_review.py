@@ -7,6 +7,15 @@ from core.symbol_review import review_history
 from core.timeutils import now_tehran
 
 
+def observed_price_sessions(db, start, end) -> list[str]:
+    """Market dates with at least 20 known ordinary equities in the same archive."""
+    rows = db.conn.execute("""SELECT dp.date FROM daily_prices dp JOIN symbols s ON s.id=dp.symbol_id
+        WHERE dp.source='tsetmc' AND s.instrument_type_code IN (300,303) AND dp.date>=? AND dp.date<=?
+        AND substr(s.symbol_fa,-1,1) NOT GLOB '[0-9۰-۹٠-٩]'
+        GROUP BY dp.date HAVING COUNT(DISTINCT dp.symbol_id)>=20 ORDER BY dp.date""", (start, end))
+    return [row[0] for row in rows]
+
+
 def load_symbol_review(db, symbol: str, *, at=None) -> dict:
     clock = at or now_tehran()
     own_snapshot = not db.conn.in_transaction
@@ -36,12 +45,8 @@ def load_symbol_review(db, symbol: str, *, at=None) -> dict:
             economic_actions_reconciled=False)
         if not prices.empty:
             # جلسه از مشاهدات بازار استنتاج می‌شود؛ تقویم رسمی یا علت توقف نیست.
-            observed = pd.read_sql_query("""SELECT dp.date FROM daily_prices dp JOIN symbols s ON s.id=dp.symbol_id
-                WHERE dp.source='tsetmc' AND s.instrument_type_code IN (300,303) AND dp.date>=? AND dp.date<=?
-                AND substr(s.symbol_fa,-1,1) NOT GLOB '[0-9۰-۹٠-٩]'
-                GROUP BY dp.date HAVING COUNT(DISTINCT dp.symbol_id)>=20 ORDER BY dp.date""",
-                db.conn, params=(review['first'], review['last']))
-            absent = sorted(set(observed.date)-set(prices.date))
+            observed = observed_price_sessions(db, review['first'], review['last'])
+            absent = sorted(set(observed)-set(prices.date))
             dates = pd.to_datetime(prices.date)
             gaps = dates.diff().dt.days
             end_index = gaps.idxmax() if gaps.notna().any() else None

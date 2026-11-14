@@ -4,11 +4,12 @@ import re
 from datetime import datetime
 from decimal import Decimal
 
+from core.codal_documents import ISSUER_PATTERN
 from core.dividend_evidence import _amount
 from core.text import normalize_fa, normalize_symbol, to_en_digits
 from core.timeutils import TEHRAN_TZ, is_canonical_iso_date, jalali_to_iso
 
-VERSION = 'assembly-dividend-statement-v1'
+VERSION = 'assembly-dividend-statement-v2'
 MAX_TEXT_CHARS = 1_000_000
 DAY = r'([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})'
 FAMILY = 'تصمیمات مجمع عمومی عادی سالیانه'
@@ -57,7 +58,7 @@ def primary_assembly_dividend(text, notice, *, end_exclusive):
             r'(.*?)\s*ب\s*[-–—]\s*دستور جلسه\s*:', joined)
         if not header.startswith(family):
             raise ValueError('نوع متن و عنوان اطلاعیه ناسازگار است')
-        company, symbol = _one(r'شرکت (.+?) - نماد:\s*(\S+)\s*$', header)
+        company, symbol = _one(ISSUER_PATTERN + '$', header)
         if (normalize_symbol(company) != normalize_symbol(notice['company_name'])
                 or normalize_symbol(symbol) != normalize_symbol(notice['symbol_fa'])):
             raise ValueError('هویت شرکت و نماد متن با اطلاعیه برابر نیست')

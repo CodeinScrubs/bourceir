@@ -70,7 +70,7 @@ export function parseBoard(raw, receivedAt) {
   if(!symbol || !normalized(raw.identity).includes(' - '))throw new Error('هویت تابلو کامل نیست');
   const title=normalized(raw.title||'').replace(/\u200c/g,'');const prefix=symbol+' ';
   if(!title.startsWith(prefix))throw new Error('هویت عنوان با تابلو برابر نیست');
-  const priceText=title.slice(prefix.length).match(/^([\d,]+)\s+[▲▼−-]?\s*[\d.]+%$/);
+  const priceText=title.slice(prefix.length).match(/^([\d,]+)\s+[▲▼◆−-]?\s*[\d.]+%$/);
   if(!priceText)throw new Error('قیمت عنوان تابلو شناخته‌شده نیست');
   const last=num(priceText[1]);if(last<=0)throw new Error('قیمت نامعلوم است');
   const v=normalized(raw.volume||'').match(/^حجم معاملات\s+([\d,]+)$/);

@@ -1,0 +1,4 @@
+interface:
+  display_name: "BRS Evidence Check"
+  short_description: "Verify review bundles and scope test evidence"
+  default_prompt: "Use $brs-evidence-check to verify this BRS evidence package and report what its checks actually establish."

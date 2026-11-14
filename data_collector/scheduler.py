@@ -23,6 +23,7 @@ from core.client_quality import validated_client_data
 from core.daily_publications import publication_request
 from core.order_book import book_bound_violations
 from core.price_quality import price_quality
+from core.screening import expected_completed_session
 from core.text import normalize_symbol
 from core.timeutils import is_canonical_iso_date, is_market_open, now_tehran, now_tehran_iso
 from data_collector.base import DAILY_COLUMNS, BaseDataProvider
@@ -183,12 +184,14 @@ class DataCollector:
             (symbol_id, threshold, now_tehran().date().isoformat()))]
 
     def collect_history(self, symbols: Optional[List[str]] = None, full: bool = False,
-                        progress: Optional[ProgressFn] = None) -> Dict[str, Any]:
+                        progress: Optional[ProgressFn] = None, *, end_exclusive: Optional[str] = None) -> Dict[str, Any]:
         """دریافت و ذخیره تاریخچه روزانه (افزایشی، مگر full=True)."""
+        if end_exclusive is not None and not is_canonical_iso_date(end_exclusive):
+            raise ValueError('تاریخ مرز محافظت بومی باید میلادی استاندارد باشد')
         targets = self.target_symbols(symbols)
         started_at = now_tehran_iso()
         succeeded = failed = rows_saved = anomalies = 0
-        invalid_rows = partial_symbols = 0
+        invalid_rows = partial_symbols = deferred_rows = 0
         issue_counts = Counter()
         errors: List[str] = []
 
@@ -210,6 +213,15 @@ class DataCollector:
                     errors.append(f"تاریخچه «{sym}» خالی است؛ علت نبود داده نامعلوم است")
                     failed += 1
                     continue
+                if end_exclusive is not None:
+                    if 'date' not in df or not df['date'].map(is_canonical_iso_date).all():
+                        raise ValueError('تاریخ تاریخچه برای محافظت از انتشار بومی معتبر نیست')
+                    selected = df['date'] < end_exclusive
+                    deferred_rows += int((~selected).sum())
+                    df = df.loc[selected].copy()
+                    if df.empty:
+                        succeeded += 1
+                        continue
                 _, quality = price_quality(df)
                 bad = quality.any(axis=1)
                 invalid_count = int(bad.sum())
@@ -239,7 +251,22 @@ class DataCollector:
         return self._finish("history", started_at, len(targets), succeeded, failed, errors,
                             {"rows_inserted": rows_saved, "anomalies_flagged": anomalies,
                              "invalid_price_rows": invalid_rows, "partial_symbols": partial_symbols,
+                             "native_protected_from": end_exclusive, "rows_deferred_to_native": deferred_rows,
                              "price_issue_counts": dict(issue_counts)})
+
+    def collect_completed_session_candles(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Refresh the latest closed calendar session, including before today's open.
+
+        Calendar closure is a request policy; the native receipt still does not
+        independently prove that publication or market coverage is complete.
+        """
+        if not getattr(self.provider, 'supports_dated_publications', False):
+            return dict(collection_type='completed_session_candles', status='skipped',
+                        symbols_succeeded=0, symbols_failed=0, errors=[],
+                        message='منبع، قرارداد بومی تاریخ‌دار برای جلسه بسته‌شده ندارد.')
+        at = now_tehran()
+        day = expected_completed_session(at, calendar=self.db.get_market_calendar())
+        return self._collect_published_prices(day, now_tehran_iso(), symbols)
 
     def collect_session_candles(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         """پس از ساعت ۱۳ روز معاملاتی، دریافت تاریخ‌دار برای دامنه انتخاب‌شده.
@@ -673,12 +700,23 @@ class DataCollector:
 
     def update_all(self, symbols: Optional[List[str]] = None, full: bool = False,
                    progress: Optional[ProgressFn] = None) -> Dict[str, Dict[str, Any]]:
-        """جامعه سهام ← تاریخچه قیمت ← قیمت بومی امروز ← حقیقی/حقوقی ← کدال."""
+        """جامعه سهام ← آخرین جلسه بومی ← تاریخچه ← حقیقی/حقوقی ← کدال."""
         reports: Dict[str, Dict[str, Any]] = {}
         if not symbols and not self.symbols:
             reports["universe"] = self.sync_universe()
-        reports["history"] = self.collect_history(symbols, full=full, progress=progress)
-        reports["session_candles"] = self.collect_session_candles(symbols)
+        native = getattr(self.provider, 'supports_dated_publications', False)
+        native_cutoff = None
+        if native:
+            latest = self.collect_completed_session_candles(symbols)
+            native_cutoff = latest.get('market_date')
+            key = 'session_candles' if latest.get('market_date') == now_tehran().date().isoformat() else 'completed_session_candles'
+            reports[key] = latest
+            if key != 'session_candles':
+                reports['session_candles'] = self.collect_session_candles(symbols)
+        history_options = dict(end_exclusive=native_cutoff) if native_cutoff else {}
+        reports["history"] = self.collect_history(symbols, full=full, progress=progress, **history_options)
+        if not native:
+            reports["session_candles"] = self.collect_session_candles(symbols)
         reports["client_types"] = self.collect_client_types(symbols, progress=progress)
         requested = symbols or self.symbols
         if requested:

@@ -5,11 +5,15 @@ from datetime import datetime
 from decimal import Decimal, localcontext
 from fractions import Fraction
 
+from core.codal_documents import ISSUER_PATTERN
 from core.dividend_evidence import _amount
 from core.text import normalize_fa, normalize_symbol, to_en_digits
 from core.timeutils import TEHRAN_TZ, is_canonical_iso_date, jalali_to_iso
 
-VERSION = 'capital-registration-facts-v1'
+VERSION = 'capital-registration-facts-v3'
+PREVIOUS_VERSION = 'capital-registration-facts-v2'
+LEGACY_VERSION = 'capital-registration-facts-v1'
+CORRECTION_VERSION = 'capital-registration-facts-v4'
 MAX_TEXT_CHARS = 1_000_000
 NUMBER = r'(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?'
 DAY = r'([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})'
@@ -44,13 +48,15 @@ def _funding(label, text):
     return _rial(value) if value else None
 
 
-def primary_capital_registration(text, notice, *, end_exclusive):
+def primary_capital_registration(text, notice, *, end_exclusive, version=VERSION):
     """تاریخ‌ها پیش از ارقام؛ ریال فقط از واحد صریح میلیون ریال ساخته می‌شود.
 
     قالب پشتیبانی‌شده آگهی ثبت است، نه پیشنهاد هیئت‌مدیره یا تصمیمات مجمع.
     فیلد خالی صفر نیست؛ نسبت سرمایه صرفاً حساب است و حق یا نقدشوندگی نمی‌سازد.
     """
-    out = dict(version=VERSION, status='unsupported_primary_text', reasons=[],
+    if version not in (VERSION, PREVIOUS_VERSION, LEGACY_VERSION, CORRECTION_VERSION):
+        raise ValueError('نسخه خوانش ثبت سرمایه پشتیبانی نمی‌شود')
+    out = dict(version=version, status='unsupported_primary_text', reasons=[],
         symbol=None, license_date=None, meeting_date=None, registration_date=None,
         capital_before_rial=None, capital_after_rial=None, increase_rial=None,
         retained_earnings_rial=None, waived_preemption_cash_rial=None,
@@ -61,6 +67,12 @@ def primary_capital_registration(text, notice, *, end_exclusive):
         shareholder_entitlement_verified=False, shares_credited_verified=False,
         tradability_verified=False, feature_eligible=False, accepted_for_signals=False,
         profitability_proven=False)
+    if version in (VERSION, CORRECTION_VERSION):
+        out.update(revaluation_surplus_rial=None, revaluation_equals_increase=None)
+    if version == CORRECTION_VERSION:
+        out.update(is_correction=None, prior_tracing_no=None, board_resolution_date=None,
+                   license_status='unknown', preemptive_cash_and_claims_rial=None,
+                   preemptive_cash_equals_increase=None)
     try:
         if not is_canonical_iso_date(end_exclusive):
             raise ValueError('مرز توسعه استاندارد لازم است')
@@ -74,27 +86,53 @@ def primary_capital_registration(text, notice, *, end_exclusive):
         lines = [normalize_fa(to_en_digits(line)).replace('ۀ', 'ه').replace('هٔ', 'ه').replace('٬', ',').replace('٫', '.')
                  for line in text.splitlines() if line.strip()]
         joined = normalize_fa(' '.join(lines).replace('\u200c', ' '))
-        if (normalize_fa(notice['title']) != 'آگهی ثبت افزایش سرمایه'
+        title = normalize_fa(notice['title'])
+        valid_title = (bool(re.fullmatch(r'آگهی ثبت افزایش سرمایه(?:\s*\(اصلاحیه\))?', title))
+                       if version == CORRECTION_VERSION else title == 'آگهی ثبت افزایش سرمایه')
+        if (not valid_title
                 or 'موضوع: آگهی ثبت افزایش سرمایه' not in joined):
             raise ValueError('آگهی ثبت سرمایه با عنوان پشتیبانی‌شده لازم است')
-        names = [re.fullmatch(r'شرکت (.+?) - نماد:\s*(.+)', line) for line in lines]
+        if version == CORRECTION_VERSION:
+            correction = '(اصلاحیه)' in title
+            prior_pattern = r'این اطلاعیه اصلاحیه اطلاعیه شماره\s*\(\s*([0-9]+)\s*\)'
+            if not correction and re.search(prior_pattern, joined):
+                raise ValueError('عنوان اصلی با ارجاع صریح اصلاحیه در متن ناسازگار است')
+            prior = _one(prior_pattern, joined) if correction else None
+            if prior is not None and (int(prior) <= 0 or int(prior) == notice['tracing_no']):
+                raise ValueError('ارجاع اصلاحیه باید شماره پیگیری پیشین و مثبت باشد')
+            out.update(is_correction=correction, prior_tracing_no=None if prior is None else int(prior))
+        issuer_pattern = r'شرکت (.+?) - نماد:\s*(.+)' if version == LEGACY_VERSION else ISSUER_PATTERN
+        names = [re.fullmatch(issuer_pattern, line) for line in lines]
         names = [m for m in names if m]
         if (len(names) != 1 or normalize_symbol(names[0][1]) != normalize_symbol(notice['company_name'])
                 or normalize_symbol(names[0][2]) != normalize_symbol(notice['symbol_fa'])):
             raise ValueError('نام شرکت و نماد در متن و اطلاعیه یکتا و برابر نیستند')
-        license_day = _one(r'مجوز افزایش سرمایه به شماره مجوز [A-Za-z0-9-]+ مورخ\s*' + DAY, joined)
+        board = None
+        if version == CORRECTION_VERSION and 'صورتجلسه هیئت مدیره مورخ' in joined:
+            board = _one(r'صورتجلسه هیئت مدیره مورخ\s*' + DAY, joined)
+        license_pattern = r'مجوز افزایش سرمایه به شماره مجوز [A-Za-z0-9-]+ مورخ\s*' + DAY
+        license_day = (None if version == CORRECTION_VERSION and board is not None
+                       and 'مجوز افزایش سرمایه به شماره مجوز' not in joined else _one(license_pattern, joined))
         meeting = _one(r'بر اساس تصمیمات مجمع عمومی فوق العاده مورخ\s*' + DAY, joined)
         registered = _one(r'در(?: در)? تاریخ\s*' + DAY + r'\s*در مرجع ثبت شرکت ها', joined)
-        license_day, meeting, registered = [jalali_to_iso(v)[:10] for v in (license_day, meeting, registered)]
+        license_day, meeting, registered = [None if v is None else jalali_to_iso(v)[:10]
+                                            for v in (license_day, meeting, registered)]
+        board = None if board is None else jalali_to_iso(board)[:10]
         published = datetime.fromisoformat(notice['published_at'])
         if published.tzinfo is None or published.utcoffset() is None:
             raise ValueError('زمان انتشار اظهارشده باید منطقه زمانی داشته باشد')
         published = published.astimezone(TEHRAN_TZ).date().isoformat()
         out.update(symbol=normalize_symbol(notice['symbol_fa']), license_date=license_day,
                    meeting_date=meeting, registration_date=registered)
-        if max(license_day, meeting, registered, published) >= end_exclusive:
+        if version == CORRECTION_VERSION:
+            out.update(board_resolution_date=board,
+                       license_status='not_in_primary_text' if license_day is None else 'observed')
+        if max(d for d in (license_day, meeting, board, registered, published) if d is not None) >= end_exclusive:
             return dict(out, status='withheld_by_cutoff')
-        if not license_day <= meeting <= registered <= published:
+        ordered = (meeting <= board <= registered <= published
+                   and (license_day is None or license_day <= board)) if board is not None else (
+                       license_day is not None and license_day <= meeting <= registered <= published)
+        if not ordered:
             raise ValueError('ترتیب تاریخ مجوز، مجمع، ثبت و انتشار ناسازگار است')
         before, after = _one(r'افزایش سرمایه شرکت از مبلغ\s*(' + NUMBER
             + r')\s*میلیون ریال به مبلغ\s*(' + NUMBER + r')\s*میلیون ریال', joined)
@@ -103,16 +141,27 @@ def primary_capital_registration(text, notice, *, end_exclusive):
             raise ValueError('سرمایه اولیه مثبت و سرمایه ثبت‌شده بزرگ‌تر لازم است')
         retained = _funding(r'از محل سود انباشته مبلغ', joined)
         cash = _funding(r'از آورده نقدی با سلب حق تقدم از سهامداران فعلی مبلغ', joined)
-        known = sum(value for value in (retained, cash) if value is not None)
+        revaluation = (_funding(r'از محل مازاد تجدید ارزیابی دارایی ها مبلغ', joined)
+                       if version in (VERSION, CORRECTION_VERSION) else None)
+        preemptive = (_funding(r'از محل مطالبات و آورده نقدی مبلغ', joined)
+                      if version == CORRECTION_VERSION else None)
+        known_values = (retained, cash, revaluation, preemptive)
+        known = sum(value for value in known_values if value is not None)
         increase = after - before
         if known > increase:
             raise ValueError('منابع معلوم از افزایش سرمایه بزرگ‌ترند')
         multiplier, ratio = Fraction(after, before), Fraction(increase, before)
+        if version in (VERSION, CORRECTION_VERSION):
+            out.update(revaluation_surplus_rial=revaluation,
+                       revaluation_equals_increase=None if revaluation is None else revaluation == increase)
+        if version == CORRECTION_VERSION:
+            out.update(preemptive_cash_and_claims_rial=preemptive,
+                       preemptive_cash_equals_increase=None if preemptive is None else preemptive == increase)
         return dict(out, status='supported_primary_fact', capital_before_rial=before,
             capital_after_rial=after, increase_rial=increase, retained_earnings_rial=retained,
             waived_preemption_cash_rial=cash,
             retained_equals_increase=None if retained is None else retained == increase,
-            unassigned_after_known_funding_rial=None if retained is None and cash is None else increase-known,
+            unassigned_after_known_funding_rial=None if all(v is None for v in known_values) else increase-known,
             capital_multiplier=dict(numerator=multiplier.numerator, denominator=multiplier.denominator),
             increase_ratio=dict(numerator=ratio.numerator, denominator=ratio.denominator))
     except (ValueError, TypeError, KeyError, OverflowError) as error:
